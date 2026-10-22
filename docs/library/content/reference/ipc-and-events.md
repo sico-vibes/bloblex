@@ -1,8 +1,8 @@
 # IPC and events
 
 > **What this is:** the daemon contract in one place: transport, envelopes, method families, the event vocabulary, error codes and the rules a client must follow.
-> **Status:** current; a summary of `docs/ipc-contract.md` (updated 18 October 2026), checked on 19 October 2026. That file remains the full contract.
-> **Last updated:** 2026-10-19
+> **Status:** current; a summary of `docs/ipc-contract.md` (updated 18 October 2026), checked on 19 October 2026, and the task rows added on 22 October 2026. That file remains the full contract.
+> **Last updated:** 2026-10-22
 
 ## Purpose
 
@@ -50,7 +50,8 @@ The daemon registers the live subscription before replaying persisted events, wh
 | --- | --- |
 | App and daemon | `app.snapshot`, `events.replay`, `daemon.health`, `daemon.shutdown` |
 | Runtimes | `runtime.list`, `runtime.refresh`, `runtime.capabilities`, `runtime.models`, `runtime.profile.list/save/delete` |
-| Bots | `agent.list/get/create/update/delete/restore/reorder`, `agent.lock.set`, `agent.team.update`, `agent.conversation` |
+| Bots | `agent.list/get/create/update/delete/restore/reorder/purge`, `agent.lock.set`, `agent.team.update`, `agent.conversation` |
+| Tasks (22 October 2026) | `task.create/list/get/update/dispatch/unassign/reorder/cancel/stop/review/runs`; see [task board](task-board.md) |
 | Sessions | `session.list/get/new/rename/archive/delete/resume/prompt/cancel/close`, `session.steer`, `session.handoff.draft`, `session.delete.schedule/cancel`, `session.model.update`, `session.permissions.set` |
 | Queue and retry | `session.queue.add/list/update/reorder/delete/send_now/resume`, `turn.retry.cancel` |
 | Permissions | `permission.reply`, `permissions.policy.get` |
@@ -74,7 +75,7 @@ Every `remote.*` method is refused to a paired device at every tier. `settings.s
 
 The normalized vocabulary is:
 
-`runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `permission.auto_resolved`, `permission.auto_denied`, `permission.bypass_active`, `usage.updated`, `turn.completed`, `turn.cancelled`, `turn.error`, `turn.retry_scheduled`, `turn.retry_declined`, `queue.changed`, `automation.changed`, `automation.deleted`, `automation.run.changed`, `automation.run.finished`, `memory.changed`, `memory.deleted`, `skills.changed`, `settings.changed`, `proposal.changed`, `manager.profile.changed`, `manager.playbook.changed`, `backup.imported`, `remote.changed`, `remote.pairing.requested`, `remote.pairing.completed`, `remote.device.changed`, `remote.activity`, `daemon.health`.
+`runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `permission.auto_resolved`, `permission.auto_denied`, `permission.bypass_active`, `usage.updated`, `turn.completed`, `turn.cancelled`, `turn.error`, `turn.retry_scheduled`, `turn.retry_declined`, `queue.changed`, `automation.changed`, `automation.deleted`, `automation.run.changed`, `automation.run.finished`, `memory.changed`, `memory.deleted`, `task.changed`, `task.run.changed`, `task.run.finished`, `skills.changed`, `settings.changed`, `proposal.changed`, `manager.profile.changed`, `manager.playbook.changed`, `backup.imported`, `remote.changed`, `remote.pairing.requested`, `remote.pairing.completed`, `remote.device.changed`, `remote.activity`, `daemon.health`.
 
 Rules:
 

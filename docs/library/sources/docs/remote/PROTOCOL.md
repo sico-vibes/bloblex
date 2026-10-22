@@ -1,10 +1,10 @@
 # Bitbots remote protocol (v1)
 
 > **What this is:** The Remote mode protocol (v1): requests, events and the rules for each.
-> **Status:** current; the design for the wire contract. Its own line "Design, not implemented" is out of date: the daemon contains the gateway (crates/bloblex-daemon/src/remote/).
-> **Last updated:** 2026-10-19
+> **Status:** current; the design for the wire contract. The daemon contains the gateway (`crates/bloblex-daemon/src/remote/`); live tailnet and phone verification is still owed (see AGENTS.md, 17 October 2026 amendment).
+> **Last updated:** 2026-10-22
 
-**Status: Design, not implemented.** This document describes the wire contract between a
+**Status: Implemented in the daemon gateway (shipped in beta.30); not yet verified against a live tailnet and a real phone.** This document describes the wire contract between a
 device (phone, tablet, browser) and a host's gateway. It is grounded in the daemon as it
 exists today; every daemon fact cites its source file. Choices that are not yet forced by the
 daemon are marked **(recommendation)** and may change before implementation.
@@ -444,6 +444,12 @@ runtime profile writes, session deletion, daemon shutdown, hooks, and the retire
 | `subscription.*` | never | — | Subscription controls are retired and never remote. |
 | `budget.*` | never | — | Budget controls are retired and never remote. |
 | `quota.refresh` | never | — | A remote device must not trigger a provider quota poll on the host; it only needs to read quota.list. |
+| `task.create` | never | — | Board tasks are owner-only in this slice (`apps/desktop/src/remote/tiers.json`, 22 October 2026). |
+| `task.list`, `task.get`, `task.runs` | never | — | The task board is not on the remote surface yet; the remote task list is not built. |
+| `task.update`, `task.reorder`, `task.unassign`, `task.cancel` | never | — | Only the desktop owner edits or reorders the board. |
+| `task.dispatch` | never | — | Dispatching starts provider work; only the owner at the computer may drop a task on a bot. |
+| `task.stop`, `task.review` | never | — | Only the desktop owner stops a running task and reviews its evidence. |
+| `agent.purge` | never | — | Permanent bot deletion is owner-only and requires confirmation on the desktop. |
 
 The Director fills the table above from FIX18's `renderTierTableMarkdown()`. Do not hand-edit
 it; regenerate it so it cannot drift from `METHOD_RULES`.

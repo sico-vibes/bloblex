@@ -2,7 +2,7 @@
 
 > **What this is:** How to run, build and test Bitbots on Windows, using an isolated database.
 > **Status:** current
-> **Last updated:** 2026-10-20
+> **Last updated:** 2026-10-22
 
 These commands are the local development path. Do not point them at a live inspection database. Earlier notes in this file about a running executable lock are historical; the launcher stages a private daemon copy. A full native pass of the current tree is still Phase 7.
 
@@ -27,7 +27,7 @@ npm run desktop:bundle
 
 The script defaults to `target/desktop-release` unless a Cargo target is explicitly supplied. It builds both release sidecars, stages their target-triple-suffixed external binaries, then invokes Tauri's configured build. NSIS is the only configured bundle target (`bundle.targets` in `apps/desktop/src-tauri/tauri.conf.json`); an actual installer build/install/uninstall pass remains open. No trusted signed release is established. It still needs an approved Windows signing certificate or Store submission. The updater signing key is configured for beta.35 (see the note below). No signing identity or updater key is checked into this repository.
 
-The updater remains disabled until a signing key and signed update endpoint are configured. Provider CLIs keep their own update channels. Superseded on this point (19 October 2026): the beta.35 release is signed for the updater with a new key; see [updater.md](../operations/updater.md) and the [release checklist](../operations/release-checklist.md).
+The updater was disabled until a signing key and a signed update endpoint were configured (both now exist; see below). Provider CLIs keep their own update channels. Superseded on this point (19 October 2026): the beta.35 release is signed for the updater with a new key; see [updater.md](../operations/updater.md) and the [release checklist](../operations/release-checklist.md).
 
 ## Current local surfaces
 

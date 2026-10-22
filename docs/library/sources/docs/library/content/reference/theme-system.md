@@ -1,8 +1,8 @@
 # Theme system
 
 > **What this is:** the two supported app looks, their tokens, saved preferences and loading rules.
-> **Status:** current; updated for the owner's two-theme decision
-> **Last updated:** 2026-10-20
+> **Status:** current; updated for the two-theme decision (20 and 21 October 2026) and checked against `main` on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Supported looks
 
@@ -12,13 +12,13 @@ The base tokens are in `apps/desktop/src/ui/theme.css`. Bitbots statically impor
 
 ## Attributes and settings
 
-`appearance.style` supplies `data-style`. `appearance.theme` selects system, dark or light; `data-theme` is the resolved theme. `data-wallpaper` and `data-glass` control Frost. The retired `data-bitbots` pixel marker is cleared. A small script in `index.html` applies safe presentation preferences before first paint; the daemon remains the source of truth.
+`appearance.style` supplies `data-style`. `appearance.theme` selects system, dark or light; `data-theme` is the resolved theme. `data-wallpaper` and `data-glass` control Frost. Nothing in the current source sets or reads the retired `data-bitbots` marker. An inline script in `apps/desktop/index.html` applies the cached look, glass, wallpaper, theme and text size before first paint and falls back to the defaults for any other cached value; the daemon remains the source of truth.
 
 Frost has Lake, Dusk, Bloom, Sand and a custom wallpaper. Glass is Solid (default), Balanced or Clear. Wallpaper bytes are stored in the native app's files, never settings. Large surfaces use glass; controls and nested surfaces use flat fills to avoid stacked blur. There is no glow, halo or decorative gradient.
 
 ## Type, colour and shape
 
-Bitbots defaults to Inter; Blobots uses the system stack. The existing font catalogue remains available for explicit user choices. `ui/fonts.ts` lazily loads only chosen fonts and returns to the appropriate defaults when an override is cleared. User accent overrides the look default through shared tokens.
+Bitbots defaults to Inter; Blobots uses its base fonts (`FONT_DEFAULTS` in `apps/desktop/src/ui/fonts.ts`). The existing font catalogue remains available for explicit user choices. `ui/fonts.ts` lazily loads only chosen fonts and returns to the appropriate defaults when an override is cleared. User accent overrides the look default through shared tokens.
 
 Controls use the existing rounded-rectangle system. The two theme orbs and their selection rings are circular exceptions. Readable foregrounds apply to every selected-row descendant, inline/fenced code, mentions and links. User-bubble links inherit the bubble's foreground.
 

@@ -1,25 +1,20 @@
 # Pipeline: the Director, lanes, worktrees and releases
 
-Last reviewed: 2026-10-21. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
+Last reviewed: 2026-10-22. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
 
-## Owner resume: expansion, 21 October 2026
+## Current arrangement (owner, 21 and 22 October 2026)
 
-The owner resumed the product expansion on 21 October 2026 and set a three-lane arrangement for it. This section replaces the paused-expansion override of the same date. It applies to the expansion work until the owner says otherwise.
+The owner resumed the product expansion on 21 October 2026 with three lanes, recorded in the 22 October amendment of `AGENTS.md`. It applies until the owner says otherwise.
 
-- **Director** (Claude): all UI and UX.
-- **OpenCode DeepSeek v4.1 flash (high):** all backend and tests.
-- **Claude Haiku:** all documentation.
-- Lanes never commit. The Director reviews every diff, runs the gates and commits.
-- Worktrees: `D:\fx60` (backend, branch `exp/tasks-backend`), `D:\fx61` (UI, branch `exp/board-ui`), `D:\fx62` (docs, branch `exp/docs`).
+- **Director** (Claude): all UI and UX. Reviews every diff, runs the gates, commits and pushes (the owner allowed pushes to `main` on request). Resolves merge conflicts.
+- **Backend and tests:** OpenCode `opencode-go/deepseek-v4.1-flash` (high), one git worktree per lane.
+- **Documentation:** Claude Haiku 5.5 writes the documents from the briefs, diffs and gate results.
+- Lanes **never** run `git commit`, `git push`, `git reset`, `git stash` or check out other branches.
+- Codex `gpt-6-luna` is not part of this arrangement unless the owner assigns it. The earlier FIX40 roles are history (`AGENTS.md`, 19 October 2026).
 - The Codex worktrees under `C:\Users\SicoZ\.codex\worktrees` are read-only reference. Do not edit or commit there.
-
-## Roles (current arrangement, FIX40 amendment of 19 October 2026)
-
-- **Director** (the orchestrating Claude session): writes one brief per lane, reviews every diff, checks every screen (browser preview and, where it matters, the production build or installed app), sends work back until it is right, resolves merge conflicts, runs the gates, commits, merges and releases. It writes no feature code itself.
-- **Mapping:** Claude Haiku maps the codebase for the briefs (read-only).
-- **Implementation lanes:** Codex `gpt-6-luna` (high) and OpenCode `opencode-go/deepseek-v4.1-flash` (high), one git worktree each. Lanes **never** run `git commit`, `git push`, `git reset`, `git stash` or check out other branches.
-- **Documentation:** Claude Haiku writes docs (reports, design rules, handoff, status, release notes) from the briefs, diffs and gate results.
 - The owner may assign work differently at any time; their latest instruction wins.
+
+Earlier lane names and worktrees (`D:\fx60` to `D:\fx62`, branches `exp/tasks-backend`, `exp/board-ui`, `exp/docs`) are from the 21 October set-up. Phase 1 is on `main`; check `git worktree list` before reusing any of them.
 
 ## Writing a brief
 

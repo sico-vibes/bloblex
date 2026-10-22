@@ -2,7 +2,7 @@
 
 > **What this is:** the licences and attributions for third-party code, fonts and models that Bitbots bundles or adapts.
 > **Status:** current
-> **Last updated:** 2026-10-19
+> **Last updated:** 2026-10-22
 
 ## Bundled fonts
 
@@ -63,9 +63,9 @@ The dictation island in `apps/desktop/src/ui/DictationIsland.tsx` adapts the lay
 
 ## Bitbots robots and fonts
 
-The robots in Bitbots mode (Settings, Experimental) are drawn by [robot-heads](https://github.com/fayazara/robot-heads) 0.3.0, MIT License, Copyright (c) 2026 Fayaz Ahmed (the licence text below applies). A copy is vendored in `apps/desktop/src/vendor/robot-heads/` with its licence. Bitbots changes two things in it, both for cost: the shared animation loop draws at most about 30 times a second, and avatars of 80px or less draw at up to 1.5x and update at about 15 fps. It only draws while the mode is on.
+The 3D robot art (`apps/desktop/src/blob/BitbotCanvas.tsx`) is drawn by [robot-heads](https://github.com/fayazara/robot-heads) 0.3.0, MIT License, Copyright (c) 2026 Fayaz Ahmed (the licence text below applies). A copy is vendored in `apps/desktop/src/vendor/robot-heads/` with its licence. Bitbots changes two things in it, both for cost: the shared animation loop draws at most about 30 times a second, and avatars of 80px or less draw at up to 1.5x and update at about 15 fps. It only draws while the mode is on.
 
-The Legacy pixel look uses [Doto](https://fonts.google.com/specimen/Doto) and [DM Mono](https://fonts.google.com/specimen/DM+Mono), both under the SIL Open Font License 1.1, bundled through the `@fontsource/doto` and `@fontsource/dm-mono` packages, and loaded only while Legacy is active. The palette and the dotted, dithered look follow the reference site claudes.dev.
+[Doto](https://fonts.google.com/specimen/Doto) and [DM Mono](https://fonts.google.com/specimen/DM+Mono), both under the SIL Open Font License 1.1, are bundled through the `@fontsource/doto` and `@fontsource/dm-mono` packages and offered as selectable fonts (`apps/desktop/src/ui/fonts.ts`); they load only when chosen. The Legacy pixel look that used them as its default was retired on 21 October 2026. Its palette and dotted, dithered style followed the reference site claudes.dev.
 
 ## Companion sounds
 

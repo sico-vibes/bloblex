@@ -2,7 +2,7 @@
 
 > **What this is:** The threat model for Remote mode. The release-gate checklists in sections 8 and 11 are still owed.
 > **Status:** current
-> **Last updated:** 2026-10-18
+> **Last updated:** 2026-10-22
 
 **Status: design.** Written 15 October 2026; amended 16 October 2026 for the owner's choice of
 Tailscale. Scope: the gateway, Tailscale serve, paired devices and the pairing flow. Out of
@@ -237,3 +237,7 @@ The export is local. It is written only after the owner picks a path in the nati
 - the recent log files, redacted again on the way in.
 
 **Known limits.** Redaction is pattern-based, so a secret in an unusual shape could pass it. `remote.native.account.username` is kept, as a label that says which account is configured. The zip is not encrypted, and sending it anywhere is the owner's decision.
+
+## 15. Task board and bot deletion (22 October 2026)
+
+The task board (`task.create`, `task.list`, `task.get`, `task.update`, `task.dispatch`, `task.unassign`, `task.reorder`, `task.cancel`, `task.stop`, `task.review`, `task.runs`) and permanent bot deletion (`agent.purge`) are `never` for a paired device, at every tier (`apps/desktop/src/remote/tiers.json`). Dispatching a task starts provider work on the host, and stopping or reviewing a task changes a run the owner is watching, so both stay at the desktop. Task events (`task.changed`, `task.run.changed`, `task.run.finished`) are dropped for remote devices and carry no task text in any case. This section adds no new threat rows: the threats above cover the surface, and a remote task list is not built.

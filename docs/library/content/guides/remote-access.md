@@ -1,8 +1,8 @@
 # Remote access
 
 > **What this is:** reach your bots from a phone or another computer with Tailscale or Native, and know what a paired device may do.
-> **Status:** current
-> **Last updated:** 2026-10-19
+> **Status:** current; the Tasks rows were checked against `apps/desktop/src/remote/tiers.json` on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Before you start
 
@@ -50,7 +50,7 @@ Bitbots limits repeated sign-in attempts, locks out a source after too many fail
 | Chat | Everything viewer can, plus send prompts, steer, cancel, queue, rename and archive conversations. |
 | Operator | Everything chat can, plus answer permission requests, and only while **Approve requests from remote devices** is on. |
 
-**Never remote**, at every level: changing settings, creating, editing or deleting bots and projects, changing coding-agent profiles, refreshing coding agents, reverting files, writing automations or memory, shutting Bitbots down, attachments, and the app's own native commands.
+**Never remote**, at every level: changing settings, creating, editing, archiving or deleting bots (including permanent deletion) and projects, the Tasks board (every task action, and the task list itself, which is not built for phones yet), changing coding-agent profiles, refreshing coding agents, reverting files, writing automations or memory, shutting Bitbots down, attachments, and the app's own native commands.
 
 The same access rules apply to both methods, and every action has an explicit rule.
 

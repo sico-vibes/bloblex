@@ -38,6 +38,15 @@ The owner limited the product to Bitbots and Blobots on 20 October 2026. Add ano
 3. The UI call in `apps/desktop/src/tauri.ts`, mirrored in `apps/desktop/src/preview/fixtureBridge.ts` (fixture behaviour) and `apps/desktop/src/remote/remoteTauri.ts` (a refusing stub if native-only); the parity tests check all three export the same names.
 4. Document it in `docs/ipc-contract.md`.
 
+## Add a task RPC or a board change (22 October 2026)
+
+1. Storage first: the `task_*` function in `crates/bloblex-storage/src/lib.rs` (one `Immediate` transaction, a version check, the state rule the methods above it follow; append a `task_run_events` row for any run change). `ensure_tasks_schema` uses `CREATE TABLE IF NOT EXISTS`, so a new column on an existing table needs its own guarded `ALTER`.
+2. Handler: the arm in `crates/bloblex-daemon/src/tasks.rs` `rpc()`; emit only the safe projection (`safe_task_event`, `run_event`). Route it from `dispatch()` in `main.rs` (the `"task.create" | ... | "task.runs"` arm), or the call is `not_found`.
+3. Remote: a row in `apps/desktop/src/remote/tiers.json` (every `task.*` method is `never` today; the parity test fails without a row).
+4. UI: the call in `apps/desktop/src/ui/useTasks.ts` through `apps/desktop/src/tauri.ts`; mirror it in `preview/fixtureBridge.ts` (or the preview board shows nothing) and in `remote/remoteTauri.ts` if the name is exported there.
+5. Tests: the storage test next to the function, a daemon test in `main.rs` (the `task_*` tests), and the mounted or `taskModel` test for any view change.
+6. Document: the table in `docs/ipc-contract.md` and the library pages `reference/task-board.md` and `guides/tasks.md`.
+
 ## Add a native (Tauri) command
 
 Register it in the `invoke_handler` in `apps/desktop/src-tauri/src/lib.rs`; use the selection-token pattern for file access (`remember_selected_path` / `take_selected_path`), cap sizes, check file signatures; wrap it in `apps/desktop/src/tauri.ts`; mirror it in `fixtureBridge.ts` and `remoteTauri.ts`; no new plugin or capability without the owner. Check it with `cargo test -p bloblex-desktop` from a short-path worktree.

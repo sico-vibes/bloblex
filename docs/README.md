@@ -1,7 +1,7 @@
 # Bitbots documentation
 
 > **What this is:** the index of every Markdown document in the repository, grouped by purpose. Use it to find the current document for a task.
-> **Status:** current. Rewritten by the documentation library pass of 19 October 2026 (structure and index only; facts were not changed); updated 22 October 2026 for the merged phase 1 and the expansion records.
+> **Status:** current. Rewritten by the documentation library pass of 19 October 2026 (structure and index only; facts were not changed); updated 22 October 2026 for the merged phase 1, the expansion records and the documentation refresh of that day (see [history/expansion-v2/docs-refresh-2026-10-22.md](history/expansion-v2/docs-refresh-2026-10-22.md)).
 > **Last updated:** 2026-10-22
 
 Where a document and the code disagree, the code wins. For rules, [AGENTS.md](../AGENTS.md) wins. For anything else, the status line of the document says whether it is current, historical or superseded.
@@ -9,6 +9,7 @@ Where a document and the code disagree, the code wins. For rules, [AGENTS.md](..
 ## Start here
 
 - **Latest development review:** [20 October fixes and verification](library/content/reference/live-development-review-2026-10-20.md), including the two-theme decision and native development workflow.
+- **Tasks board (on `main`, unreleased):** [guides/tasks.md](library/content/guides/tasks.md) for using the board, and [reference/task-board.md](library/content/reference/task-board.md) for the daemon contract, states, events and tests.
 
 - **AI agents and the delivery process:** read [AGENTS.md](../AGENTS.md) first, then [operations/operating-model.md](operations/operating-model.md) (a summary of AGENTS.md dated 14 October 2026, not updated for the 16 to 19 October amendments; AGENTS.md wins), [operations/implementation-status.md](operations/implementation-status.md) (open gaps), and [operations/release-checklist.md](operations/release-checklist.md) (release state).
 - **New contributors:** [README.md](../README.md), then [reference/architecture.md](reference/architecture.md), [guides/windows-development.md](guides/windows-development.md), [product.md](design/product.md), [design-system.md](design/design-system.md), [ipc-contract.md](ipc-contract.md) and [reference/runtime-capabilities.md](reference/runtime-capabilities.md).
@@ -57,8 +58,8 @@ These stay at the repository root. `AGENTS.md` is the owner directive and wins o
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
-| [Bitbots collaboration instructions](../AGENTS.md) | Owner directive: how Bitbots is built and delivered, with the dated amendments, newest first. | owner directive; wins on any conflict | 2026-10-19 |
-| [Bitbots](../README.md) | The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts. | current. The release figures in this file are set at v0.1.0-beta.35. | 2026-10-19 |
+| [Bitbots collaboration instructions](../AGENTS.md) | Owner directive: how Bitbots is built and delivered, with the dated amendments, newest first. | owner directive; wins on any conflict | 2026-10-22 |
+| [Bitbots](../README.md) | The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts. | current. The release figures in this file are set at v0.1.0-beta.36; `main` has unreleased work. | 2026-10-22 |
 
 ## Style
 
@@ -66,7 +67,7 @@ The documentation style guide.
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
-| [Documentation style guide](STYLE.md) | the rules for writing and maintaining Bitbots documents: tone, layout, naming, links and how to mark what is verified. | current. Applies to every document written from October 2026 on. Historical records were brought under the front block but keep their own body layout (see [Historical records](#historical-records)). | 2026-10-19 |
+| [Documentation style guide](STYLE.md) | the rules for writing and maintaining Bitbots documents: tone, layout, naming, links and how to mark what is verified. | current. Applies to every document written from October 2026 on. Historical records were brought under the front block but keep their own body layout (see [Historical records](#historical-records)). | 2026-10-22 |
 
 ## Legal
 
@@ -74,7 +75,7 @@ Licences and attributions.
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
-| [Third-party notices](legal/third-party-notices.md) | the licences and attributions for third-party code, fonts and models that Bitbots bundles or adapts. | current | 2026-10-19 |
+| [Third-party notices](legal/third-party-notices.md) | the licences and attributions for third-party code, fonts and models that Bitbots bundles or adapts. | current | 2026-10-22 |
 
 ## Reference
 
@@ -86,7 +87,7 @@ How the system works and the contracts it keeps.
 | [Architecture](reference/architecture.md) | how Bitbots is put together: the desktop shell, the local daemon, the provider adapters, storage and the Remote gateway, and where to start reading each part. | current; new in the documentation library pass of 19 October 2026. The claims were checked against the tree at `17bc277` on that date; line numbers may move. | 2026-10-19 |
 | [Phase 5 contract: cost and usage analytics (daemon RPC + UI)](reference/phase-5-analytics-contract.md) | The contract for cost and usage analytics: the daemon RPC, the UI and the definitions. | superseded in part; the monetary, estimate and subscription sections are retired (AGENTS.md, 12 October 2026 amendment) | 2026-10-14 |
 | [Runtime capabilities of the installed CLIs](reference/runtime-capabilities.md) | The installed CLI capabilities Bitbots relies on, with the evidence for each: Claude Code, Codex and OpenCode. | current evidence record; the OpenCode 2.0.28 observations of 14 October 2026 are labelled in the OpenCode section | 2026-10-15 |
-| [Bitbots daemon IPC contract (v1)](ipc-contract.md) | The daemon IPC contract (v1): methods, events, and the rules for the capability and the local listeners. | current | 2026-10-18 |
+| [Bitbots daemon IPC contract (v1)](ipc-contract.md) | The daemon IPC contract (v1): methods, events, and the rules for the capability and the local listeners. | current | 2026-10-22 |
 
 ## Guides
 
@@ -105,10 +106,10 @@ The design system, the product brief, the polish waves and the archive of two ol
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
 | [Archived design images](design/archive/README.md) | the two images kept from earlier work when the repository root was tidied. Nothing in the app or in the documentation refers to them. | historical; archived on 19 October 2026 by the owner's root tidy-up. | 2026-10-19 |
-| [Bitbots theme spec: the pixel re-skin (CSS only)](design/bitbots-theme-spec.md) | The pixel re-skin theme spec for the experimental Bitbots theme (CSS only), 13 October 2026. | historical; superseded in part by [themes-spec.md](history/fix-40/themes-spec.md) (the Frost look became Bitbots) | 2026-10-13 |
-| [Bitbots Design System](design/design-system.md) | The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI. | current | 2026-10-19 |
+| [Bitbots theme spec: the pixel re-skin (CSS only)](design/bitbots-theme-spec.md) | The pixel re-skin theme spec for the experimental Bitbots theme (CSS only), 13 October 2026. | historical; superseded in part by [themes-spec.md](history/fix-40/themes-spec.md) (the Frost look became Bitbots) | 2026-10-22 |
+| [Bitbots Design System](design/design-system.md) | The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI. | current | 2026-10-22 |
 | [Bitbots Product](design/product.md) | The product purpose, users, brand personality, anti-references and design principles for Bitbots. | current | 2026-10-15 |
-| [UI/UX polish wave (15 October 2026, unreleased)](design/ui-polish-wave.md) | The UI and UX polish waves of 15 October 2026, recorded as they were shipped, unreleased. | historical | 2026-10-15 |
+| [UI/UX polish wave (15 October 2026, unreleased)](design/ui-polish-wave.md) | The UI and UX polish waves of 15 October 2026, recorded as they were shipped, unreleased. | historical | 2026-10-22 |
 
 ## Plans
 
@@ -117,8 +118,8 @@ The current plan and the roadmap.
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
 | [Bitbots E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release](plans/e2e-plan-v2.md) | The whole-product plan (E2E v2): the phases, the dated checkpoints and the open work. | current plan; its status section is dated 5 to 6 October 2026, and the release figure in the kept status paragraph (beta.23) is out of date; see [implementation-status.md](operations/implementation-status.md) | 2026-10-19 |
-| [Bitbots improvement plan v2: a BB-informed, companion-style roadmap](plans/improvement-plan.md) | The v2 improvement roadmap for Bitbots: a companion-style plan that builds on the E2E plan. | current; the roadmap named by AGENTS.md (12 October 2026 amendment) | 2026-10-15 |
-| [Expansion plan v2: tasks, desktop wins, providers, trusted access and phone relay](plans/expansion-plan-v2.md) | The approved expansion plan: the verdict on the first Codex draft, the features, five phases with gates, and 23 slices. | current; approved 21 October 2026; phase 1 is on `main` | 2026-10-21 |
+| [Bitbots improvement plan v2: a BB-informed, companion-style roadmap](plans/improvement-plan.md) | The v2 improvement roadmap for Bitbots: a companion-style plan that builds on the E2E plan. | historical; a finished roadmap (phases 1 to 7 shipped in v0.1.0-beta.19), named by AGENTS.md (12 October 2026 amendment) | 2026-10-22 |
+| [Expansion plan v2: tasks, desktop wins, providers, trusted access and phone relay](plans/expansion-plan-v2.md) | The approved expansion plan: the verdict on the first Codex draft, the features, five phases with gates, and 23 slices. | current; approved 21 October 2026; phase 1 is on `main` (22 October 2026, unreleased); phases 2 to 5 not started | 2026-10-22 |
 | [Accepted product expansion plan (20 and 21 October 2026)](plans/reference-expansion-plan.md) | The owner's accepted scope and constraints for the 20 and 21 October expansion. | historical record, superseded in part (see its 22 October update) | 2026-10-22 |
 
 ## Operations
@@ -129,7 +130,7 @@ Process, release and status records.
 | --- | --- | --- | --- |
 | [Implementation status](operations/implementation-status.md) | The implementation status: released versions, phase status, work after the plan and the open gaps. | current; latest release v0.1.0-beta.36; a 22 October 2026 section covers phase 1 on `main` | 2026-10-22 |
 | [Native smoke test results (Phase 2a + Phase 3)](operations/native-smoke-results.md) | Results of the native smoke test run on 2 October 2026 against an isolated database. | historical; a record of 2 October 2026 | 2026-10-15 |
-| [Operating model: a dated summary of the rules (14 October 2026)](operations/operating-model.md) | A summary, dated 14 October 2026, of the rules in AGENTS.md. AGENTS.md wins on any conflict. The amendments of 16 to 19 October 2026 are not all reflected here. | current; a dated summary (14 October 2026), not updated for the 16 to 19 October amendments | 2026-10-19 |
+| [Operating model: a dated summary of the rules (14 October 2026)](operations/operating-model.md) | A summary, dated 14 October 2026, of the rules in AGENTS.md. AGENTS.md wins on any conflict. The amendments of 16 to 19 October 2026 are not all reflected here. | current; a dated summary (14 October 2026); section 2 is superseded by a 22 October note | 2026-10-22 |
 | [Release checklist](operations/release-checklist.md) | The checklist for each Bitbots release: gates, publishing, digests, clean-up and open release items. | current | 2026-10-19 |
 | [Bitbots session handoff](operations/session-handoff.md) | The session handoff: dated sections, newest first, with the current release and the open items. | current handoff with dated sections, newest first; the latest entry is 22 October 2026; the current release is v0.1.0-beta.36 | 2026-10-22 |
 | [Product expansion pause handoff (21 October 2026)](operations/expansion-handoff-2026-10-21.md) | Lane status, exact evidence and image comparisons at the owner's pause. | historical record, superseded in part (see its 22 October update) | 2026-10-22 |
@@ -153,11 +154,11 @@ Remote mode design, protocol and threat model. These paths are referenced by cod
 | [Draft amendment for AGENTS.md: Remote mode (for owner approval)](remote/AGENTS_AMENDMENT_DRAFT.md) | The draft amendment to AGENTS.md for Remote mode, as first written for owner approval. | historical; accepted into AGENTS.md (17 October 2026 amendment) | 2026-10-17 |
 | [Remote mode: architecture](remote/ARCHITECTURE.md) | The architecture of Remote mode over Tailscale. | current (Tailscale method); later amendments are in AGENTS.md | 2026-10-16 |
 | [Remote mode: phases](remote/PHASES.md) | The phases of the Remote mode work. | historical plan; see the status of each phase in docs/operations/session-handoff.md | 2026-10-16 |
-| [Bitbots remote protocol (v1)](remote/PROTOCOL.md) | The Remote mode protocol (v1): requests, events and the rules for each. | current; the design for the wire contract. Its own line "Design, not implemented" is out of date: the daemon contains the gateway (crates/bloblex-daemon/src/remote/). | 2026-10-19 |
+| [Bitbots remote protocol (v1)](remote/PROTOCOL.md) | The Remote mode protocol (v1): requests, events and the rules for each. | current; the design for the wire contract. Its own line "Design, not implemented" is out of date: the daemon contains the gateway (crates/bloblex-daemon/src/remote/). | 2026-10-22 |
 | [Remote mode: product specification](remote/REMOTE_MODE.md) | The product specification for Remote mode. | current | 2026-10-16 |
 | [Remote mode: independent review (FIX24)](remote/REVIEW_NOTES.md) | The independent review of the Remote mode design (FIX24). | historical record | 2026-10-16 |
 | [Remote mode: sequence diagrams](remote/SEQUENCES.md) | Sequence diagrams for Remote mode pairing, sign-in and requests. | current | 2026-10-16 |
-| [Remote mode: threat model](remote/THREAT_MODEL.md) | The threat model for Remote mode. The release-gate checklists in sections 8 and 11 are still owed. | current | 2026-10-18 |
+| [Remote mode: threat model](remote/THREAT_MODEL.md) | The threat model for Remote mode. The release-gate checklists in sections 8 and 11 are still owed. | current | 2026-10-22 |
 | [Remote mode: UX flows](remote/UX_FLOWS.md) | The UX flows for Remote mode. | current | 2026-10-16 |
 
 ## Evidence (protected paths)
@@ -623,6 +624,7 @@ Dated records of the work. Each FIX wave has its own folder with its specs, brie
 | --- | --- | --- | --- |
 | [Expansion v2 records](history/expansion-v2/README.md) | Index of the phase 1 plan records, the working arrangement and the status table. | current index; its status table was written before the 22 October merge | 2026-10-22 |
 | [Phase 1 status](history/expansion-v2/status.md) | Status of each phase 1 slice, with its evidence. | written before the 22 October merge; the 22 October entry in implementation status gives the merged state | 2026-10-21 |
+| [Documentation refresh record (22 October 2026)](history/expansion-v2/docs-refresh-2026-10-22.md) | What the 22 October 2026 documentation pass changed, the code paths it checked, and what it could not verify. | historical record of the 22 October 2026 pass | 2026-10-22 |
 
 ## Library work records
 

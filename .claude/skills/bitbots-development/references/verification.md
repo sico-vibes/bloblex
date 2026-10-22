@@ -10,7 +10,7 @@ From the repository root (or a worktree):
 npm run typecheck                         # tsc -b
 npm test                                  # vitest, all files
 cd apps/desktop; npm run build            # tsc -b && vite build (the production bundle)
-npm run build:remote                      # the phone PWA, when remote code changed
+cd apps/desktop; npm run build:remote         # the phone PWA, when remote code changed (script is in apps/desktop)
 $env:RUST_MIN_STACK='33554432'            # some daemon tests overflow the default test stack
 cargo test --workspace --exclude bloblex-desktop
 cargo clippy --workspace --exclude bloblex-desktop --all-targets -- -D warnings
@@ -38,9 +38,9 @@ When measuring theme contrast, wait for colour transitions to finish (250 ms in 
 
 `npx vite --config apps/desktop/vite.preview.config.ts apps/desktop --port 5174 --strictPort --host 127.0.0.1` (the Claude desktop app has this as the `desktop-preview` launch config). It swaps `tauri.ts` for `preview/fixtureBridge.ts` (fixture bots and conversations, no daemon).
 
-The local launch file `.claude/launch.json` (git-ignored, so it is not in the repository) has a `board-preview` configuration on port 5176 for the worktree at `D:/fx61` (branch `exp/board-ui`). Its board data comes from `apps/desktop/src/preview/fixtureTasks.ts`, a preview-only ledger that mimics the task contract, so the board checks run without the daemon.
+The task board is on `main` (phase 1, 22 October 2026). Its browser-preview data comes from `apps/desktop/src/preview/fixtureTasks.ts`, a preview-only ledger that mimics the task contract, so the board checks run without the daemon. Any local launch file (`.claude/launch.json`, git-ignored) and worktree from the earlier `exp/board-ui` lane are historical; check them before reuse.
 
-Useful URLs: `/` (main window; add `?style=bitbots|blobots`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet, which shows all six arts, including Flat and Dot that the picker does not offer; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`), `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
+Useful URLs: `/` (main window; add `?style=bitbots|blobots`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet, which shows all six arts, including Flat and Dot that the picker does not offer; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`). Pass `?style=bitbots` or `?style=blobots` for the look; `pop`, `dot` and `legacy` were retired and are not offered, `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
 
 The app plays a launch intro and fades the shell in; screenshots taken in the first seconds show a dimmed or empty window. Wait or check `getComputedStyle(document.querySelector('.app-shell')).opacity === '1'`. The real window is at least 1000 px wide; layout overlaps seen only below that width are not bugs.
 

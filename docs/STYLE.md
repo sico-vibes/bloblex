@@ -2,7 +2,7 @@
 
 > **What this is:** the rules for writing and maintaining Bitbots documents: tone, layout, naming, links and how to mark what is verified.
 > **Status:** current. Applies to every document written from October 2026 on. Historical records were brought under the front block but keep their own body layout (see [Historical records](#historical-records)).
-> **Last updated:** 2026-10-19
+> **Last updated:** 2026-10-22
 
 ## Tone
 
@@ -20,8 +20,9 @@ Use the current names in new text:
 | --- | --- |
 | Bitbots | The desktop app and the product. |
 | bot | One agent character in Bitbots. Use "bot" for the character itself, whatever it looks like. |
-| Blobots | The look whose bots are drawn as blobs. A bot's art style is chosen separately: one of six (3D robot, Flat robot, Pop robot, Dot robot, Glossy blob, Hand-painted). |
-| look | A visual style the user picks: Bitbots (the Frost look), Blobots, Legacy, Pop, Dot. |
+| Blobots | The quiet, monochrome look; its automatic bot art is Glossy blob. A bot's art style is chosen separately: Automatic, 3D robot, 2D robot, Glossy or Hand-painted. |
+| look | A visual style the user picks: Bitbots (the Frost look) or Blobots. Pop, Dot and Legacy were retired on 21 October 2026 (see AGENTS.md). |
+| task | A record on the Tasks board: a title, a brief and a done goal. It is not a conversation. A task with no bot is a draft. |
 | companion | The floating window that shows bot state. |
 | daemon | The local `bitbotsd` process that owns sessions, permissions and usage. |
 | Manager | The permanent, global bot that plans and proposes work. |

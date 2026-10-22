@@ -1,8 +1,8 @@
 # Expansion v2 records
 
 > **What this is:** The index for the expansion v2 records: the approved plan, the slice briefs, the RPC shapes, the status table, and the working arrangement that applies to every slice.
-> **Status:** in progress; phase 1 started with slice 1A, and the records below are added as each slice is written.
-> **Last updated:** 2026-10-21
+> **Status:** in progress; phase 1 is on `main` (22 October 2026). The records below are added as each slice is written. The look list in the working arrangement below is superseded: two looks remain (AGENTS.md, 22 October 2026).
+> **Last updated:** 2026-10-22
 
 ## Context
 
@@ -29,9 +29,13 @@ Phase 1 and every slice after it follow this arrangement.
   - Claude Haiku 5.5 does the documentation, from the briefs, the diffs and the gate results.
 - **Lanes never commit.** The Director reviews the diff, runs the gates, and commits.
 - **The Director reviews every diff** and sends work back until it is right.
-- **The Director checks every screen against the owner's reference image** in each look the slice touches: Bitbots (the Frost look), Blobots, Legacy, Pop and Dot.
+- **The Director checks every screen against the owner's reference image** in each look the slice touches: Bitbots (the Frost look) and Blobots (Pop, Dot and Legacy were retired on 21 October 2026).
 - **Nothing is marked done** until its state in [status.md](status.md) is backed by evidence.
 
 ## Naming
 
 In the board UI a lane is one bot's column. The delivery term "lane" keeps its meaning in the delivery process. See [the style guide](../../STYLE.md).
+
+## Records added on 22 October 2026
+
+- [Documentation refresh (22 October 2026)](docs-refresh-2026-10-22.md): the documents brought up to the code after phase 1 merged, what was verified and what was not.

@@ -13,7 +13,7 @@ A calm chat app for developers moving between coding-agent sessions. The bots su
 | Look (value) | Feel | Default bot art | Default fonts |
 |---|---|---|---|
 | Bitbots (`bitbots`) = Frost | Flat translucent panels over a wallpaper (Lake default; Dusk, Bloom, Sand, the user's image), 10 px gaps between floating panels, 20 px panel radius, hairline borders. Glass: Solid (tint .93, blur 24 px, default), Balanced (.58/10), Clear (.36/6). | 2D robot | Inter + system mono |
-| Blobots (`blobots`) | Monochrome dark or light, flush panels | Glossy blob | Segoe UI stack |
+| Blobots (`blobots`) | Monochrome dark or light, flush panels | Glossy blob | Base fonts (`FONT_DEFAULTS` in `ui/fonts.ts`) |
 
 Both support dark and light. Frost styles the companion and dictation windows; Blobots keeps its existing overlay palette. Pop, Dot and Legacy themes and stylesheets are removed (owner direction, 20 October 2026); old saved choices migrate to Bitbots.
 

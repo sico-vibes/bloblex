@@ -1,8 +1,8 @@
 # Bitbots improvement plan v2: a BB-informed, companion-style roadmap
 
 > **What this is:** The v2 improvement roadmap for Bitbots: a companion-style plan that builds on the E2E plan.
-> **Status:** current; the roadmap named by AGENTS.md (12 October 2026 amendment)
-> **Last updated:** 2026-10-15
+> **Status:** historical; a finished roadmap. Phases 1 to 7 shipped in `v0.1.0-beta.19`. It is kept as the record that AGENTS.md (12 October 2026 amendment) names. The current state is in [implementation-status.md](../operations/implementation-status.md).
+> **Last updated:** 2026-10-22
 
 Status: approved by the owner, 12 October 2026. **Phases 1-7 are implemented and shipped in `v0.1.0-beta.19` ([releases/0.1.0-beta.19.md](../releases/0.1.0-beta.19.md)) and verified only with fake peers and unit tests (replay fixtures are synthesised, not real captures).** The "local `main`, not pushed" wording in `docs/operations/session-handoff.md` is from before that release. See `docs/operations/session-handoff.md` for branches, gates, gaps and next steps. Baseline `17591b9` (beta.18). Supersedes the QA draft, kept as [docs/history/improvement/plan-v1-qa-draft.md](../history/improvement/plan-v1-qa-draft.md).
 

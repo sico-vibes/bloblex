@@ -1,8 +1,10 @@
 # Operating model: a dated summary of the rules (14 October 2026)
 
 > **What this is:** A summary, dated 14 October 2026, of the rules in AGENTS.md. AGENTS.md wins on any conflict. The amendments of 16 to 19 October 2026 are not all reflected here.
-> **Status:** current; a dated summary (14 October 2026), not updated for the 16 to 19 October amendments
-> **Last updated:** 2026-10-19
+> **Status:** current; a dated summary (14 October 2026), not updated for the 16 to 19 October amendments; section 2 is superseded by the 22 October note below
+> **Last updated:** 2026-10-22
+
+> **Update 22 October 2026:** section 2 (lanes and ownership) is superseded by the 22 October amendment in AGENTS.md: three lanes for the expansion, the Director (Claude) on all UI and UX, OpenCode `opencode-go/deepseek-v4.1-flash` (high) on backend and tests, and Claude Haiku 5.5 on documentation. No lane runs `git commit`; the Director reviews, gates, commits and pushes.
 
 > **AGENTS.md wins on any conflict.** This file is a derived summary. It adds no rule. Every bullet cites the AGENTS.md section it comes from. Where AGENTS.md itself contradicts its own text, the bullet says so and names the later amendment that applies. Derived 14 October 2026 from the AGENTS.md text in this checkout. Line numbers refer to `AGENTS.md` as of this pass.
 

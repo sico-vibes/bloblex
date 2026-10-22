@@ -1,8 +1,8 @@
 # Settings
 
 > **What this is:** every settings key, what it controls, its allowed values, and where it is validated.
-> **Status:** current; checked against `validate_setting` in the daemon, `validate_setting_value` in storage, and the settings index on 19 October 2026
-> **Last updated:** 2026-10-19
+> **Status:** current; checked against `validate_setting` in the daemon, `validate_setting_value` in storage, and the settings index on 19 October 2026; the task settings and the look values checked on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Two validators matter:
 
 | Key | Values | Default | What it does |
 | --- | --- | --- | --- |
-| `appearance.style` | `bitbots`, `blobots`, `legacy`, `pop`, `dot` | `bitbots` | The look. |
+| `appearance.style` | `bitbots`, `blobots` | `bitbots` | The look. Any other value is refused (`crates/bloblex-daemon/src/main.rs:1381`). The retired `legacy`, `pop` and `dot` values were removed on 21 October 2026 and are stored as `bitbots` when the database opens and when a backup is restored. |
 | `appearance.theme` | `system`, `dark`, `light` | `system` | Resolved theme. |
 | `appearance.accent` | empty or `#rrggbb` | empty | User accent; stored lower-case. |
 | `appearance.wallpaper` | `lake`, `dusk`, `bloom`, `sand`, `custom` | `lake` | Frost wallpaper. |
@@ -91,6 +91,15 @@ Each is a boolean stored as `experimental.<name>`:
 `changeReview`, `messageActions`, `search`, `autoTitles`, `undo`, `shortcuts`, `resumeAfterUsageLimits` (default on), `autoRetry` (default off), `memory`, `approvalBadge`, `sidebarModel`, `botLock`.
 
 Additional experimental keys used by the interface: `experimental.usageTips`, `experimental.usageTipDismissals`, `experimental.activityDetails`, `experimental.runtimeLogos`, `experimental.usageBar`, `experimental.bitbots`. The first two are validated in storage; the rest are UI preferences.
+
+### Tasks (22 October 2026)
+
+| Key | Values | Default | What it does |
+| --- | --- | --- | --- |
+| `task.concurrency.max` | integer 1 to 3 | 1 (not stored) | How many tasks may run at once. Bots at once (`concurrency.botsAtOnce`) also applies. Checked in `crates/bloblex-daemon/src/main.rs:1404`. |
+| `task.globalPaused` | boolean | `false` | While `true`, queued tasks do not start. Checked in `crates/bloblex-daemon/src/main.rs:1405`. |
+
+Neither key has a control in the desktop Settings page as of this pass. They are set through `settings.set`. See [task board](task-board.md).
 
 ### Execution gates
 

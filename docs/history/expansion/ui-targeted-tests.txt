@@ -1,0 +1,16 @@
+
+ RUN  v3.2.7 C:/Users/SicoZ/.codex/worktrees/bitbots-ui/Blolblex
+
+ ✓ apps/desktop/src/preview/fixtureBridge.parity.test.ts (2 tests) 5ms
+ ✓ apps/desktop/src/remote/remoteTauri.parity.test.ts (5 tests) 167ms
+ ✓ apps/desktop/src/remote/RemoteTasks.mounted.test.tsx (1 test) 41ms
+ ✓ apps/desktop/src/ui/TerminalDock.mounted.test.tsx (2 tests) 74ms
+ ✓ apps/desktop/src/ui/GitHubInboxPage.mounted.test.tsx (2 tests) 91ms
+ ✓ apps/desktop/src/ui/ChatBackground.mounted.test.tsx (2 tests) 94ms
+ ✓ apps/desktop/src/ui/TeamWorkPage.mounted.test.tsx (12 tests) 543ms
+
+ Test Files  7 passed (7)
+      Tests  26 passed (26)
+   Start at  21:20:01
+   Duration  2.23s (transform 629ms, setup 0ms, collect 1.77s, tests 1.01s, environment 4.02s, prepare 1.41s)
+

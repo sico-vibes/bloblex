@@ -1,8 +1,8 @@
 # Expansion v2 status
 
 > **What this is:** The status of each phase 1 slice of the expansion v2 plan, with the state of each and the evidence that backs it.
-> **Status:** in progress; phase 1 started with slice 1A.
-> **Last updated:** 2026-10-21
+> **Status:** in progress; phase 1 is on `main` at `26ec193` (22 October 2026, unreleased). Slices 1B and 1C are not started. The evidence column reflects the state before the merge where it says so.
+> **Last updated:** 2026-10-22
 
 ## States
 

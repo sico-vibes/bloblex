@@ -1,8 +1,8 @@
 # Daemon and storage
 
 > **What this is:** what the `bitbotsd` daemon owns, how it starts, and how the SQLite store is laid out and migrated.
-> **Status:** current; checked against `crates/bloblex-daemon` and `crates/bloblex-storage` on 19 October 2026
-> **Last updated:** 2026-10-19
+> **Status:** current; checked against `crates/bloblex-daemon` and `crates/bloblex-storage` on 19 October 2026, and the task tables added on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Purpose
 
@@ -51,11 +51,11 @@ Window placement, tray menus, global shortcuts, file dialogs, notifications, mic
 
 ### Location
 
-The database path is `BLOBLEX_DB_PATH` when set (`crates/bloblex-daemon/src/main.rs:4221`). Otherwise the desktop uses `%LOCALAPPDATA%\Bitbots` (`apps/desktop/src-tauri/src/lib.rs:873-879`). Tests and development point the variable at a scratch file. Never run a migration experiment against the real data folder.
+The database path is `BLOBLEX_DB_PATH` when set (`crates/bloblex-daemon/src/main.rs:4272`). Otherwise the daemon uses `%LOCALAPPDATA%\Bitbots\bloblex.db` (`crates/bloblex-daemon/src/main.rs:4275`), and the desktop's data folder is `%LOCALAPPDATA%\Bitbots` (`apps/desktop/src-tauri/src/lib.rs:909`). The development script points `BLOBLEX_DB_PATH` at `dev-data\bloblex.db` under its Cargo target (`scripts/dev-windows.ps1`). Tests and development point the variable at a scratch file. Never run a migration experiment against the real data folder.
 
 ### Schema
 
-The store is SQLite. The core tables are (`crates/bloblex-storage/src/lib.rs:1590-1610`):
+The store is SQLite. The core tables are created by the schema functions in `crates/bloblex-storage/src/lib.rs`:
 
 - `hosts`, `runtimes`, `runtime_profiles`
 - `sessions`, `turns`, `messages`, `tool_calls`, `file_changes`
@@ -68,6 +68,7 @@ The store is SQLite. The core tables are (`crates/bloblex-storage/src/lib.rs:159
 - `model_catalog_cache`, `skills`, `skill_agent_settings`
 - `remote_devices`, `remote_activity`
 - `proposals`, `manager_profile`, `manager_playbook`
+- `tasks`, `task_runs`, `task_run_events`, `task_dispatch_keys` (the task board, created by `ensure_tasks_schema`; see [task board](task-board.md))
 - `exec_snapshots`, `active_turn_reservations`
 
 Most records carry a JSON `data` column for additive fields, so a new field rarely needs a new column. Foreign keys are enabled for normal work and deliberately turned off for some table rebuilds inside a migration transaction.

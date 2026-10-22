@@ -2,7 +2,7 @@
 
 > **What this is:** The daemon IPC contract (v1): methods, events, and the rules for the capability and the local listeners.
 > **Status:** current
-> **Last updated:** 2026-10-18
+> **Last updated:** 2026-10-22
 
 ## Update commands
 
@@ -124,11 +124,11 @@ Events:
 | `permission.reply` | `{ "permissionId": string, "choice": string }` | Choice is an opaque provider-supported option ID from that request; the provider adapter must receive and acknowledge it before Bitbots marks it resolved. |
 | `usage.summary` | `{ "from": string, "to": string, "scope"?: object }` | Raw token totals and separate known/unknown valuations; subscription fees are not API estimates. |
 | `usage.analytics` | `{ "from": string, "to": string, "bucket": "day"|"week", "tz": string, "projectPath"?: string, "agentId"?: string }` | Returns `UsageAnalytics` as defined in `docs/reference/phase-5-analytics-contract.md`; invalid range, bucket, or timezone is `invalid_argument`, unknown agent is `not_found`. |
-| `pricing.list` | `{ "provider"?: string }` | **Retired:** returns `unsupported` (`crates/bloblex-daemon/src/main.rs:1085`). The description below is historical. User overrides and exact-decimal official price-list rows (`inputPerMillion`, `outputPerMillion`, cache rates, currency, `sourceUrl`, `checkedAt`, optional tiers/notes), with source `user_override` or `official_price_list`; effective rows include `effectiveFields` with rate, currency, source and checked date for each rate field, so partial overrides retain lower-priority values and provenance. Legacy shipped database rates are omitted. Usage & limits separately combines current runtime catalogs as `opencode_catalog_estimate`. Models without an applicable override, official row, or catalog rate remain unpriced. |
+| `pricing.list` | `{ "provider"?: string }` | **Retired:** returns `unsupported` (`crates/bloblex-daemon/src/main.rs:1339`). The description below is historical. User overrides and exact-decimal official price-list rows (`inputPerMillion`, `outputPerMillion`, cache rates, currency, `sourceUrl`, `checkedAt`, optional tiers/notes), with source `user_override` or `official_price_list`; effective rows include `effectiveFields` with rate, currency, source and checked date for each rate field, so partial overrides retain lower-priority values and provenance. Legacy shipped database rates are omitted. Usage & limits separately combines current runtime catalogs as `opencode_catalog_estimate`. Models without an applicable override, official row, or catalog rate remain unpriced. |
 | `pricing.override` | `{ "rule": PricingRule }` | Save user pricing with exact non-negative decimal strings per million tokens (up to twelve fractional digits) or `null` for unknown buckets. Blank buckets inherit the official or cached catalog rate when available. IDs, provider, model, currency and RFC3339 `effectiveFrom` are validated. `{ "rule": { "id": string, "remove": true } }` removes that override. |
 | `subscription.list` | `{}` | **Retired:** returns `unsupported` (`crates/bloblex-daemon/src/main.rs:1085`); historical description follows. User-entered plan fees, separated from token estimates and quota (`unknown` unless measured). |
 | `subscription.save` | `{ "plan": SubscriptionPlan }` | Save provider, currency, fixed monthly amount and renewal day. |
-| `budget.list` | `{}` | **Retired:** `budget.list`, `budget.set` and `budget.delete` return `unsupported` (`crates/bloblex-daemon/src/main.rs:992`; AGENTS.md, 12 October 2026 amendment). The rows below are historical. `{ "policies": Budget[] }` with active reservations where available. `Budget.scopeType` supports `global`, `host`, `runtime`, `agent`, `blob`, `session`, and `project`; `blob` policies use a blob ID as `scopeId`. |
+| `budget.list` | `{}` | **Retired:** `budget.list`, `budget.set` and `budget.delete` return `unsupported` (`crates/bloblex-daemon/src/main.rs:1270`; AGENTS.md, 12 October 2026 amendment). The rows below are historical. `{ "policies": Budget[] }` with active reservations where available. `Budget.scopeType` supports `global`, `host`, `runtime`, `agent`, `blob`, `session`, and `project`; `blob` policies use a blob ID as `scopeId`. |
 | `budget.set` | `{ "id": string, "scopeType": "global"|"host"|"runtime"|"agent"|"blob"|"session"|"project", "scopeId"?: string|null, "period": string, "metric": string, "hardLimit": number, ... }` | Persists a policy; most restrictive applicable hard cap wins. `blob` requires an active blob ID in `scopeId` and matches sessions whose `agentId` equals that ID. Existing `agent` scope retains its provider-ID behavior. Reusing an ID for a different scope, target, period, or metric clears its old reservations atomically. |
 | `budget.delete` | `{ "policyId": string }` | Removes that policy and its reservations atomically. Blob-scoped policies are also removed atomically when their blob is archived/deleted with `agent.delete`. |
 | `agent.lock.set` | `{ "agentId": string, "locked": boolean }` | `{ "agent": Agent }`. Locks or unlocks a bot (FIX39). The Manager cannot be locked. Which writes a lock refuses is listed under "FIX39 additions" below. Never remote. |
@@ -139,7 +139,7 @@ Events:
 
 ### RPC methods dispatched but not in the table above
 
-These names are dispatched in `crates/bloblex-daemon/src/main.rs` (dispatch match at lines 619-1090) and have no row in the table. This list was checked against the code on 14 October 2026. Parameters and behavior are not described here; read the handler before relying on them.
+These names are dispatched in `crates/bloblex-daemon/src/main.rs` (the `dispatch` function, `crates/bloblex-daemon/src/main.rs:821`) and have no row in the table. This list was checked against the code on 14 October 2026. Parameters and behavior are not described here; read the handler before relying on them.
 
 - Teams and projects: `project.list`, `project.create`, `project.update`, `project.delete`, `agent.team.update`, `agent.conversation` (handled by `crates/bloblex-daemon/src/team.rs`).
 - Blob lifecycle: `agent.restore`.
@@ -148,9 +148,9 @@ These names are dispatched in `crates/bloblex-daemon/src/main.rs` (dispatch matc
 - Quota: `quota.list`, `quota.refresh`.
 - Hooks: `hook.event`.
 
-### Remote mode methods (design, not implemented)
+### Remote mode methods
 
-The `remote.*` family is served on the daemon's own loopback API for the desktop shell only. Every `remote.*` method is `never` remote in `remote/tiers.json`, so a paired device cannot call it. Shapes follow `apps/desktop/src/remote/remoteContract.ts`; the backend spec (`docs/FIX29_REMOTE_TAILSCALE_SPEC.md`, to be written) is authoritative for exact fields.
+The `remote.*` family is served on the daemon's own loopback API for the desktop shell only. Every `remote.*` method is `never` remote in `apps/desktop/src/remote/tiers.json`, so a paired device cannot call it. Shapes follow `apps/desktop/src/remote/remoteContract.ts`; the protocol is in [remote/PROTOCOL.md](remote/PROTOCOL.md). Update 22 October 2026: the gateway is compiled into the daemon (see the remote documents); the heading no longer means "not implemented". The `docs/FIX29_REMOTE_TAILSCALE_SPEC.md` named earlier does not exist in the repository.
 
 | Method | Params | Result / behavior |
 |---|---|---|
@@ -176,6 +176,8 @@ Native adds `remote.method.set`, `remote.native.account.set`, `remote.native.por
 **Manager (FIX36).** One agent has `systemRole: "manager"`: it has no project, cannot be archived, deleted or demoted, and is created with `manager.ensure` (the `agent.create` fields; a no-op returning `created:false` when one exists; `manager.get` reads it). Its consequential actions are proposals: a `kind: "proposal"` permission card answered with `proposal.decide {id, decision: "approve"|"reject", edits?}`; nothing is created before approval. What it knows: `manager.profile.list`, `manager.profile.set {id?, category, key, value, locked}`, `manager.profile.delete {id}`, events `manager.profile.changed`. Its playbook: `manager.playbook.get`, `manager.playbook.history`, `manager.playbook.set {text}`, `manager.playbook.revert {version}`, events `manager.playbook.changed`. Reports: [FIX36_D1](history/fix-36/d1-report.md), [FIX36_D2](history/fix-36/d2-report.md), [FIX36_D3](history/fix-36/d3-report.md).
 
 The browser simulator's `remote.direct.set` is dropped (there is no LAN listener). `remote.hosts.list` and `remote.hosts.select` are not daemon methods: the list of computers lives only on the device.
+
+`appearance.style` is `bitbots` or `blobots`; any other value is refused with `invalid_argument` (`crates/bloblex-daemon/src/main.rs:1381`). Saved `legacy`, `pop` and `dot` values were retired on 21 October 2026 and migrate to `bitbots` when the database opens (`normalize_removed_theme` in `crates/bloblex-storage/src/lib.rs`) and when a backup is restored (`crates/bloblex-daemon/src/backup.rs:756`).
 
 Appearance and companion preferences use `appearance.theme` (`system`, `dark`, or `light`), `appearance.textSize` (`small`, `default`, `large`, or `larger`), `companion.startPosition` (`launch` or `last`), `companion.hotkey` (boolean), and `companion.openAtStartup` (boolean).
 
@@ -256,6 +258,39 @@ Names and shapes come from the package reports (`docs/FIX39_P<n>_REPORT.md`) and
 
 **Working bots** (P9) is a UI panel built from side sessions, queued notices and turn state. It adds no RPC.
 
+### Task board (22 October 2026)
+
+A task is a durable board record, not a conversation. `crates/bloblex-daemon/src/tasks.rs` owns the RPCs and `crates/bloblex-storage/src/lib.rs` (`ensure_tasks_schema`, `task_*`) owns the tables. Only `report_only` supervision is implemented; `bounded` and `manager_completes` return `unsupported`. Every `task.*` method and `agent.purge` is `never` for a remote device (`apps/desktop/src/remote/tiers.json`). Verified against the code on 22 October 2026; the tests named in `crates/bloblex-daemon/src/main.rs` (for example the task dispatch and review tests near line 12100) were not re-run in this pass.
+
+| Method | Params | Result / behaviour |
+|---|---|---|
+| `task.create` | `{ "title": string (1 to 120 characters), "brief"?: string (12,000 at most), "doneGoal"?: string (4,000), "reportBack"?: string (4,000), "projectId"?, "parentTaskId"?, "estimateMinutes"? (1 to 10,080), "maxRuntimeSecs"? (60 to 86,400, default 1,800), "supervisionPolicy"?: "report_only" }` | `{ "task": Task }`. Creates an unassigned draft. |
+| `task.list` | `{ "state"?, "projectId"?, "assigneeAgentId"?, "parentTaskId"? }` | `{ "tasks": Task[] }`. |
+| `task.get` | `{ "taskId": string }` | `{ "task": Task }`. |
+| `task.update` | `{ "taskId", "expectedVersion", "title"?, "brief"?, "doneGoal"?, "reportBack"?, ... }` | `{ "task" }`. Only an unassigned draft can be edited; a stale version or another state returns `conflict`. |
+| `task.dispatch` | `{ "taskId", "assigneeAgentId", "expectedVersion", "idempotencyKey" }` | `{ "task", "run", "disposition": "started" or "queued", "queuePosition", "reason", "replayed" }`. Accepts a task in `unassigned`, `awaiting_review`, `needs_you` or `failed`. Claims the task, its run and its queue place in one transaction. A replayed key returns the same run and never starts a second session. Queue reasons: `global_pause`, `bot_busy`, `global_limit`. An archived bot is refused with `conflict`. |
+| `task.unassign` | `{ "taskId", "expectedVersion" }` | Only a `queued` task; returns it to `unassigned` and cancels its queued run. |
+| `task.reorder` | `{ "taskId", "beforeTaskId"?: string or null, "expectedVersion" }` | Only a `queued` task. |
+| `task.cancel` | `{ "taskId", "expectedVersion" }` | Only `unassigned` or `queued`. |
+| `task.stop` | `{ "taskId", "expectedVersion" }` | Only `running` or `needs_you`. Requests cancellation of the run's session; returns `{ "task", "stopRequested": true }`. |
+| `task.review` | `{ "taskId", "runId", "decision": "done", "needs_changes" or "not_done", "evidence": string (1,200 characters), "expectedVersion" }` | Only a task in `awaiting_review` or `needs_you`. `done` closes the task; `needs_changes` returns it to `awaiting_review`; `not_done` marks it `failed`. Returns `{ "task", "run" }`. |
+| `task.runs` | `{ "taskId": string }` | `{ "runs": Run[] }`, each with its attempt, state and decision. |
+
+States: `unassigned`, `queued`, `running`, `needs_you`, `awaiting_review`, `done`, `failed`, `cancelled`. Runs use the same names plus `claimed` and `ambiguous`.
+
+Events (content-free: ids, state, version and timestamps only, never the title, brief, done goal or report text):
+
+- `task.changed` `{ "task" }`.
+- `task.run.changed` `{ "taskId", "run" }`.
+- `task.run.finished` `{ "taskId", "run" }`, sent when a run reaches `awaiting_review`, `done`, `failed` or `cancelled`.
+
+Settings (validated by `settings.set`, `crates/bloblex-daemon/src/main.rs:1404` and `:1405`):
+
+- `task.concurrency.max`: integer 1 to 3, default 1 (the default is not stored). Tasks also respect `concurrency.botsAtOnce`.
+- `task.globalPaused`: JSON boolean. While `true`, queued work does not start.
+
+Restart: a run left `claimed` or `running` when the daemon stops becomes `ambiguous` (error `restart_ambiguous`), and its task becomes `needs_you`. Nothing is spawned again. Queued work resumes once at startup (`tasks::startup`). The Manager's `create_task` tool creates an unassigned draft only; any assignee or schedule field is ignored (`crates/bloblex-daemon/src/tasks.rs`, `manager_create`).
+
 ## Desktop notifications
 
 When enabled, only live transitions to completed, failed, or waiting for approval can create a Windows notification. The main window must be hidden or unfocused. Titles use the blob name; bodies use only the conversation title and transition label. Notification activation callbacks are not available on Windows through the current desktop notification integration, so the conversation remains unread until opened in the main window and can be found from its unread marker.
@@ -320,7 +355,7 @@ Runtime auth state is one of `authenticated`, `unauthenticated`, `needs_interact
 
 Session state is `idle`, `starting`, `working`, `waiting_permission`, `waiting_user`, `cancelling`, `completed`, `cancelled`, `closed`, `error`, or `offline`. An unclean daemon restart marks volatile active sessions `offline`, fails their incomplete turns, expires pending approvals, retains partial history and provider-native IDs, and never resends prompts automatically. A session persists both Bitbots and provider-native IDs, provider, runtime, project path, resumability, and timestamps.
 
-The normalized event vocabulary is `runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `permission.auto_denied`, `usage.updated`, `budget.warning`, `budget.blocked` (retired; no emitter found in `crates/bloblex-daemon/src` or `crates/bloblex-protocol/src`), `turn.completed`, `turn.cancelled`, `turn.error`, `turn.retry_scheduled`, `turn.retry_declined`, `queue.changed`, `automation.changed`, `automation.deleted`, `automation.run.changed`, `automation.run.finished`, `memory.changed`, `memory.deleted`, and `daemon.health`. `queue.changed` carries `{sessionId,items,paused}` with the full list for that session and is emitted after any queue mutation. Streamed and finalized messages carry the same stable `id`/`messageId`; `session.changed` carries compact session metadata (identity, ownership, title, archive/activity state, resumability, and timestamps), never transcript content. Existing clients retain hydrated message and activity arrays when applying it. `session.deleted` permanently removes that conversation and its persisted session-specific events. Unsupported semantics remain unsupported; never synthesize provider success, auth, usage or permission grants.
+The normalized event vocabulary is `runtime.changed`, `agent.changed`, `session.changed`, `session.deleted`, `message.delta`, `message.completed`, `tool.changed`, `file.changed`, `command.changed`, `permission.requested`, `permission.resolved`, `permission.auto_denied`, `usage.updated`, `budget.warning`, `budget.blocked` (retired; no emitter found in `crates/bloblex-daemon/src` or `crates/bloblex-protocol/src`), `turn.completed`, `turn.cancelled`, `turn.error`, `turn.retry_scheduled`, `turn.retry_declined`, `queue.changed`, `automation.changed`, `automation.deleted`, `automation.run.changed`, `automation.run.finished`, `memory.changed`, `memory.deleted`, `task.changed`, `task.run.changed`, `task.run.finished`, and `daemon.health`. `queue.changed` carries `{sessionId,items,paused}` with the full list for that session and is emitted after any queue mutation. Streamed and finalized messages carry the same stable `id`/`messageId`; `session.changed` carries compact session metadata (identity, ownership, title, archive/activity state, resumability, and timestamps), never transcript content. Existing clients retain hydrated message and activity arrays when applying it. `session.deleted` permanently removes that conversation and its persisted session-specific events. Unsupported semantics remain unsupported; never synthesize provider success, auth, usage or permission grants.
 
 Usage token buckets are mutually exclusive: `inputTokens` excludes `cacheReadTokens` and `cacheWriteTokens`; output, reasoning and provider-reported cost are separately nullable. Valuation basis is `provider_reported_actual`, `api_rate_estimate`, `subscription_fixed`, `local_free`, or `unknown`. Unknown model price serializes as `null` with an explanatory status, never zero.
 

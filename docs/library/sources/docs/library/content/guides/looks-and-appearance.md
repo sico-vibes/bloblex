@@ -1,8 +1,8 @@
 # Looks and appearance
 
-> **What this is:** the five looks, what each changes, and how wallpapers, glass, fonts, accent and text size work.
-> **Status:** current; written for v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **What this is:** the two looks, what each changes, and how wallpapers, glass, fonts, accent and text size work.
+> **Status:** current; updated for `main` on 22 October 2026, when Pop, Dot and Legacy were retired (the look list is two, not five).
+> **Last updated:** 2026-10-22
 
 ## Before you start
 
@@ -10,7 +10,9 @@ Open **Settings › Appearance**. The page is ordered Look, Look options, Colour
 
 A **look** is not the same as a bot's **art**. The look styles the app; the art styles one bot. Leave a bot's art on Automatic and it follows the look. [Bots](bots.md) covers art.
 
-## The five looks
+## The two looks
+
+Pop, Dot and Legacy were retired on 21 October 2026. If you had one of them selected, Bitbots now shows Bitbots instead, and your bots keep their art.
 
 ### Bitbots (Frost)
 
@@ -28,35 +30,11 @@ There is no glow, halo, decorative gradient or text shimmer. Floating menus have
 
 ### Blobots
 
-The quiet, monochrome alternative. Panels are opaque and the chrome is black, grey and white; colour is reserved for bots and for status that needs attention. It is the look the original app shipped with, and it keeps its original component styling. It does not use wallpapers or glass, and its companion stays dark.
+The quiet, monochrome alternative. Panels are opaque and the chrome is black, grey and white; colour is reserved for bots and for status that needs attention. It uses the base styles in `apps/desktop/src/ui/theme.css`. It does not use wallpapers or glass, and its companion keeps a fixed dark palette.
 
 ![The Blobots look](../../assets/screens/main-blobots.png)
 
 *Blobots in the dark theme. The bot art follows the look: glossy blobs unless a bot chooses otherwise. Fixture data.*
-
-### Legacy
-
-The original pixel look: a pixel grid, a pixel welcome, and pixel type. Legacy is for people who want the old app back, not a retro restyle. Its layout is the same; the type, borders and dithering are not.
-
-![The Legacy look](../../assets/screens/main-legacy.png)
-
-*Legacy. The dotted borders and pixel type are the old app's; the bot art defaults to the 3D robot. Fixture data.*
-
-### Pop
-
-Retro, not pixelated. A cream paper ground with a faint dot grid, panels and cards with a bold ink outline, hard offset shadows with no blur, pastel fills and sticker-style chips. Body text is DM Sans; headings and the brand name use Bricolage Grotesque. Pop uses rounded rectangles, never pills or circles for the app's controls.
-
-![The Pop look](../../assets/screens/main-pop.png)
-
-*Pop. The outline and the offset shadow are part of the style, so a control never grows when it is pressed. Fixture data.*
-
-### Dot
-
-Monochrome with one red accent. Selection inverts to an ink background. Body text is Geist, labels are Geist Mono, and Doto is for large numbers only. Meters and bars are rows and columns of dots, not continuous fills. Outlines are dotted.
-
-![The Dot look](../../assets/screens/main-dot.png)
-
-*Dot. The red send button is the one accent; everything else is ink on paper. Fixture data.*
 
 ## Look options: wallpaper and glass
 
@@ -82,20 +60,20 @@ There are 24 bundled fonts in four categories:
 | Mono | JetBrains Mono, Geist Mono, Fira Code, IBM Plex Mono, DM Mono, Space Mono |
 | Pixel | Doto, Silkscreen, Pixelify Sans, VT323, Press Start 2P, Jersey 10 |
 
-Defaults are per look: Bitbots uses Inter, Pop uses DM Sans, Dot uses Geist and Geist Mono; Blobots and Legacy keep their original fonts. **Default for this look** returns to those.
+The defaults are per look: Bitbots uses Inter, and Blobots uses its base fonts. **Default for this look** returns to those.
 
 A font is loaded only when you choose it, so it does not slow down the rest of the app. A pixel font is allowed as the interface font; the smallest text stays readable at 11 px. **Text size** has four steps (Small, Default, Large, Larger) and **Density** three (Compact, Default, Roomy); both change spacing and type size, not the window zoom.
 
 ## Orbs, not screenshots
 
-Each look card in Settings and onboarding shows one still orb: lake glass for Bitbots, matte stone for Blobots, pixel dither for Legacy, striped sticker for Pop and dot matrix for Dot. An orb has no window chrome, avatars, text or animation, and it looks the same in every theme.
+Each look in Settings and onboarding is one still orb: frosted glass for Bitbots and matte stone for Blobots. An orb has no window chrome, avatars, text or animation, and it looks the same in every theme. Names appear on hover and keyboard focus.
 
 ## Check the result
 
 - The whole window changes at once, including menus and dialogs; no area keeps the previous look.
 - With Frost, switching glass changes how much wallpaper shows through the large panels but not the flat cards.
 - A chosen font appears in headings and body text, and the code font appears in code blocks and diffs.
-- The companion follows Frost, Pop and Dot. Legacy and Blobots keep their dark companion in both themes.
+- The companion follows the resolved theme in Frost. Blobots keeps its dark companion in both themes.
 - A custom wallpaper survives a restart and returns to Lake after **Remove**.
 
 ## If something fails

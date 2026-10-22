@@ -1,8 +1,8 @@
 # Bots
 
 > **What this is:** create a bot, choose its coding agent and art, set what it may do without asking, and know what locking changes.
-> **Status:** current; written for v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **Status:** current; written for v0.1.0-beta.36 and updated for `main` on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Before you start
 
@@ -36,18 +36,17 @@ Each coding agent offers its own effort levels. The interface shows the levels t
 
 ### Choose an art style
 
-Art is per bot and independent of the app look. There are six styles:
+Art is per bot and independent of the app look. The picker offers Automatic and four styles:
 
 | Art | What it is |
 | --- | --- |
-| 3D robot | The heavy shaded robot. Legacy's default. |
-| Flat robot | The plain robot with pill eyes. Bitbots' default. |
-| Pop robot | The outlined, sticker-style robot. Pop's default. |
-| Dot robot | The monochrome robot with an antenna and dot eyes. Dot's default. |
-| Glossy blob | The original blob with eight shapes. Blobots' default. |
+| Automatic | Follows the look: Bitbots gives 2D robot, and Blobots gives Glossy. |
+| 3D robot | The shaded robot. |
+| 2D robot | The outlined, flat robot. |
+| Glossy | The original blob, with eight shapes. |
 | Hand-painted | Twelve painted bodies with animated eyes. |
 
-Leave art on **Automatic** and the bot follows the app look: Bitbots gives Flat robot, Blobots gives Glossy blob, Legacy gives 3D robot, Pop gives Pop robot and Dot gives Dot robot. Hand-painted has its own twelve shapes: Classic, Cube, Star, Flower, Pear, Peanut, Ghost, Bunny, Kitty, UFO, Box bot and Tile.
+Both robots offer four outlines: Rectangle, Square, Circle and Hexagon. Hand-painted has its own twelve shapes: Classic, Cube, Star, Flower, Pear, Peanut, Ghost, Bunny, Kitty, UFO, Box bot and Tile. The Flat robot and the Dot robot are no longer offered in the picker; a bot saved with either one shows the 2D robot.
 
 ### Set the approval mode
 
@@ -67,7 +66,21 @@ While locked, Bitbots refuses changes to the bot's name, description, instructio
 
 ### Archive and restore
 
-**Archive** hides a bot and pauses (never deletes) its automations. **Restore** brings it back. The Manager cannot be archived. A conversation can be archived separately from its bot.
+**Archive** hides a bot and pauses (never deletes) its automations. It leaves the sidebar and the companion, and its conversations stay saved. **Restore** brings it back. The Manager cannot be archived. A conversation can be archived separately from its bot.
+
+Archived bots are listed under **Archived bots** in the profile menu. Each row has **Restore** and a bin icon.
+
+### Delete a bot permanently
+
+Deleting is permanent and cannot be undone. Open **Archived bots** in the profile menu and choose the bin icon on the bot (Bitbots asks you to confirm by holding the button). The confirmation says that the bot, all its conversations and every side-conversation it took part in are removed, including those shown under other bots. Its scheduled automations and private memory are removed too.
+
+Deleting does not remove project files or the coding agent's own history. The rules are:
+
+- Stop all of the bot's running work first. Bitbots refuses the delete while a conversation of the bot is active.
+- A locked bot cannot be deleted. Unlock it first.
+- The Manager cannot be deleted.
+
+The desktop calls the daemon method `agent.purge` with an explicit confirmation (`crates/bloblex-daemon/src/main.rs`). A paired phone or other remote device cannot delete a bot. The storage side is in [daemon and storage](../reference/daemon-and-storage.md).
 
 ## Check the result
 

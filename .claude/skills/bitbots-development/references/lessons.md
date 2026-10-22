@@ -2,6 +2,11 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-22 · Docs · Retiring a look leaves stale words in many documents
+- **Symptom:** after Pop, Dot and Legacy were retired (AGENTS.md, 22 October 2026), about 40 current documents and the library still described five looks, the Flat and Dot robots as picker choices, and the pixel theme file that no longer exists.
+- **Root cause:** nothing in the code gate checks prose, and the retirement changed code, tests and the handoff but not the reference pages.
+- **Avoid:** when a look, art or setting is retired, sweep the current documents for its names (`grep -rniE "\bpop\b|\bdot\b|legacy|flat robot|dot robot|bitbots\.css" README.md AGENTS.md docs .claude/skills`), skipping the protected and dated paths (`docs/history`, `docs/releases`, `docs/evidence`, `docs/qa-schema`, `docs/design/archive`, generated library output). Dated records keep their wording and get a one-line update note instead. Retirement dates also differ between documents (20 and 21 October 2026); AGENTS.md is the record.
+
 ## 2026-10-21 · Daemon tests · A simulated turn end must release the slot
 - **Symptom:** after calling `tasks::after_turn` directly, the next `task.dispatch` for the same bot came back `queued`/`bot_busy` and versions were one bump behind.
 - **Root cause:** "the bot has a live turn" is read from `active_turns`. The event loop removes the entry when a turn really ends; a test that calls the after-turn hook itself never does.

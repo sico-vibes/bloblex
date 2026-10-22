@@ -1,8 +1,8 @@
 # Companion and dictation
 
 > **What this is:** use the floating companion, its approval and chat views, and dictate into the composer on this device or, opt-in, through the cloud.
-> **Status:** current; written for v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **Status:** current; written for v0.1.0-beta.36 and updated for `main` on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Before you start
 
@@ -97,7 +97,7 @@ Bitbots identifies itself to the service and does not pretend to be another app.
 
 **The companion is not on screen.** It may be on another display. Use **Reset companion position**, or turn it off and on from the sidebar. Check that it is not hidden behind the main window.
 
-**The companion does not follow the light theme.** Legacy and Blobots keep their dark companion by design. Frost, Pop and Dot follow the resolved theme; the dictation window picks up a theme change only when it is created.
+**The companion does not follow the light theme in Blobots.** Blobots keeps its dark companion by design. Frost follows the resolved theme; the dictation window picks up a theme change only when it is created.
 
 **The companion has no approvals.** Approvals from remote apply only to remote devices; locally, the card appears in the companion when it is open. Focus mode hides peeks, not approvals.
 

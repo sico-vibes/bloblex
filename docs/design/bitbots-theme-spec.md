@@ -2,7 +2,9 @@
 
 > **What this is:** The pixel re-skin theme spec for the experimental Bitbots theme (CSS only), 13 October 2026.
 > **Status:** historical; superseded in part by [themes-spec.md](../history/fix-40/themes-spec.md) (the Frost look became Bitbots)
-> **Last updated:** 2026-10-13
+> **Last updated:** 2026-10-22
+
+Update 22 October 2026: the pixel re-skin described here was retired. `apps/desktop/src/ui/bitbots.css` no longer exists, and only the Bitbots (Frost) and Blobots looks remain. The current rules are in [design-system.md](design-system.md).
 
 Owner: OpenCode lane, CSS only. Reviewer: Director (Claude), who audits every rule and finishes what you miss. The Director writes all TSX and wires the toggle; **you only create one new file: `apps/desktop/src/ui/bitbots.css`** (plus an evidence note). Do not edit any existing file, any `.tsx`/`.ts`, `package.json` or the lockfile. Do not add images or fonts: use CSS, inline SVG data URIs and `box-shadow`/gradient pixel tricks.
 

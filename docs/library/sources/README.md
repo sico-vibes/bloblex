@@ -1,14 +1,14 @@
 # Bitbots
 
 > **What this is:** The front page of the repository: what Bitbots is, how to build and test it, and where the documentation starts.
-> **Status:** current. The release figures in this file are set at v0.1.0-beta.35.
-> **Last updated:** 2026-10-19
+> **Status:** current. The release figures in this file are set at v0.1.0-beta.36; `main` is ahead of that release with unreleased work.
+> **Last updated:** 2026-10-22
 
 Bitbots (formerly Bloblex)
 
 Local Windows desktop control plane for Claude Code, Codex, and OpenCode. A React/Tauri shell and a companion window share state from the `bitbotsd` daemon. Each provider CLI keeps its own login.
 
-**Status: `v0.1.0-beta.35`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; beta.32 and later update themselves; older versions install by hand once. Full native acceptance and a clean-machine install remain open ([docs/operations/release-checklist.md](docs/operations/release-checklist.md)). Release notes: [docs/releases/0.1.0-beta.35.md](docs/releases/0.1.0-beta.35.md). History and dated records: [docs/operations/session-handoff.md](docs/operations/session-handoff.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
+**Status: `v0.1.0-beta.36`** (the version in `Cargo.toml` and `package.json`), published as an NSIS installer that is not Authenticode-signed but is signed for the updater (new key) and offered on the beta update channel; beta.32 and later update themselves; older versions install by hand once. Full native acceptance and a clean-machine install remain open ([docs/operations/release-checklist.md](docs/operations/release-checklist.md)). Release notes: [docs/releases/0.1.0-beta.36.md](docs/releases/0.1.0-beta.36.md). History and dated records: [docs/operations/session-handoff.md](docs/operations/session-handoff.md) and [docs/operations/implementation-status.md](docs/operations/implementation-status.md). The hub for every document is [docs/README.md](docs/README.md).
 
 ## Documentation
 
@@ -62,7 +62,7 @@ This is the local NSIS path (`bundle.targets` is `nsis` only in `apps/desktop/sr
 | --- | --- |
 | `apps/desktop/src/` | Main and companion UI, analytics, approval and execution contracts |
 | `apps/desktop/src-tauri/` | Native windows, tray, authenticated daemon proxy, file actions |
-| `crates/bloblex-daemon/` | Sessions, permissions, usage analytics and quota RPCs. Budgets are retired: `budget.*` returns `unsupported` (`crates/bloblex-daemon/src/main.rs:992`) |
+| `crates/bloblex-daemon/` | Sessions, permissions, usage analytics, quota RPCs and the durable task board (`src/tasks.rs`). Budgets are retired: `budget.*` returns `unsupported` (`crates/bloblex-daemon/src/main.rs:1270`) |
 | `crates/bloblex-adapter-*` | OpenCode ACP, Codex app-server, and Claude adapters |
 | `crates/bloblex-storage/` | SQLite, migrations, usage analytics |
 | `crates/bloblex-runtime/` | CLI discovery and launch specifications |

@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "26ec193",
-  "documentCount": 310,
+  "revision": "f3f07e7",
+  "documentCount": 312,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -232,7 +232,7 @@
       "title": "The five-minute path",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "9455860755dfe10855ae105b56c511ccaa537eecb4a44f133644d051998027b3",
+      "sha256": "3379a58a32accbcbaa62de6b302c01504872079f02d6e86b5ac1b81dc86e1358",
       "headings": [
         {
           "id": "before-you-start",
@@ -287,7 +287,7 @@
       "title": "What Bitbots is",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "5f900dee848216340179060d8bc2f58a79f178fa6aa3a3e9925d4bdc32b81f2f",
+      "sha256": "1025470a62b3623e504a2c723969a48717c91dc9fe0d22802c1aa00c9e1da6f3",
       "headings": [
         {
           "id": "the-pieces",
@@ -327,7 +327,7 @@
       "title": "Glossary",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "bf54b07e0f9134c95a585a84ce2ca595b936ddd70dd8a9b11dd1258173a777a9",
+      "sha256": "5e1468beeba7914eec899f2babe61843bf69ba2882ef1ae900422264841acb73",
       "headings": []
     },
     {
@@ -336,7 +336,7 @@
       "title": "Looks and appearance",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "9f32f897901b69f827aceae929e2afba810c66fc8f0ae053718d84a5f44b5730",
+      "sha256": "06e22b740ccc30a60f8aa4f888fea9caf9edf00ebceb444daad0046d7739a965",
       "headings": [
         {
           "id": "before-you-start",
@@ -344,8 +344,8 @@
           "level": 2
         },
         {
-          "id": "the-five-looks",
-          "text": "The five looks",
+          "id": "the-two-looks",
+          "text": "The two looks",
           "level": 2
         },
         {
@@ -356,21 +356,6 @@
         {
           "id": "blobots",
           "text": "Blobots",
-          "level": 3
-        },
-        {
-          "id": "legacy",
-          "text": "Legacy",
-          "level": 3
-        },
-        {
-          "id": "pop",
-          "text": "Pop",
-          "level": 3
-        },
-        {
-          "id": "dot",
-          "text": "Dot",
           "level": 3
         },
         {
@@ -411,7 +396,7 @@
       "title": "Bots",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "9810b6e210b32201c565fb1e080d925316abc552aaab3869f5ba137d377db6ad",
+      "sha256": "7e799f80cfe0550bde641cce02c55608a365bb826e6916e58bf94f15a6f66388",
       "headings": [
         {
           "id": "before-you-start",
@@ -459,6 +444,11 @@
           "level": 3
         },
         {
+          "id": "delete-a-bot-permanently",
+          "text": "Delete a bot permanently",
+          "level": 3
+        },
+        {
           "id": "check-the-result",
           "text": "Check the result",
           "level": 2
@@ -476,7 +466,7 @@
       "title": "Conversations and approvals",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "cbd29c319444f97946bfa1d1447c1101dd26243eabd88e899908219863308fe4",
+      "sha256": "820f0fed071c47e6c7a7e307399a3dc39c78a79a94f5f6baf5681870265198af",
       "headings": [
         {
           "id": "before-you-start",
@@ -546,7 +536,7 @@
       "title": "Team and Manager",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "cd7a0e66afd566713e78aedb4347b36c65068333ed19f8dfcb131e8afa4607f2",
+      "sha256": "a3ec7d4856941194dbc6f7ed4cf1f0207ccb84fa96388f7aed5733639ca00d86",
       "headings": [
         {
           "id": "before-you-start",
@@ -596,7 +586,7 @@
       "title": "Companion and dictation",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "36db071cdc164c201b22c3d3f2f4d3dc55afac0dbf7f1f63530e78b7af024127",
+      "sha256": "bbc1410149a925d5504bb1eab91e675469585f7791ea12dee6d1c93512e67824",
       "headings": [
         {
           "id": "before-you-start",
@@ -676,7 +666,7 @@
       "title": "Automations, memory and skills",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "e527e2d7530a5d84f1d8d6d3086431a3167add0e2902890745cadba974412d75",
+      "sha256": "3bd1404c8f20b0fc179598c2573d60bd9446db3fc9d9dcf4697a356253e2eb70",
       "headings": [
         {
           "id": "before-you-start",
@@ -756,7 +746,7 @@
       "title": "Remote access",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "9accd46520605faa4fcb641213736fcb22bcd197f9e2886e85c592b8627fde65",
+      "sha256": "91dd72e939e4be271155c70585c3803cbda094067e0ec7ad9aa0ca73e99772e0",
       "headings": [
         {
           "id": "before-you-start",
@@ -801,7 +791,7 @@
       "title": "Backup, updates and troubleshooting",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "3d8cf7202f4f36bb16367298840b4bc2181b8f91ff22deb1af08872f168c4db4",
+      "sha256": "6fe9de9b1848c2324ca6919f4679fb6b9c1281b29a5888f8f4c1cf7eecb009d8",
       "headings": [
         {
           "id": "before-you-start",
@@ -876,7 +866,7 @@
       "title": "Architecture",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "60e1aad9eb76b52425f18c99789ad9eb19cefb36c80fb4042e157275a5b94f5f",
+      "sha256": "36fb10b9cfbab7cb4b6b7b1aee6c9493c5a2cbd03118dfa34df0e1334d1c2153",
       "headings": [
         {
           "id": "purpose",
@@ -941,7 +931,7 @@
       "title": "Daemon and storage",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "763200dd401cd69ce1e744f0d6beb748985d9ebca99b395ce23c9258f4ce0af4",
+      "sha256": "d32303b3a96a89501daf547cc55cd05393be3ba878a58753a6263c0cbe864f49",
       "headings": [
         {
           "id": "purpose",
@@ -1021,7 +1011,7 @@
       "title": "IPC and events",
       "section": "Architecture & internals",
       "status": "Reference",
-      "sha256": "c2e3cc7c34ef9e86f801809c2afc1c7cf60081ff7dfa30c64d7c4ad7de354017",
+      "sha256": "0a8835e3c93be5aae2f6ee17bf2f8ea235a7ed6205e8534cda09b47f2ae08995",
       "headings": [
         {
           "id": "purpose",
@@ -1291,7 +1281,7 @@
       "title": "Settings",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "3da2b14bd18953836ea9a8a840189a1db71cfa02aaa4e1baaef65d6081e1e1ef",
+      "sha256": "98d98f25dc19fc12d6c11dd5a05fa67eff658733ceef875fdb172fdc64176ae1",
       "headings": [
         {
           "id": "purpose",
@@ -1334,6 +1324,11 @@
           "level": 3
         },
         {
+          "id": "tasks-22-october-2026",
+          "text": "Tasks (22 October 2026)",
+          "level": 3
+        },
+        {
           "id": "execution-gates",
           "text": "Execution gates",
           "level": 3
@@ -1371,7 +1366,7 @@
       "title": "Theme system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "46170e61f4c28ada5cd81414c2741595063985cf1e33251b839905be45fd0b56",
+      "sha256": "3a6acc9c59a620c83364186ad1fea0536f0d8ad51afee26b1f115f40497a0098",
       "headings": [
         {
           "id": "supported-looks",
@@ -1406,7 +1401,7 @@
       "title": "Bot art system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "9e5b6817637c7a1a1275757de15d0adb70545b118274223fe8fe0de96b267a24",
+      "sha256": "ec9f12ffba690da30a197b4224172e3fb2c5c20dccef4234957f0fabed712542",
       "headings": [
         {
           "id": "purpose",
@@ -1546,7 +1541,7 @@
       "title": "Release and updates",
       "section": "Remote, release & delivery",
       "status": "Reference",
-      "sha256": "000486a1e51355473b9ef4273167de8e75e044f607f23f750e8053601309dc9f",
+      "sha256": "c52f3d725aaf7731441da0b9df245ef389e8ae8d46caa0e205ead7a9200c87d8",
       "headings": [
         {
           "id": "purpose",
@@ -1611,7 +1606,7 @@
       "title": "Development and testing",
       "section": "Remote, release & delivery",
       "status": "Reference",
-      "sha256": "80195598e77baab7128d7fe3428b2f7f5ee916acd4816650b762f7c55d0c0d4f",
+      "sha256": "fdcbcba3ebf0eb1973ab64dd8f272ef40a2c47714ab1c90d3cb75a655bfd8e50",
       "headings": [
         {
           "id": "purpose",
@@ -1741,7 +1736,7 @@
       "title": "Bitbots",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "b626e0d1101762c8be19373c42a62ba6d8f054af89dcff409924b4565a9a2c1d",
+      "sha256": "8204290d4d5afd4d4af6e6963fe354e4fa3c7d4b93fdcdf659a663290916a35b",
       "headings": [
         {
           "id": "documentation",
@@ -1776,7 +1771,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "18dbe08e33603dd0b4c3c1c3c956871d8226031f806a335897056895c660a73e",
+      "sha256": "8a02820e9112c9c53f92c890b8028c1e6ce72c235ddd59b25bf36e3c4b64ae5b",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1806,7 +1801,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "3b57667c9432310365c02250cf3ab21ea501aa540bf9913b1d8c11cd8e2533c7",
+      "sha256": "0428828e921efda790ae8b0b5b8015b8d8afd88a8c0d3492d358f8bfe97dc8c7",
       "headings": [
         {
           "id": "update-commands",
@@ -1834,8 +1829,8 @@
           "level": 3
         },
         {
-          "id": "remote-mode-methods-design-not-implemented",
-          "text": "Remote mode methods (design, not implemented)",
+          "id": "remote-mode-methods",
+          "text": "Remote mode methods",
           "level": 3
         },
         {
@@ -1861,6 +1856,11 @@
         {
           "id": "fix39-additions-18-october-2026",
           "text": "FIX39 additions (18 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "task-board-22-october-2026",
+          "text": "Task board (22 October 2026)",
           "level": 3
         },
         {
@@ -1901,7 +1901,7 @@
       "title": "Bitbots documentation",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "52c241ef8e60959d5e95fac65e085580f0e98e89a81c1bd1676fdb597bb430ab",
+      "sha256": "d325b7461d824f4a0f1186347cf5dc9aff79ee28aec2bae91f7aaca7913d59cd",
       "headings": [
         {
           "id": "start-here",
@@ -2221,7 +2221,7 @@
       "title": "Documentation style guide",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "08754330410f760c5ff8172e8637cd5d76871faa13e3187d5da3f6e8572c61bb",
+      "sha256": "4fdb4c19a798399f8f0341d56124fea2450eb145bd100c6f21e8e14630fdb7e0",
       "headings": [
         {
           "id": "tone",
@@ -2509,12 +2509,132 @@
       ]
     },
     {
+      "id": "reference/task-board",
+      "source": "docs/library/content/reference/task-board.md",
+      "title": "Task board",
+      "section": "Project documentation",
+      "status": "Project reference",
+      "sha256": "30e186cf33cf789da9dbb0aa738001acf639f540b39dc02d768adc26f22dc8ce",
+      "headings": [
+        {
+          "id": "purpose",
+          "text": "Purpose",
+          "level": 2
+        },
+        {
+          "id": "how-it-works",
+          "text": "How it works",
+          "level": 2
+        },
+        {
+          "id": "states",
+          "text": "States",
+          "level": 2
+        },
+        {
+          "id": "rpcs",
+          "text": "RPCs",
+          "level": 2
+        },
+        {
+          "id": "events",
+          "text": "Events",
+          "level": 2
+        },
+        {
+          "id": "settings",
+          "text": "Settings",
+          "level": 2
+        },
+        {
+          "id": "storage",
+          "text": "Storage",
+          "level": 2
+        },
+        {
+          "id": "restart",
+          "text": "Restart",
+          "level": 2
+        },
+        {
+          "id": "remote-policy",
+          "text": "Remote policy",
+          "level": 2
+        },
+        {
+          "id": "tests",
+          "text": "Tests",
+          "level": 2
+        },
+        {
+          "id": "key-files",
+          "text": "Key files",
+          "level": 2
+        },
+        {
+          "id": "gotchas",
+          "text": "Gotchas",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "guides/tasks",
+      "source": "docs/library/content/guides/tasks.md",
+      "title": "Tasks",
+      "section": "Project documentation",
+      "status": "Project reference",
+      "sha256": "bc99dc8c640e8bca2c79905bbc5b2a2d6817c4192eb5af8b70af0a0866b72c61",
+      "headings": [
+        {
+          "id": "before-you-start",
+          "text": "Before you start",
+          "level": 2
+        },
+        {
+          "id": "what-a-task-is",
+          "text": "What a task is",
+          "level": 2
+        },
+        {
+          "id": "steps",
+          "text": "Steps",
+          "level": 2
+        },
+        {
+          "id": "states-in-plain-words",
+          "text": "States in plain words",
+          "level": 2
+        },
+        {
+          "id": "views",
+          "text": "Views",
+          "level": 2
+        },
+        {
+          "id": "check-the-result",
+          "text": "Check the result",
+          "level": 2
+        },
+        {
+          "id": "if-something-fails",
+          "text": "If something fails",
+          "level": 2
+        },
+        {
+          "id": "limits-and-what-is-not-built",
+          "text": "Limits and what is not built",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/guides/windows-development",
       "source": "docs/guides/windows-development.md",
       "title": "Windows desktop development",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "603ed1f115bb1334b598ad735b7d431c11b5613b9b762b99105cdc1f91107ae6",
+      "sha256": "0713e8aace7a205ec9ffe83679f85c416c3c2d8eb2581a7f1cd6b391fe2e82bf",
       "headings": [
         {
           "id": "run-locally",
@@ -2549,7 +2669,7 @@
       "title": "Product expansion: wanted and current",
       "section": "Expansion handoff",
       "status": "Guide",
-      "sha256": "42327948fc851932ec4554d750ba25fd21f48a80a6dcbe835fe477da973cd915",
+      "sha256": "2683f9644072fb55be7bf98ecbb1ad4e79ac6e77eb8dbd78b17709a258f41260",
       "headings": [
         {
           "id": "original-plan-and-accepted-choices",
@@ -2588,7 +2708,7 @@
       "title": "Bitbots Design System",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "c5ac7cd84dc3ad51fa550ff555229cd47cebf1bc7bf1d8514567ee718f540d8d",
+      "sha256": "37104f5db1fb7b0d1703ace20458f9fce6dafa42bf8150aa28b4e06899925bb3",
       "headings": [
         {
           "id": "scene-and-register",
@@ -2723,7 +2843,7 @@
       "title": "Bitbots theme spec: the pixel re-skin (CSS only)",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "051063481a9e156c1e8756d186d65de868339c60a5acb2bc3208a1234ff66cbc",
+      "sha256": "f5a221e7abcf4a3029d59bd85e1a0ec4c88f8cd55dd0e9e4523f35386493dc00",
       "headings": [
         {
           "id": "what-this-is",
@@ -2783,7 +2903,7 @@
       "title": "UI/UX polish wave (15 October 2026, unreleased)",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "89c00358d8d02346e0d258a5623e311e311b10634ad30bd596f0cb730e281aa6",
+      "sha256": "61a9d48348a69344da77849f3e3e4de7249cd78e70a6a42438de9eead587cc7e",
       "headings": [
         {
           "id": "what-changed",
@@ -2853,7 +2973,7 @@
       "title": "Bitbots session handoff",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "808386560a8dbf627d51aafaddb39224408d71d4e24a1dad826881f377ae1b09",
+      "sha256": "f1f908996519d700235d7a4d4e7b518b48e5fe86b0190dad492345e0ab1c9fb4",
       "headings": [
         {
           "id": "22-october-2026-phase-1-on-main-after-the-owners-resume",
@@ -3088,7 +3208,7 @@
       "title": "Implementation status",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "a47d5a3473968bd0c6aec22507e188cf891b199b88045880715d60d11059957f",
+      "sha256": "75172e21e1ce33344b932fd86a62af807d1c09fe1fb0f7de9ad51a09c76fe1f6",
       "headings": [
         {
           "id": "22-october-2026-phase-1-on-main",
@@ -3158,7 +3278,7 @@
       "title": "Operating model: a dated summary of the rules (14 October 2026)",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "0299e357050e7b4a9c0e7aba4d51695ab27b9e92082d6b71c76023217a61acaa",
+      "sha256": "f21affa4a881efa48abc9a97ad23cadb3457fdf5cb33e6d6da0dfad398fe3537",
       "headings": [
         {
           "id": "1-which-agentsmd-text-is-in-force",
@@ -3208,7 +3328,7 @@
       "title": "Product expansion pause handoff — 21 October 2026",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "8bf63e13d8313acf92eb104589881db2cb24de327e85ad8d3a2d7a0cf7105808",
+      "sha256": "78cc464a41bad6eb06c831fd0857618b2f8a9ae534bfeeb3d2945f06cc6f6a12",
       "headings": [
         {
           "id": "pause-boundary",
@@ -3313,7 +3433,7 @@
       "title": "Third-party notices",
       "section": "Legal",
       "status": "Legal notice",
-      "sha256": "85470429314fc0697c5cc428402bf406681377c0e06b2c1acfee2f621aafa58b",
+      "sha256": "ce01a3fbfb310fb665118749d38fe9b2229f7d3f0a8f96c0cf5459e8276803b6",
       "headings": [
         {
           "id": "bundled-fonts",
@@ -3498,7 +3618,7 @@
       "title": "Bitbots expansion plan v2: tasks, desktop wins, providers, trusted access and phone relay",
       "section": "Plans & briefs",
       "status": "Plan",
-      "sha256": "6259ce0ab4d8a17e3107c1d196059d059f8a7e8a1cbae994f6b3dbc3299dc48f",
+      "sha256": "a5f24b3262af5a29c4fb68459439a1aee923f8c8158dc7c8ce180e5d77d78041",
       "headings": [
         {
           "id": "context",
@@ -3603,7 +3723,7 @@
       "title": "Bitbots improvement plan v2: a BB-informed, companion-style roadmap",
       "section": "Plans & briefs",
       "status": "Plan",
-      "sha256": "eae45ae35decbab6f8a5b12080f01a4d5f762ec1cddbde92e7584d1f18a40723",
+      "sha256": "85e20dc7a6ddad65d7caac29c88e116c68e2a5bfdb88a8c98b217313e3c2a5f9",
       "headings": [
         {
           "id": "context",
@@ -3698,7 +3818,7 @@
       "title": "20–21 October product expansion records",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "7cc0d97e9a5db09b472057db3f1f30e7f0ba5e69fda3045339f5f028e06ac9a1",
+      "sha256": "13855ebd4381de8c98f3c0f28fd127a06e09cad8633671869c60c0fe0a52b3ea",
       "headings": []
     },
     {
@@ -3927,7 +4047,7 @@
       "title": "Expansion v2 records",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "051925f022670218a50ec95cba0f1bb164c5d0103dd7246004250839ec8cf652",
+      "sha256": "5adc3903ddbf8172a2c01263481ec0793168c1746dd135a1272cffcfe93c3be3",
       "headings": [
         {
           "id": "context",
@@ -3948,6 +4068,11 @@
           "id": "naming",
           "text": "Naming",
           "level": 2
+        },
+        {
+          "id": "records-added-on-22-october-2026",
+          "text": "Records added on 22 October 2026",
+          "level": 2
         }
       ]
     },
@@ -3957,7 +4082,7 @@
       "title": "Expansion v2 status",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "68e6da1aa06f080476d2b091b581471d7c6d28bd0ade5e50a922b6a3b95d1449",
+      "sha256": "c76c98c86eab380ac12e20bce2151a73a2bd78556a2a88be77e3134f14c507c8",
       "headings": [
         {
           "id": "states",
@@ -13516,7 +13641,7 @@
       "title": "UI lane pause report",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "862b7286ea8bc295966b1e3b4f80f639bdc82e34e9bd7daa8f9053fdc60ddcfa",
+      "sha256": "29cb2aff00f83b233784856786b29e3a40ea29775946cb51d8dc4b8903ee2cf0",
       "headings": [
         {
           "id": "context",
@@ -14606,7 +14731,7 @@
       "title": "Bitbots remote protocol (v1)",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "0ac04bc40369df29e11ad553bc00922689bb24375021095ad3479510a4d561e5",
+      "sha256": "9a69c67ffdb93d9fbdc212f009fae6ede0e557c201bfd99083672a32d7f1ebee",
       "headings": [
         {
           "id": "1-scope-and-non-goals",
@@ -14996,7 +15121,7 @@
       "title": "Remote mode: threat model",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "da81561dac9ecd2e996abf5d5874faa803397caafe2f3ea01ec0d565c41f1a62",
+      "sha256": "2ee946588019370a1fe8b62e767d8f6f0d3a8e6b8ef3f3ac31c808d0757fc576",
       "headings": [
         {
           "id": "1-the-core-fact",
@@ -15082,6 +15207,11 @@
           "id": "142-local-diagnostics-p12",
           "text": "14.2 Local diagnostics (P12)",
           "level": 3
+        },
+        {
+          "id": "15-task-board-and-bot-deletion-22-october-2026",
+          "text": "15. Task board and bot deletion (22 October 2026)",
+          "level": 2
         }
       ]
     },

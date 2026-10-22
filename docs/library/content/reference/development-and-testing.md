@@ -1,8 +1,8 @@
 # Development and testing
 
 > **What this is:** how to build, run and check Bitbots on Windows, and the lane rules this repository uses.
-> **Status:** current; from `README.md`, `docs/guides/windows-development.md` and the AGENTS.md amendments of 12–19 October 2026
-> **Last updated:** 2026-10-20
+> **Status:** current; from `README.md`, `docs/guides/windows-development.md` and the AGENTS.md amendments of 12 to 22 October 2026. Test counts are not recorded here; see the [session handoff](../../../operations/session-handoff.md) and the verification notes in the repository skill (`.claude/skills/bitbots-development/references/verification.md`).
+> **Last updated:** 2026-10-22
 
 ## Purpose
 
@@ -103,7 +103,7 @@ node scripts/docs-library.mjs serve --port 5205
 
 ## Worktrees, lanes and the short path
 
-This repository uses a lane workflow (AGENTS.md, 12–19 October 2026):
+This repository uses a lane workflow (AGENTS.md, 12 to 22 October 2026; for the expansion, the 22 October amendment: the Director does the UI and UX, OpenCode does backend and tests, and Claude Haiku does documentation):
 
 - The **Director** writes briefs, reviews every diff, checks screens, merges, runs the gates and commits.
 - **Implementation lanes** work in their own git worktree, one Cargo target each, from a written brief. A lane never runs `git commit`.

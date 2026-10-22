@@ -52,7 +52,7 @@ The current UI screenshot set includes the task board at 1440 px for all five lo
 Last frozen UI checks before the final edits:
 
 - `npm run typecheck` passed before OAuth and inspector-selection changes; it was not rerun after those edits.
-- Focused UI and bridge run passed 26/26 tests across 7 files. The exact command and output are in [the UI test log](../../../history/expansion/ui-targeted-tests.log). This is not current-source acceptance because later edits were not tested.
+- Focused UI and bridge run passed 26/26 tests across 7 files. The exact command and output are in [the UI test log](../../../history/expansion/ui-targeted-tests.txt). This is not current-source acceptance because later edits were not tested.
 - `npm run build` and `npm run build:remote --workspace @bloblex/desktop` passed before the final edits. The desktop build emitted an existing mixed static/dynamic `tauri.ts` import warning and a main-chunk-size warning.
 - The local preview server on port 5174 is still running from exec session `39519`. No test or build process remains active.
 - The owner paused all feature implementation. The UI worktree is uncommitted at `C:\Users\SicoZ\.codex\worktrees\bitbots-ui\Blolblex`, based on `64344a6`. No merge, commit or source cleanup is authorized by this page.

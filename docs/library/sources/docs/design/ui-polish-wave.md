@@ -2,11 +2,9 @@
 
 > **What this is:** The UI and UX polish waves of 15 October 2026, recorded as they were shipped, unreleased.
 > **Status:** historical
-> **Last updated:** 2026-10-15
+> **Last updated:** 2026-10-22
 
-> **What this is:** The UI and UX polish waves of 15 October 2026, recorded as they were shipped, unreleased.
-> **Status:** historical
-> **Last updated:** 2026-10-15
+Update 22 October 2026: the `bitbots.css` file named below no longer exists (the pixel look was retired), so the pixel-style rows describe a removed look. The current rules are in [design-system.md](design-system.md).
 
 Owner directive: implement the UI/UX recommendations, keep the role chip to the
 right of a bot's name, and make the result feel premium. Not released; reviewed in

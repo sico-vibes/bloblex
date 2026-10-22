@@ -1,8 +1,8 @@
 # Release and updates
 
 > **What this is:** how a Bitbots release is built, signed for the updater, published and delivered to an installed app.
-> **Status:** current; from the updater contract and the release scripts on 19 October 2026
-> **Last updated:** 2026-10-19
+> **Status:** current; from the updater contract and the release scripts on 19 October 2026; the example manifest names the current release (v0.1.0-beta.36)
+> **Last updated:** 2026-10-22
 
 ## Purpose
 
@@ -39,11 +39,11 @@ The updater private key and password are read from outside the repository: `%USE
 
 ```json
 {
-  "version": "0.1.0-beta.35",
+  "version": "0.1.0-beta.36",
   "notes": "…",
   "pub_date": "2026-10-19T00:00:00Z",
   "platforms": {
-    "windows-x86_64": { "signature": "…", "url": "https://…/Bitbots_0.1.0-beta.35_x64-setup.exe" }
+    "windows-x86_64": { "signature": "…", "url": "https://…/Bitbots_0.1.0-beta.36_x64-setup.exe" }
   }
 }
 ```

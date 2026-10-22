@@ -1,8 +1,8 @@
 # The five-minute path
 
 > **What this is:** install Bitbots, finish onboarding, make a bot and send the first prompt.
-> **Status:** current; written for v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **Status:** current; written for v0.1.0-beta.36 and updated for `main` on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Before you start
 

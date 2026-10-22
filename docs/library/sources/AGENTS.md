@@ -2,9 +2,17 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (22 October 2026): expansion lanes, two looks
+
+Owner directive (21 October 2026, recorded here on 22 October 2026). It amends the FIX40 and Delegation pipeline sections below where they differ.
+
+- **Looks.** Pop, Dot and Legacy are retired (decided by the owner on 20 October 2026 in the live-development session; on `main` since 22 October 2026). Only two looks remain: **Bitbots** (`bitbots`, the Frost look) and **Blobots** (`blobots`). Saved, cached, database and backup selections of the old looks migrate to Bitbots. Bot art is one of Automatic, 3D robot, 2D robot, Glossy and Hand-painted; the flat and dot robots resolve to 2D robot.
+- **Expansion lanes.** Three lanes: the Director (Claude) does all UI and UX; OpenCode `opencode-go/deepseek-v4.1-flash` (high) does backend and tests; Claude Haiku 5.5 does documentation. No lane runs `git commit`. The Director reviews every diff, runs the gates, commits and pushes. The owner allowed pushing to `main` on request.
+- **Current state.** The latest release is `v0.1.0-beta.36`. `main` is ahead of it with unreleased changes, including the Tasks board (`docs/plans/expansion-plan-v2.md`).
+
 # Amendment (19 October 2026): FIX40 pipeline
 
-Owner directive for the FIX40 wave (the owner's request to replace the primary look with Frost, add Pop and Dot, and give each bot an art style and each look an orb), until the owner says otherwise. It replaces the FIX39 four-model arrangement for this wave.
+Owner directive for the FIX40 wave (the owner's request to replace the primary look with Frost, add Pop and Dot (both since retired, see the 22 October 2026 amendment), and give each bot an art style and each look an orb), until the owner says otherwise. It replaces the FIX39 four-model arrangement for this wave.
 
 - **Mapping:** Claude Haiku 5.5 maps the codebase for the briefs.
 - **Briefs and review:** the Director (Claude) writes one brief per lane, reviews every diff, checks every screen in the browser preview, sends work back until it is right, merges, runs the gates and commits.

@@ -1,8 +1,8 @@
 # Team and Manager
 
 > **What this is:** how bots are organised into projects, what the Manager can see and propose, and how to work with both.
-> **Status:** current; written for v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **Status:** current; written for v0.1.0-beta.36 and updated for `main` on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Before you start
 
@@ -20,7 +20,9 @@ The sidebar shows the Manager first, then projects in your order, then Unassigne
 
 ## Work with the Manager
 
-The Manager works across every project. It can read the team and the projects and plan with you. Its change tools never write directly; each one creates a proposal that waits for your approval:
+The Manager works across every project. It can read the team and the projects and plan with you. Its change tools never write directly; each one creates a proposal that waits for your approval. The one exception is `create_task`, which files an unassigned draft on the Tasks board: a draft has no bot, does not run and cannot be scheduled, and you decide which bot takes it ([tasks](tasks.md)).
+
+The proposals are:
 
 | Proposal | What it would do |
 | --- | --- |

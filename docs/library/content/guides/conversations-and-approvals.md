@@ -1,8 +1,8 @@
 # Conversations and approvals
 
 > **What this is:** run a conversation, understand what a turn is doing, answer permission requests safely, and recover when a turn fails or is limited.
-> **Status:** current; written for v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **Status:** current for the content as written for v0.1.0-beta.35; not re-checked for `main` on 22 October 2026 (the task board is covered in the tasks guide)
+> **Last updated:** 2026-10-22
 
 ## Before you start
 

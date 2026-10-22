@@ -9,4 +9,4 @@ These records describe an **owner-paused, unmerged** expansion based on `64344a6
 
 - [Task engine contract](tasks-contract.md), [task/daemon lane report](tasks-report.md)
 - [Platform RPC/native contract](platform-contract.md), [platform lane report](platform-report.md), [platform source snapshot manifest](platform-snapshot-manifest.md)
-- [UI lane report](ui-report.md) and [targeted test output](ui-targeted-tests.log); fixture comparison images are in `docs/library/assets/expansion-2026-10-21/`.
+- [UI lane report](ui-report.md) and [targeted test output](ui-targeted-tests.txt); fixture comparison images are in `docs/library/assets/expansion-2026-10-21/`.

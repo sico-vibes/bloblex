@@ -18,6 +18,8 @@
 - No native end-to-end run of dispatch, restart, stop or the update notice.
 - The platform work (terminal, chat background, GitHub inbox, connectors, computer control and relay) is not on `main`, and the new plan has not started it. The Codex worktrees under `C:\Users\SicoZ\.codex\worktrees` remain unmerged reference only.
 
+**Documentation (22 October 2026).** The current documents were brought up to the code: the two looks, the bot art, the task board (guide and reference in the library), the remote denials for `task.*` and `agent.purge`, the storage tables and the release state. The record, with each fact's code path and the unverified items, is [history/expansion-v2/docs-refresh-2026-10-22.md](../history/expansion-v2/docs-refresh-2026-10-22.md).
+
 **Next.** Check the merged board, tree and timeline against the references in Bitbots and Blobots, dark and light. The plan's phase 1 gate names five looks; three were removed on 20 October 2026, so the check covers the two that remain. Then slices 1B (supervision policies) and 1C (task schedules). Do not start the platform slices until the owner asks.
 
 ## Owner pause: product expansion (21 October 2026)

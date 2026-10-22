@@ -1,8 +1,8 @@
 # Architecture
 
 > **What this is:** the process and module structure of Bitbots: desktop shell, daemon, adapters, provider CLIs, overlay windows and the Remote gateway.
-> **Status:** current; checked against the tree at v0.1.0-beta.35 on 19 October 2026. Line numbers may move.
-> **Last updated:** 2026-10-19
+> **Status:** current for the tree at v0.1.0-beta.35 (checked 19 October 2026); the task board added on `main` on 22 October 2026 is described in its own reference page. Line numbers may move.
+> **Last updated:** 2026-10-22
 
 ## Purpose
 

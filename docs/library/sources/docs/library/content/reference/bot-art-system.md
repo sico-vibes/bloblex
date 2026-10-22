@@ -1,8 +1,8 @@
 # Bot art system
 
 > **What this is:** how a bot's face is chosen and drawn: `BlobCanvas` dispatch, the four offered arts and compatibility renderers, the look model, painted shapes, status badges and how to add an art.
-> **Status:** current; checked against `BlobCanvas.tsx`, `art/art.ts` and `look/index.ts` on 19 October 2026
-> **Last updated:** 2026-10-20
+> **Status:** current; checked against `BlobCanvas.tsx`, `art/art.ts` and `look/index.ts` on 19 October 2026, and the art list checked again on 22 October 2026
+> **Last updated:** 2026-10-22
 
 ## Purpose
 
@@ -22,14 +22,14 @@ Art is not UI chrome. A look never draws a bot; it only decides the default.
 switch (props.art ?? resolveArt(props.look, style)) {
   case 'robot': return <BitbotCanvas {...props} />
   case 'blob': return <ClassicBlobCanvas {...props} />
-  case 'robot-flat': return <FlatRobot {...props} />
+  case 'robot-flat': return <FlatRobot {...props} />   // kept for compatibility; not offered in the picker
   case 'robot-pop': return <PopRobot {...props} />
-  case 'robot-dot': return <DotRobot {...props} />
+  case 'robot-dot': return <DotRobot {...props} />   // kept for compatibility; not offered in the picker
   default: return <PaintedBlob {...props} />
 }
 ```
 
-That is `apps/desktop/src/blob/BlobCanvas.tsx:348-358`. `resolveArt` maps saved Flat/Dot robot ids to 2D robot; other explicit art wins, otherwise it uses `defaultArtForStyle(style)` (`apps/desktop/src/blob/art/art.ts:104-118`).
+That is the `switch` in `apps/desktop/src/blob/BlobCanvas.tsx`. `resolveArt` maps saved Flat and Dot robot ids to 2D robot; other explicit art wins, otherwise it uses `defaultArtForStyle(style)` (`apps/desktop/src/blob/art/art.ts:104-118`).
 
 A `style` prop overrides the document look for onboarding and look previews. An `art` prop overrides everything for the art sheet and the pickers. Production surfaces do neither.
 
@@ -46,15 +46,15 @@ The robot arts share one head language but change the eyes, not the whole head:
 
 - **idle:** pill eyes that blink;
 - **thinking:** smaller eyes glancing to one side;
-- **typing:** stepped eye shapes and a row of pixels that types across the visor (Dot shows a pixel wave, never rolling eyes);
-- **waiting:** raised, wide eyes in amber (red on Dot);
+- **typing:** stepped eye shapes and a row of pixels that types across the visor (the Dot robot renderer, which is not offered, shows a pixel wave instead);
+- **waiting:** raised, wide eyes in amber;
 - **happy:** an arc pair;
 - **error:** X eyes in red;
 - **sleeping and offline:** flat lines, with offline dimmed.
 
-The Dot robot has an antenna above its head. The Pop robot is outlined and sits on the Pop palette; the Flat robot is the plain Bitbots robot.
+The 2D robot (`robot-pop`) is the outlined robot. The Flat robot and the Dot robot renderers remain in the code for compatibility and the art sheet; they are not offered in the picker. The Dot renderer has an antenna above its head.
 
-The new arts are inline SVG and CSS keyframes only: no canvas, no `requestAnimationFrame`, no per-instance window listener. Under `prefers-reduced-motion`, every animation stops and a still pose shows.
+The robot and blob arts are inline SVG and CSS keyframes, with no canvas. The one exception is the pointer: a large Hand-painted avatar follows the pointer through `useEyeTracking` (`apps/desktop/src/blob/art/useEyeTracking.ts`). It adds a window `pointermove` listener and an animation-frame update, both removed on unmount; mini avatars have no listener. Under `prefers-reduced-motion`, every animation stops and a still pose shows.
 
 ![The art sheet: every art, every mood](../../assets/screens/bot-art-sheet.png)
 
@@ -96,7 +96,7 @@ There are twelve painted shapes (`apps/desktop/src/blob/art/art.ts:26-38`):
 
 Classic, Cube, Star, Flower, Pear, Peanut, Ghost, Bunny, Kitty, UFO, Box bot and Tile.
 
-The body is derived from the blob shape when `look.paint` is absent (`PAINT_FOR_SHAPE` in `apps/desktop/src/blob/art/art.ts:80-89`):
+The body is derived from the blob shape when `look.paint` is absent (`PAINT_FOR_SHAPE` in `apps/desktop/src/blob/art/art.ts`):
 
 | Blob shape | Painted body |
 | --- | --- |
@@ -109,7 +109,7 @@ The body is derived from the blob shape when `look.paint` is absent (`PAINT_FOR_
 | Triangle | Star |
 | Hexagon | Tile |
 
-Hand-painted bodies do not move. Only their eyes animate. Their status appears in a corner badge borrowed from the glossy blob, using its colours. Mini avatars show a plain dot.
+Hand-painted bodies do not move. Their eyes blink, follow the pointer on large avatars, and reflect state. Their status appears in a corner badge borrowed from the glossy blob, using its colours. Mini avatars show a plain dot.
 
 ![The twelve hand-painted bodies](../../assets/screens/bot-art-painted.png)
 
@@ -143,6 +143,6 @@ Every mood and art can be inspected on `/preview.html`; `?art=<id>` narrows it t
 - **Art is per bot; the look is per app.** An explicit art survives a look change.
 - **`paint` is derived, not copied.** Changing the blob shape changes the painted body unless `paint` is pinned.
 - **A missing look is normal.** The seed comes from the bot id, so the same bot keeps the same face.
-- **Do not add a window listener per instance.** The new arts are CSS-only on purpose; a sheet with dozens of bots would otherwise create dozens of listeners.
+- **Do not add a window listener per instance.** The robot and blob arts are CSS-only on purpose. The pointer-following eyes of large Hand-painted avatars are the one listener, and it is bounded and cleaned up on unmount.
 - **Reduced motion is a requirement, not a nicety.** Every art must have a still pose.
 - **The status badge is not a second face.** For painted bodies it is a small corner badge, not a mood change in the body.

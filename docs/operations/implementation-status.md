@@ -14,6 +14,8 @@
 
 **Not verified.** No live provider CLI run for the tasks slice. The merged board, tree and timeline have not been checked against the references in every look. No native end-to-end run of task dispatch, restart or stop. Platform work (terminal, chat background, GitHub inbox, providers beyond the existing ones, connectors, computer control and relay) is not on `main` and is not started under the new plan.
 
+**Documentation.** The current documents were checked against the code on 22 October 2026: the looks (two), the bot art, the task board and its settings, the remote denials and the storage tables. What was changed and what could not be verified is in [history/expansion-v2/docs-refresh-2026-10-22.md](../history/expansion-v2/docs-refresh-2026-10-22.md).
+
 **Records.** The phase 1 status table is [history/expansion-v2/status.md](../history/expansion-v2/status.md), written before the merge. The 21 October pause handoff and reference plan are historical records, superseded in part; see [expansion-handoff-2026-10-21.md](expansion-handoff-2026-10-21.md).
 
 Original status line, kept as written: current through the 19 October FIX40 wave, released as `v0.1.0-beta.35` ([releases/0.1.0-beta.35.md](../releases/0.1.0-beta.35.md); tag `71475d4`, with its follow-ups and FIX41). The previous release is `v0.1.0-beta.34` ([releases/0.1.0-beta.34.md](../releases/0.1.0-beta.34.md); tag `5b6ee88`), which carried the 18 October FIX39 wave. The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.

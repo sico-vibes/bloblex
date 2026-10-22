@@ -44,14 +44,14 @@ New paths:
 - `apps/desktop/src/remote/RemoteTasks.mounted.test.tsx`, `RemoteTasks.tsx`, `remoteTasks.css`
 - `apps/desktop/src/ui/ChatBackground.mounted.test.tsx`, `ChatBackground.tsx`, `ComputerAccessPage.tsx`, `ConnectionsPage.tsx`, `GitHubInboxPage.mounted.test.tsx`, `GitHubInboxPage.tsx`, `RelaySettings.tsx`, `RuntimePreferencesPanel.tsx`, `TeamWorkPage.mounted.test.tsx`, `TeamWorkPage.tsx`, `TerminalDock.mounted.test.tsx`, `TerminalDock.tsx`
 - `apps/desktop/src/ui/chatBackground.css`, `chatBackgroundPrefs.ts`, `chatBackgroundTransform.ts`, `chatBackgroundWorker.ts`, `computerAccess.css`, `connections.css`, `gitHubInbox.css`, `relaySettings.css`, `teamWork.css`, `teamWorkTypes.ts`, `terminalDock.css`
-- `docs/history/expansion/ui-report.md`, `docs/history/expansion/ui-targeted-tests.log`
+- `docs/history/expansion/ui-report.md`, `docs/history/expansion/ui-targeted-tests.txt`
 
 ## Verification record
 
 The following are the last completed checks before the owner paused implementation. They ran on the frozen UI worktree before the final source edits listed below:
 
 - `npm run typecheck` passed. A later typecheck found only unused `oauthUrl` state; it was removed, but typecheck was not run again after the subsequent OAuth and inspector changes.
-- `npx vitest run apps/desktop/src/ui/TeamWorkPage.mounted.test.tsx apps/desktop/src/ui/TerminalDock.mounted.test.tsx apps/desktop/src/ui/ChatBackground.mounted.test.tsx apps/desktop/src/ui/GitHubInboxPage.mounted.test.tsx apps/desktop/src/remote/RemoteTasks.mounted.test.tsx apps/desktop/src/preview/fixtureBridge.parity.test.ts apps/desktop/src/remote/remoteTauri.parity.test.ts` passed 26 tests across 7 files. Output is in `ui-targeted-tests.log`. This run preceded the OAuth-flow, inspector-selection, and task/computer contract amendments; it does not validate them.
+- `npx vitest run apps/desktop/src/ui/TeamWorkPage.mounted.test.tsx apps/desktop/src/ui/TerminalDock.mounted.test.tsx apps/desktop/src/ui/ChatBackground.mounted.test.tsx apps/desktop/src/ui/GitHubInboxPage.mounted.test.tsx apps/desktop/src/remote/RemoteTasks.mounted.test.tsx apps/desktop/src/preview/fixtureBridge.parity.test.ts apps/desktop/src/remote/remoteTauri.parity.test.ts` passed 26 tests across 7 files. Output is in `ui-targeted-tests.txt`. This run preceded the OAuth-flow, inspector-selection, and task/computer contract amendments; it does not validate them.
 - `npm run build` passed before those final edits. Vite reported a mixed static/dynamic import warning for `tauri.ts` and a main bundle above its 500 kB advisory threshold.
 - `npm run build:remote --workspace @bloblex/desktop` passed before those final edits.
 - Browser capture of the synthetic desktop preview completed for the task board in all five looks and both dark/light themes at 1440 px, plus Frost at 1000 px; the tree, timeline and schedules views were also captured at 1440 px. These are documentation pictures only, not a full visual acceptance matrix or production UI run.

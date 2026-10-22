@@ -1,13 +1,13 @@
 # Architecture
 
-Last reviewed: 2026-10-19 (v0.1.0-beta.35). Deep version: `docs/library/content/reference/architecture.md` and the other reference pages in `docs/library/content/reference/`.
+Last reviewed: 2026-10-22 (main after v0.1.0-beta.36; task board added). Deep version: `docs/library/content/reference/architecture.md` and the other reference pages in `docs/library/content/reference/`.
 
 ## Processes
 
 | Process | Code | Owns |
 |---|---|---|
 | Desktop shell (`Bitbots.exe`) | `apps/desktop/src-tauri/src/lib.rs` (Tauri 2) | Windows (main, companion, dictation), tray, global shortcut, single instance, native dialogs, file tokens, clipboard image, updater, wallpaper files, launching the daemon |
-| Daemon (`bitbotsd`, crate `bloblex-daemon`) | `crates/bloblex-daemon/src/main.rs` (`dispatch()` is the RPC switch) | Sessions, turns, queue, retry/watchdog, approvals, usage, team/Manager tools, automations, memory, skills, settings, backup, remote gateway |
+| Daemon (`bitbotsd`, crate `bloblex-daemon`) | `crates/bloblex-daemon/src/main.rs` (`dispatch()` is the RPC switch) | Sessions, turns, queue, retry/watchdog, approvals, usage, team/Manager tools, the task board (`tasks.rs`), automations, memory, skills, settings, backup, remote gateway |
 | Provider CLIs | Claude Code, Codex, OpenCode (installed by the user) | The actual coding work and their own logins |
 | WebView2 pages | `apps/desktop/src` (React) | Main window (`/`), companion (`?companion=1`), dictation (`?dictation=1`), all from one bundle |
 | Phone (optional) | `apps/desktop/src/remote` (separate PWA build `dist-remote`) | Remote client through the daemon's gateway |

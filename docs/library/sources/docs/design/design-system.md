@@ -2,7 +2,7 @@
 
 > **What this is:** The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI.
 > **Status:** current
-> **Last updated:** 2026-10-19
+> **Last updated:** 2026-10-22
 
 ## Scene and Register
 
@@ -12,7 +12,7 @@ Product UI for a developer moving between coding-agent sessions on a desktop. It
 
 - **Say each thing once.** A blob's name, state and model appear in one place per screen. The sidebar row shows the blob and one line (what it is doing now, else its latest conversation). The header shows the blob name and the conversation. The details panel shows the full facts.
 - **One animated blob per place.** Sidebar rows, the details panel head, empty states and the companion each show a blob. Messages, the header and the working indicator do not.
-- **Monochrome chrome.** Black, greys and white. Primary actions are white with black text; toggles are white when on. Color is reserved for blob colors and for status that needs attention (amber for working or approval, red for failure, green only for added lines). *FIX40: this is the Blobots rule. Frost have their own colours; see [FIX40 looks and bot art](#fix40-looks-and-bot-art-19-october-2026).*
+- **Monochrome chrome.** Black, greys and white. Primary actions are white with black text; toggles are white when on. Color is reserved for blob colors and for status that needs attention (amber for working or approval, red for failure, green only for added lines). *FIX40: this is the Blobots rule. Frost has its own colours; see [FIX40 looks and bot art](#fix40-looks-and-bot-art-19-october-2026).*
 - **Status dots only when something is happening.** Idle and finished conversations have no dot.
 
 ## Tokens
@@ -21,8 +21,8 @@ All colors, type sizes and radii live in `apps/desktop/src/ui/theme.css`. Compon
 
 - Surfaces: app `#0e0e0e`, sidebar and panels `#151515`, raised cards `#1d1d1d`, menus `#202020`, selection `#262626` / `#303030`.
 - Text: primary `#f4f4f4`, secondary `#a6a6a6`, tertiary `#737373`.
-- Type scale: 11, 12, 13, 14, 15, 18, 22 px. Body and row labels 13–14 px at weight 400–500; headings 600. No other weights. *FIX40: Pop and Dot use their own faces and weights; see the FIX40 section.*
-- Radii: 6 (controls), 10 (menus, inputs), 14 (cards), pill (buttons, composer). *FIX40: Frost, Pop and Dot set the pill radius to 12 px and use rounded rectangles for controls.*
+- Type scale: 11, 12, 13, 14, 15, 18, 22 px. Body and row labels 13–14 px at weight 400–500; headings 600. No other weights. *Update 22 October 2026: the Pop and Dot faces were retired with those looks.*
+- Radii: 6 (controls), 10 (menus, inputs), 14 (cards), pill (buttons, composer). *FIX40: Frost sets the pill token to 12 px (`--radius-pill` in `apps/desktop/src/ui/themes/frost.css`) and uses rounded rectangles for controls.*
 
 ## Layout
 
@@ -30,7 +30,8 @@ All colors, type sizes and radii live in `apps/desktop/src/ui/theme.css`. Compon
 - Blob row: avatar, name and time on the first line, one subtitle line and the expand chevron on the second. An expanded blob keeps one continuous highlight; its projects and conversations hang off a guide line under the avatar.
 - Header: blob name (opens the blob editor) and a conversation dropdown on the left; model, approval mode (only when not Ask), new conversation, details toggle and more on the right.
 - Details panel (320 px): avatar, name and runtime at the top, then text tabs (Details, Runtime, Files) and plain label/value rows. It hides on the blob editor and Analytics.
-- Settings: left page list (General, Agents, Updates), page title, grey group labels over rounded cards of rows. Agents merges detected command line tools, their blobs and approvals: each tool expands in place.
+- Settings: left page list (General, Appearance, Experimental, Remote, Agents, Manager, Memory, Skills, Speech, Backup, Updates), page title, grey group labels over rounded cards of rows. Agents merges detected command line tools, their blobs and approvals: each tool expands in place. The page list is `SettingsSheet.tsx` (`apps/desktop/src/ui/SettingsSheet.tsx`).
+- Tasks: a Tasks button in the sidebar header opens the task board (Board, Tree and Timeline views). The board's design follows the rules above; see [docs/library/content/guides/tasks.md](../library/content/guides/tasks.md).
 - Profile: initials and name; its menu holds Usage, Find coding agents, Settings, name editing and Quit. First run asks for a name without blocking the app.
 
 ## Controls
@@ -49,7 +50,7 @@ Rounded rectangular bill with 14 px compact and 22 px expanded corners, an opaqu
 
 Appearance may use system, dark or light surfaces. Light surfaces use the same semantic tokens with dark text. Type scale tokens may scale proportionally from a 13 px through 16 px body size.
 
-For Legacy and Blobots, the companion keeps its dark token palette over transparency when the main window uses the light theme. Frost, Pop and Dot follow the user's resolved theme in the companion (FIX41).
+For Blobots, the companion keeps its fixed dark token palette (`:root.companion-surface` in `apps/desktop/src/ui/theme.css`) over transparency when the main window uses the light theme. Frost follows the user's resolved theme in the companion (`apps/desktop/src/ui/themes/frost.css`; FIX41). Update 22 October 2026: Legacy was retired, so no other look applies here.
 
 ## FIX39 visual rules (18 October 2026)
 
@@ -105,11 +106,11 @@ Rules from the owner's FIX40 request, updated by the screenshot review of 20 Oct
 - Automatic art follows the look: Bitbots uses 2D robot; Blobots uses Glossy.
 - Hand-painted blobs have twelve shapes: Classic, Cube, Star, Flower, Pear, Peanut, Ghost, Bunny, Kitty, UFO, Box bot and Tile. The shape is `look.paint`. Existing bots get a shape derived from their blob shape.
 - The light arts use SVG and CSS. Large Hand-painted avatars also track the pointer through a bounded animation-frame update with listener cleanup; mini avatars have no pointer listener. Reduced motion keeps a still pose.
-- Robot arts change the eyes, not the whole head. Idle has pill eyes that blink. Thinking has smaller eyes glancing to one side. Typing has stepped eye shapes and a row of pixels that types across the visor; the Dot robot shows a pixel wave, never rolling eyes. Waiting has raised, wide eyes in amber (red on Dot). Happy is an arc pair, error is X eyes in red, and sleeping and offline are flat lines (offline is dimmed).
+- Robot arts change the eyes, not the whole head. Idle has pill eyes that blink. Thinking has smaller eyes glancing to one side. Typing has stepped eye shapes and a row of pixels that types across the visor; the Dot robot renderer (not offered in the picker) shows a pixel wave, never rolling eyes. Waiting has raised, wide eyes in amber. Happy is an arc pair, error is X eyes in red, and sleeping and offline are flat lines (offline is dimmed).
 - Flat and Dot robot renderers remain for compatibility and the art sheet; they are absent from the product picker.
 - Hand-painted bodies stay still; their eyes blink, follow the pointer and reflect state. Their status appears in a corner badge borrowed from the glossy blob, using its colours. Mini avatars show a plain dot.
 - The eight-shape rule from FIX39 applies to the glossy blob only.
-- The launch greeting shows the bot in its art. Legacy keeps the pixel welcome. The glossy blob keeps its classic greeting.
+- The launch greeting shows the bot in its art. The glossy blob keeps its classic greeting.
 
 ### Look orbs
 
@@ -122,10 +123,7 @@ Rules from the owner's FIX40 request, updated by the screenshot review of 20 Oct
 These rules extend the looks above to the companion and dictation windows. The record is [docs/history/fix-41/companion-looks-report.md](../history/fix-41/companion-looks-report.md).
 
 - Each look styles the overlay windows through its own layer.
-- Dark is each look's default. Light follows `data-surface-theme`.
-- Frost is a solid tint in the overlay windows, because those windows have no native blur.
-- Pop draws its 2 px lines and offset shadows with `box-shadow`, so no box grows.
-- Dot uses dotted lines.
-- Bot-coloured text on light is mixed toward ink (15% bot colour) to keep 4.5:1.
+- Light follows `data-surface-theme` for Frost (`apps/desktop/src/ui/themes/frost.css`). Frost's glass blur is switched off for the companion and dictation surfaces (`:not(.companion-surface):not(.dictation-surface)` in the same file), so those windows use a solid tint.
+- Bot-coloured text on light is mixed toward ink (15% bot colour) to keep 4.5:1 (`companion-bot-text-color-share` in `apps/desktop/src/ui/themes/frost.css`). Not verified against the 4.5:1 target in this pass.
 - Blobots keeps the fixed dark palette in the overlay windows.
 - No size, layout or animation changes in the overlay windows.

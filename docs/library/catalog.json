@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "64344a6",
-  "documentCount": 295,
+  "revision": "861853f",
+  "documentCount": 300,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -3254,6 +3254,111 @@
       ]
     },
     {
+      "id": "project/plans/expansion-plan-v2",
+      "source": "docs/plans/expansion-plan-v2.md",
+      "title": "Bitbots expansion plan v2: tasks, desktop wins, providers, trusted access and phone relay",
+      "section": "Plans & briefs",
+      "status": "Plan",
+      "sha256": "6259ce0ab4d8a17e3107c1d196059d059f8a7e8a1cbae994f6b3dbc3299dc48f",
+      "headings": [
+        {
+          "id": "context",
+          "text": "Context",
+          "level": 2
+        },
+        {
+          "id": "goals",
+          "text": "Goals",
+          "level": 2
+        },
+        {
+          "id": "scope",
+          "text": "Scope",
+          "level": 2
+        },
+        {
+          "id": "features",
+          "text": "Features",
+          "level": 3
+        },
+        {
+          "id": "phases",
+          "text": "Phases",
+          "level": 3
+        },
+        {
+          "id": "decisions",
+          "text": "Decisions",
+          "level": 2
+        },
+        {
+          "id": "runtime-and-spend",
+          "text": "Runtime and spend",
+          "level": 3
+        },
+        {
+          "id": "unknown-stays-unknown",
+          "text": "Unknown stays unknown",
+          "level": 3
+        },
+        {
+          "id": "secrets",
+          "text": "Secrets",
+          "level": 3
+        },
+        {
+          "id": "trusted-access",
+          "text": "Trusted access",
+          "level": 3
+        },
+        {
+          "id": "licences",
+          "text": "Licences",
+          "level": 3
+        },
+        {
+          "id": "design",
+          "text": "Design",
+          "level": 3
+        },
+        {
+          "id": "work-items",
+          "text": "Work items",
+          "level": 2
+        },
+        {
+          "id": "phase-1-tasks-and-board",
+          "text": "Phase 1: Tasks and board",
+          "level": 3
+        },
+        {
+          "id": "phase-2-desktop-wins",
+          "text": "Phase 2: Desktop wins",
+          "level": 3
+        },
+        {
+          "id": "phase-3-providers-and-setup",
+          "text": "Phase 3: Providers and setup",
+          "level": 3
+        },
+        {
+          "id": "phase-4-trusted-access",
+          "text": "Phase 4: Trusted access",
+          "level": 3
+        },
+        {
+          "id": "phase-5-phone-relay",
+          "text": "Phase 5: Phone relay",
+          "level": 3
+        },
+        {
+          "id": "acceptance",
+          "text": "Acceptance",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/plans/improvement-plan",
       "source": "docs/plans/improvement-plan.md",
       "title": "Bitbots improvement plan v2: a BB-informed, companion-style roadmap",
@@ -3504,6 +3609,86 @@
         {
           "id": "4-oct-2026---blob-wardrobe-launchonboarding-and-model-pricing-merged",
           "text": "4 Oct 2026 - Blob wardrobe, launch/onboarding and model pricing merged",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion-v2/tasks-contract",
+      "source": "docs/history/expansion-v2/tasks-contract.md",
+      "title": "Durable tasks contract",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "7ba259ffc3eed83d42c9053c93714533534be638eb62536970a88fcefbaff906",
+      "headings": [
+        {
+          "id": "task-and-run-records",
+          "text": "Task and run records",
+          "level": 2
+        },
+        {
+          "id": "rpcs-and-event-names",
+          "text": "RPCs and event names",
+          "level": 2
+        },
+        {
+          "id": "supervision-and-schedules",
+          "text": "Supervision and schedules",
+          "level": 2
+        },
+        {
+          "id": "authority-and-restart-behavior",
+          "text": "Authority and restart behavior",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion-v2/README",
+      "source": "docs/history/expansion-v2/README.md",
+      "title": "Expansion v2 records",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "051925f022670218a50ec95cba0f1bb164c5d0103dd7246004250839ec8cf652",
+      "headings": [
+        {
+          "id": "context",
+          "text": "Context",
+          "level": 2
+        },
+        {
+          "id": "records",
+          "text": "Records",
+          "level": 2
+        },
+        {
+          "id": "working-arrangement",
+          "text": "Working arrangement",
+          "level": 2
+        },
+        {
+          "id": "naming",
+          "text": "Naming",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion-v2/status",
+      "source": "docs/history/expansion-v2/status.md",
+      "title": "Expansion v2 status",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "8ef1ef61d623a6d0b7b1891d2656df6eec59370e4f7db31eec490967955c64a6",
+      "headings": [
+        {
+          "id": "states",
+          "text": "States",
+          "level": 2
+        },
+        {
+          "id": "phase-1-tasks-and-board",
+          "text": "Phase 1: Tasks and board",
           "level": 2
         }
       ]
@@ -12818,6 +13003,86 @@
         {
           "id": "final-report-plain-text-last-message",
           "text": "Final report (plain text, last message)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion-v2/task-rpc-shapes",
+      "source": "docs/history/expansion-v2/task-rpc-shapes.md",
+      "title": "Task RPC shapes (slice 1A)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "55cc30c24dbda969df75c2e187a6f51e1ac0a1f0a7aba7df1ba8fb2f63b5323d",
+      "headings": [
+        {
+          "id": "task-dto",
+          "text": "Task DTO",
+          "level": 2
+        },
+        {
+          "id": "run-dto",
+          "text": "Run DTO",
+          "level": 2
+        },
+        {
+          "id": "taskcreate",
+          "text": "task.create",
+          "level": 2
+        },
+        {
+          "id": "tasklist",
+          "text": "task.list",
+          "level": 2
+        },
+        {
+          "id": "taskget",
+          "text": "task.get",
+          "level": 2
+        },
+        {
+          "id": "taskupdate",
+          "text": "task.update",
+          "level": 2
+        },
+        {
+          "id": "taskdispatch",
+          "text": "task.dispatch",
+          "level": 2
+        },
+        {
+          "id": "taskunassign",
+          "text": "task.unassign",
+          "level": 2
+        },
+        {
+          "id": "taskreorder",
+          "text": "task.reorder",
+          "level": 2
+        },
+        {
+          "id": "taskcancel",
+          "text": "task.cancel",
+          "level": 2
+        },
+        {
+          "id": "taskstop",
+          "text": "task.stop",
+          "level": 2
+        },
+        {
+          "id": "taskreview",
+          "text": "task.review",
+          "level": 2
+        },
+        {
+          "id": "taskruns",
+          "text": "task.runs",
+          "level": 2
+        },
+        {
+          "id": "events",
+          "text": "Events",
           "level": 2
         }
       ]

@@ -196,10 +196,10 @@ function LaunchGreeting({ color, onDone }: { color: string; onDone: () => void }
   }} />
 }
 
-export function LaunchWarnings({ warnings, retrying = false, onSettings, onDismiss }: { warnings: string[]; retrying?: boolean; onSettings: () => void; onDismiss: () => void }) {
+export function LaunchWarnings({ warnings, details, retrying = false, onSettings, onDismiss }: { warnings: string[]; details?: string; retrying?: boolean; onSettings: () => void; onDismiss: () => void }) {
   if (!warnings.length && !retrying) return null
-  const summary = warnings.map((warning) => friendlyError({ message: warning, provider: providerFromWarning(warning) }).title.replace(/[.\s]+$/, '')).join('; ')
-  return <aside className="launch-warning-notice" role="status"><span>{retrying ? 'Finding coding agents again…' : 'Startup checks need attention: ' + summary + '.'}</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
+  const summary = details ? details.replace(/Daemon request failed:[^\n]*/g, 'The local service connection was interrupted.').replace(/\n/g, '; ') : warnings.map((warning) => friendlyError({ message: warning, provider: providerFromWarning(warning) }).title.replace(/[.\s]+$/, '')).join('; ')
+  return <aside className="launch-warning-notice" role="status" aria-label={details ? summary : undefined} title={summary}><span>{retrying ? 'Finding coding agents again…' : 'Startup checks need attention: ' + summary + '.'}</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
 }
 
 function providerFromWarning(warning: string) {

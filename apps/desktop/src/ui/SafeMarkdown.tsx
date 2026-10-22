@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy } from 'lucide-react'
+import { Copy, Github } from 'lucide-react'
 
 type InlineToken = { kind: 'text' | 'code' | 'strong' | 'em' | 'link'; text: string; url?: string }
 type MarkdownBlock = { kind: 'paragraph' | 'heading' | 'quote' | 'code' | 'list' | 'table' | 'literal'; text?: string; level?: number; language?: string; rows?: string[][]; ordered?: boolean; items?: Array<{ depth: number; text: string }> }
@@ -119,8 +119,11 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 function SafeLink({ url, text, onOpenLink }: { url: string; text: string; onOpenLink: (url: string) => void }) {
+  const parsed = new URL(url)
+  const repository = parsed.hostname.toLowerCase() === 'github.com' && /^\/[^/]+\/[^/]+\/?$/.test(parsed.pathname) && text === url
+    ? parsed.pathname.replace(/^\//, '').replace(/\/$/, '') : null
   return <a
-    className="markdown-link"
+    className={`markdown-link${repository ? ' markdown-repo-link' : ''}`}
     href={url}
     target="_blank"
     rel="noopener noreferrer"
@@ -136,7 +139,7 @@ function SafeLink({ url, text, onOpenLink }: { url: string; text: string; onOpen
     onMouseDown={(event) => {
       if (event.button === 1) event.preventDefault()
     }}
-  >{text}</a>
+  >{repository ? <><Github size={13} aria-hidden="true" /><span>GitHub · {repository}</span></> : text}</a>
 }
 
 export function SafeMarkdown({ text, onOpenLink }: { text: string; onOpenLink: (url: string) => void }) {

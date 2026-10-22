@@ -135,3 +135,31 @@ describe('painted blob renderer', () => {
     expect(host.querySelector('svg.art-svg')?.classList.contains('art-mood-idle')).toBe(true)
   })
 })
+
+// The owner's hand-painted art follows the pointer without moving its body.
+describe('painted gaze', () => {
+  it('tracks the pointer on a large avatar and stops after unmount', async () => {
+    vi.stubGlobal('matchMedia', () => reduced(false))
+    const host = mount(<PaintedBlob color="#89d6b3" size={100} />)
+    const svg = host.querySelector('svg')!
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({ x:0,y:0,left:0,top:0,right:100,bottom:100,width:100,height:100,toJSON:()=>({}) })
+    window.dispatchEvent(new PointerEvent('pointermove', {clientX:200,clientY:150}))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const gaze = host.querySelector('.pb-gaze')!
+    expect(gaze.getAttribute('transform')).toMatch(/^translate\([1-3]/)
+    const view = mounted.pop()!
+    const before = gaze.getAttribute('transform')
+    act(() => view.root.unmount())
+    window.dispatchEvent(new PointerEvent('pointermove', {clientX:0,clientY:0}))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(gaze.getAttribute('transform')).toBe(before)
+    view.host.remove()
+  })
+  it('does not track on mini avatars or with reduced motion', async () => {
+    vi.stubGlobal('matchMedia', () => reduced(true))
+    const host = mount(<PaintedBlob color="#89d6b3" size={100} />)
+    window.dispatchEvent(new PointerEvent('pointermove', {clientX:200,clientY:150}))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(host.querySelector('.pb-gaze')?.hasAttribute('transform')).toBe(false)
+  })
+})

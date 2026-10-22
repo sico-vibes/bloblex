@@ -104,9 +104,9 @@ export function LookEditor({ look, color, colorHex, name, locked = false, onLook
     </div>
 
     <div className="look-panel">
-      <StyleControl art={look.art} style={style} look={look} colorHex={colorHex} locked={locked} onChange={chooseArt} />
+      <StyleControl art={look.art === 'robot-flat' || look.art === 'robot-dot' ? 'robot-pop' : look.art} style={style} look={look} colorHex={colorHex} locked={locked} onChange={chooseArt} />
 
-      {art === 'robot'
+      {(art === 'robot' || art === 'robot-pop')
         ? <BotEditor look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />
         : art === 'painted'
           ? <PaintPanel look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />

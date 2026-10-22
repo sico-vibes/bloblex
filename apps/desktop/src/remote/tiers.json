@@ -854,10 +854,18 @@
       "minTier": null,
       "why": "Only the owner at the computer may raise the firewall prompt; a device must never remove a rule.",
       "params": null
+    },
+    {
+      "method": "agent.purge",
+      "class": "never",
+      "minTier": null,
+      "why": "Permanent bot and conversation deletion is local-only.",
+      "params": null
     }
   ],
   "events": {
-    "message.delta": "allow",    "message.completed": "allow",
+    "message.delta": "allow",
+    "message.completed": "allow",
     "session.changed": "allow",
     "session.deleted": "allow",
     "skills.changed": "allow",

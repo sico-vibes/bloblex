@@ -8,6 +8,8 @@ Where a document and the code disagree, the code wins. For rules, [AGENTS.md](..
 
 ## Start here
 
+- **Latest development review:** [20 October fixes and verification](library/content/reference/live-development-review-2026-10-20.md), including the two-theme decision and native development workflow.
+
 - **AI agents and the delivery process:** read [AGENTS.md](../AGENTS.md) first, then [operations/operating-model.md](operations/operating-model.md) (a summary of AGENTS.md dated 14 October 2026, not updated for the 16 to 19 October amendments; AGENTS.md wins), [operations/implementation-status.md](operations/implementation-status.md) (open gaps), and [operations/release-checklist.md](operations/release-checklist.md) (release state).
 - **New contributors:** [README.md](../README.md), then [reference/architecture.md](reference/architecture.md), [guides/windows-development.md](guides/windows-development.md), [product.md](design/product.md), [design-system.md](design/design-system.md), [ipc-contract.md](ipc-contract.md) and [reference/runtime-capabilities.md](reference/runtime-capabilities.md).
 - **Plan and roadmap:** [plans/e2e-plan-v2.md](plans/e2e-plan-v2.md) is the plan. [plans/improvement-plan.md](plans/improvement-plan.md) is the roadmap that AGENTS.md names.

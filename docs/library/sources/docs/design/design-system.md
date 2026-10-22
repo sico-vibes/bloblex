@@ -12,7 +12,7 @@ Product UI for a developer moving between coding-agent sessions on a desktop. It
 
 - **Say each thing once.** A blob's name, state and model appear in one place per screen. The sidebar row shows the blob and one line (what it is doing now, else its latest conversation). The header shows the blob name and the conversation. The details panel shows the full facts.
 - **One animated blob per place.** Sidebar rows, the details panel head, empty states and the companion each show a blob. Messages, the header and the working indicator do not.
-- **Monochrome chrome.** Black, greys and white. Primary actions are white with black text; toggles are white when on. Color is reserved for blob colors and for status that needs attention (amber for working or approval, red for failure, green only for added lines). *FIX40: this is the Blobots rule. Frost, Pop and Dot have their own colours; see [FIX40 looks and bot art](#fix40-looks-and-bot-art-19-october-2026).*
+- **Monochrome chrome.** Black, greys and white. Primary actions are white with black text; toggles are white when on. Color is reserved for blob colors and for status that needs attention (amber for working or approval, red for failure, green only for added lines). *FIX40: this is the Blobots rule. Frost have their own colours; see [FIX40 looks and bot art](#fix40-looks-and-bot-art-19-october-2026).*
 - **Status dots only when something is happening.** Idle and finished conversations have no dot.
 
 ## Tokens
@@ -53,27 +53,27 @@ For Legacy and Blobots, the companion keeps its dark token palette over transpar
 
 ## FIX39 visual rules (18 October 2026)
 
-These rules came from the owner's review and the audits (item numbers refer to [docs/history/fix-39/feedback.md](../history/fix-39/feedback.md)). Both looks and both themes follow them. *FIX40: "both looks" now means all five looks.*
+These rules came from the owner's review and the audits (item numbers refer to [docs/history/fix-39/feedback.md](../history/fix-39/feedback.md)). Both looks and both themes follow them. *FIX40: "both looks" now means both supported looks.*
 
 - **Bot shapes (item 4).** Eight shapes, symmetrical by default, in this order: Circle, Pebble, Squircle, Capsule, Triangle, Hexagon, Cloud, Droplet. Each has soft shading and two equal, upright pill eyes mirrored around the centre. Eye tuning (size, height, spacing, Squareness) changes only the eyes. Shuffle and Surprise me never change the shape; they change the eyes and the colour. Older names migrate: round and sun become Circle, organic and cat become Pebble, boxy becomes Squircle. *FIX40: the eight shapes apply to the glossy blob only. The robot arts and the hand-painted blobs have their own sets; see the FIX40 section.*
 - **The Manager's badge (item 8).** A filled white star on an orange circle, on the Manager's avatar. It is the only star or sparkle icon in the app. Do not use `Sparkles`, `Sparkle`, `Wand2`, `WandSparkles`, ✦, ✧ or ✨ anywhere. It is the one exception to monochrome chrome.
 - **Model line under a bot's name (item 12).** With the "Model and effort under the name" experiment on, the sidebar's second line shows the model and effort, for example "Sonnet 5.5 · High", or "Default model" when none is set. While a bot is working or waiting, the status takes that line. System notices are never the preview (item 15).
 - **Lock badge (item 13).** A locked bot shows a circle with a lock on its avatar, placed like the Manager's badge. Its editor opens read-only behind a banner, its controls are disabled, and its composer model, effort and permission controls show "This bot is locked. Unlock it to change its settings."
-- **Working bots panel.** A collapsible section in the session rail. Each row shows the bot's face, name, the task's short title, its status (working, starting, waiting, waiting for approval, limited, done, failed, cancelled) and the elapsed time. Finished tasks collapse into "N finished". It uses the same tokens in both looks and both themes. *FIX40: each look restyles it through its own tokens.*
+- **Working bots panel.** A collapsible section in the session rail. Each row shows the bot's face, name, the task's short title, its status (working, starting, waiting, waiting for approval, limited, done, failed, cancelled) and the elapsed time. Finished tasks collapse into "N finished", using the same chevron and type as Working bots. Status and elapsed time share the bot-name line, with the task title on a second line. It uses the same tokens in both looks and both themes. *FIX40: each look restyles it through its own tokens.*
 - **Update badge (item 5 and the Director's browser check).** The badge never covers the conversation title. Below a window width of 1180 px it shows an icon with a short label ("Restart"), or the ring with the percentage while downloading; at 1180 px and wider it shows the full label. The title truncates first. The banner's View and Later buttons use `.primary-button.small` and `.ghost-button.small`.
 - **Settings groups (item 9).** Each group after the first is separated from the one before by a divider, in both looks.
 
 ## FIX40 looks and bot art (19 October 2026)
 
-Rules from the owner's FIX40 request. The record of the wave is [docs/history/fix-40/report.md](../history/fix-40/report.md). Where this section and an earlier rule differ, this section wins; the earlier rules carry a short note that points here.
+Rules from the owner's FIX40 request, updated by the screenshot review of 20 October 2026. The record of the wave is [docs/history/fix-40/report.md](../history/fix-40/report.md). Where this section and an earlier rule differ, this section wins; the earlier rules carry a short note that points here.
 
 ### Looks and families
 
-- Five looks. Primary: **Bitbots** (`appearance.style` value `bitbots`), which is the Frost look. Alternative: **Blobots** (`blobots`), monochrome and unchanged. More looks: **Legacy** (`legacy`, the old pixel look), **Pop** (`pop`) and **Dot** (`dot`).
-- Onboarding offers Bitbots and Blobots as large cards and the three More looks as a row.
-- Users already on `bitbots` get Frost. Nothing is migrated.
-- `data-bitbots="on"` is set for Legacy only. The pixel welcome, PixelScan, PixelClouds and the Doto and DM Mono stylesheet load only for Legacy.
-- Each look has its own file under `apps/desktop/src/ui/themes/` (`frost.css`, `pop.css`, `dot.css`), with every rule scoped to its look. The main-window rules are kept out of the companion and dictation windows, and each look has a separate companion and dictation layer (FIX41, [below](#companion-and-dictation-windows-fix41)).
+- Two looks only, by the owner's later direction on 20 October 2026: **Bitbots** (`bitbots`, Frost) and **Blobots** (`blobots`). Pop, Dot and Legacy are removed. Saved retired choices migrate to Bitbots.
+- Settings and onboarding offer one row of orbs: Bitbots, Blobots. Names appear on hover and keyboard focus; no card descriptions or family headings.
+- Existing Bitbots and Blobots selections are retained. Retired selections migrate to Bitbots without changing bot records or conversations.
+- The retired `data-bitbots="on"` marker is cleared. Legacy theme CSS and automatic pixel-font loading are removed.
+- Blobots uses the base tokens in `ui/theme.css`; Bitbots adds `ui/themes/frost.css`, imported statically.
 
 ### Frost (Bitbots)
 
@@ -86,41 +86,35 @@ Rules from the owner's FIX40 request. The record of the wave is [docs/history/fi
 - The default interface font is Inter. A font the user picks wins.
 - A user accent still overrides the look's default accent.
 
-### Pop and Dot
-
-- **Pop** is retro, not pixelated. It uses a cream paper ground with a faint dot grid, panels and cards with a 2 px ink outline, hard offset shadows with no blur, pastel fills and sticker-style chips. Body text is DM Sans; headings and the brand name are Bricolage Grotesque.
-- **Dot** is monochrome with one red accent. Selection inverts to an ink background. Body text is Geist and labels are Geist Mono; Doto is for large numbers only. Meters and bars are rows and columns of dots.
-- Both use rounded rectangles, with the small radii of the shape rule and larger panels, and never pill or circle UI.
-
 ### Fonts
 
 - 24 bundled fonts in four categories: sans, friendly and display, mono, and pixel. Latin subsets only, from `@fontsource` packages.
 - A font loads only when it is chosen, or when the font list is on screen. Fonts never enter the main bundle for an unchosen font.
-- Defaults per look: Bitbots Inter; Pop DM Sans; Dot Geist and Geist Mono. Blobots and Legacy keep their stylesheet fonts. The "Default for this look" option always returns to these.
+- Defaults per look: Bitbots uses Inter; Blobots uses its base system fonts. The "Default for this look" option always returns to these.
 - A pixel font may be the interface font. The smallest rendered size stays at 11 px.
 
 ### Settings > Appearance
 
-- Order of sections: Look (the cards), Look options, Colour (Theme and Accent), Text (interface font, code font, text size and density).
+- Order of sections: Look (the orbs), Look options, Colour (Theme and Accent), Text (interface font, code font, text size and density).
 - Look options exist for Bitbots only (wallpaper and glass). Other looks show one quiet line.
-- Each look card shows one orb (below), not a screenshot.
+- Each look is one orb with a circular selected/focus boundary (below).
 
 ### Bot art
 
-- Six art styles, chosen per bot: `robot` (3D robot, the heavy existing renderer), `robot-flat`, `robot-pop`, `robot-dot`, `blob` (glossy blob, the existing renderer) and `painted` (hand-painted).
-- A bot with no art follows the app look: Bitbots gives Flat robot, Blobots gives Glossy blob, Legacy gives 3D robot, Pop gives Pop robot, and Dot gives Dot robot.
+- Four offered arts: 3D robot (`robot`), 2D robot (`robot-pop`), Glossy (`blob`) and Hand-painted (`painted`), plus Automatic. Both robots offer Rectangle, Square, Circle and Hexagon outlines. Saved `robot-flat` and `robot-dot` values remain accepted and resolve to 2D robot.
+- Automatic art follows the look: Bitbots uses 2D robot; Blobots uses Glossy.
 - Hand-painted blobs have twelve shapes: Classic, Cube, Star, Flower, Pear, Peanut, Ghost, Bunny, Kitty, UFO, Box bot and Tile. The shape is `look.paint`. Existing bots get a shape derived from their blob shape.
-- The new arts are inline SVG and CSS keyframes only: no canvas, no `requestAnimationFrame`, no window listeners per instance. Under reduced motion every animation stops and a still pose shows.
+- The light arts use SVG and CSS. Large Hand-painted avatars also track the pointer through a bounded animation-frame update with listener cleanup; mini avatars have no pointer listener. Reduced motion keeps a still pose.
 - Robot arts change the eyes, not the whole head. Idle has pill eyes that blink. Thinking has smaller eyes glancing to one side. Typing has stepped eye shapes and a row of pixels that types across the visor; the Dot robot shows a pixel wave, never rolling eyes. Waiting has raised, wide eyes in amber (red on Dot). Happy is an arc pair, error is X eyes in red, and sleeping and offline are flat lines (offline is dimmed).
-- The Dot robot has an antenna above its head.
-- Hand-painted blobs do not move; only their eyes animate. Their status appears in a corner badge borrowed from the glossy blob, using its colours. Mini avatars show a plain dot.
+- Flat and Dot robot renderers remain for compatibility and the art sheet; they are absent from the product picker.
+- Hand-painted bodies stay still; their eyes blink, follow the pointer and reflect state. Their status appears in a corner badge borrowed from the glossy blob, using its colours. Mini avatars show a plain dot.
 - The eight-shape rule from FIX39 applies to the glossy blob only.
 - The launch greeting shows the bot in its art. Legacy keeps the pixel welcome. The glossy blob keeps its classic greeting.
 
 ### Look orbs
 
-- Settings and onboarding show one static orb per look instead of a mini window: lake glass (Bitbots), matte stone (Blobots), pixel dither (Legacy), striped sticker (Pop) and dot matrix (Dot).
-- An orb has no window chrome, avatars, text or animation. It draws its own colours and does not read the app's tokens, so it looks the same in every look. About 72 px for the two large cards and about 52 px for the More looks cards.
+- Settings and onboarding show one static orb per look instead of a mini window: frosted overlapping glass (Bitbots) and matte stone (Blobots).
+- Orbs have no text or animation inside them. They use fixed material colours independent of the active look: about 54 px in Settings and 68 px in onboarding. Their controls and selection rings remain circular in every look.
 - No glow or halo on any orb.
 
 ### Companion and dictation windows (FIX41)
@@ -133,5 +127,5 @@ These rules extend the looks above to the companion and dictation windows. The r
 - Pop draws its 2 px lines and offset shadows with `box-shadow`, so no box grows.
 - Dot uses dotted lines.
 - Bot-coloured text on light is mixed toward ink (15% bot colour) to keep 4.5:1.
-- Legacy and Blobots keep the fixed dark palette in the overlay windows.
+- Blobots keeps the fixed dark palette in the overlay windows.
 - No size, layout or animation changes in the overlay windows.

@@ -513,6 +513,7 @@ name = "bloblex-adapter-acp"
 version = "0.1.0-beta.36"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bloblex-agent-core",
  "bloblex-process",
  "chrono",

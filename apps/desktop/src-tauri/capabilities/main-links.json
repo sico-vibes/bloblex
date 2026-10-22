@@ -3,5 +3,7 @@
   "identifier": "main-links",
   "description": "Opens validated web links from conversation content.",
   "windows": ["main", "companion"],
-  "permissions": ["opener:allow-open-url"]
+  "permissions": [
+    { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://*" }, { "url": "http://*" }] }
+  ]
 }

@@ -751,11 +751,11 @@ async fn import(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         let mut keys = incoming.keys().collect::<Vec<_>>();
         keys.sort();
         for key in keys {
-            let value = &incoming[key];
-            if !exportable_setting(key, value) {
+            let value = if key == "appearance.style" && matches!(incoming[key].as_str(), Some("legacy" | "pop" | "dot")) { json!("bitbots") } else { incoming[key].clone() };
+            if !exportable_setting(key, &value) {
                 continue;
             }
-            match crate::validate_setting(key, value) {
+            match crate::validate_setting(key, &value) {
                 Ok(valid) => plan_settings.push(json!({"key": key, "value": valid})),
                 Err(_) => skipped_settings += 1,
             }

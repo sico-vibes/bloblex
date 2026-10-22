@@ -26,11 +26,19 @@ cargo test -p bloblex-desktop --lib
 - From the root, run `npm test` (or `npx vitest` inside `apps/desktop`), never a bare `npx vitest run` at the root: it collects the test files of every worktree under `.claude/worktrees` and reports thousands of false failures (beta.36: 4,079 failed files).
 - The Codex sandbox cannot let Vite write its temp config through a `node_modules` junction (`EPERM`): add `--configLoader runner` to `vite build` and `vitest run` there, or run the gate yourself.
 
+## Live development without releases (2026-10-20)
+
+Run `npm run desktop:dev` from a checkout without an apostrophe. The launcher builds/stages the daemon and hook, uses Vite on a free port from 1420–1435 and identifier `com.bitbots.desktop.dev`, and now defaults `BLOBLEX_DB_PATH` to `<CARGO_TARGET_DIR>/dev-data/bloblex.db`. An explicit override is retained. Development skips migration of the installed shared store and autostart entry. UI edits refresh through Vite; daemon edits still require rebuilding, restaging and restarting the development shell. No installer or release is required. Keep test projects separate too: a private database does not isolate project-file edits.
+
+The fixture preview is not a live client. The remote PWA is a separate restricted interface. Full browser parity needs a trusted local bridge and separation of daemon connectivity from `inDesktop` guards; never expose the capability or enable broad CORS to achieve it. Keep production bundle checks: Vite dev can hide CSS chunking bugs.
+
+When measuring theme contrast, wait for colour transitions to finish (250 ms in this review); sampling immediately after changing theme produced false failures. Check user-bubble links as well as selected rows, inline code and fenced code. Native clipboard verification used a generated PNG written with the browser clipboard API, the real native clipboard reader, then the composer's Ctrl+V handler; real Codex image delivery also passed.
+
 ## The browser preview
 
 `npx vite --config apps/desktop/vite.preview.config.ts apps/desktop --port 5174 --strictPort --host 127.0.0.1` (the Claude desktop app has this as the `desktop-preview` launch config). It swaps `tauri.ts` for `preview/fixtureBridge.ts` (fixture bots and conversations, no daemon).
 
-Useful URLs: `/` (main window; add `?style=bitbots|blobots|legacy|pop|dot`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`), `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
+Useful URLs: `/` (main window; add `?style=bitbots|blobots`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`), `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
 
 The app plays a launch intro and fades the shell in; screenshots taken in the first seconds show a dimmed or empty window. Wait or check `getComputedStyle(document.querySelector('.app-shell')).opacity === '1'`. The real window is at least 1000 px wide; layout overlaps seen only below that width are not bugs.
 
@@ -51,4 +59,4 @@ Then connect to the page's `webSocketDebuggerUrl` with a small Node script (`new
 
 ## UI review checklist
 
-Every look the change touches, in dark and light; selected, hover, focus and disabled states; text contrast of 4.5:1 or more; no pill or circle controls in the new looks (the Manager and lock badges and the look orbs excepted); companion and dictation windows if styles changed; reduced motion; the production build when styles or assets load differently.
+Both supported looks (Bitbots and Blobots), in dark and light; selected, hover, focus and disabled states; text contrast of 4.5:1 or more; no pill or circle controls in the new looks (the Manager and lock badges and the look orbs excepted); companion and dictation windows if styles changed; reduced motion; the production build when styles or assets load differently.

@@ -147,6 +147,7 @@ export type TeamSidebarActions = {
   onCreateProject: () => void
   onEdit: (agent: Agent) => void
   onArchive: (agent: Agent) => void
+  onDeleteBot?: (agent: Agent) => void
   onDuplicate: (agent: Agent) => void
   onExportBlob: (agent: Agent) => void
   onRename: (agent: Agent) => void
@@ -256,6 +257,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       ...(locked || botLock ? [
         { label: locked ? `Unlock ${noun}` : `Lock ${noun}`, icon: locked ? <LockOpen size={15} /> : <Lock size={15} />, onSelect: () => actions.onToggleLock(agent) },
       ] as MenuItem[] : []),
+      ...(actions.onDeleteBot ? [{ label: 'Delete bot…', icon: <Trash2 size={15} />, danger: true, disabled: locked || isManager(agent), onSelect: () => actions.onDeleteBot?.(agent) }] : []),
       { label: 'Archive', icon: <Archive size={15} />, danger: true, disabled: locked, onSelect: () => actions.onArchive(agent) },
     ]
   }

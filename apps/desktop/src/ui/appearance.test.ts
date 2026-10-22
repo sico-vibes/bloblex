@@ -115,9 +115,10 @@ describe('user accent colours', () => {
     expect(normalizeAccent(undefined)).toBe('')
   })
 
-  it('recognizes all five looks', () => {
-    expect(THEME_STYLES).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
+  it('recognizes only Bitbots and Blobots', () => {
+    expect(THEME_STYLES).toEqual(['bitbots', 'blobots'])
     for (const look of THEME_STYLES) expect(isThemeStyle(look)).toBe(true)
+    for (const retired of ['legacy', 'pop', 'dot']) expect(isThemeStyle(retired)).toBe(false)
     expect(isThemeStyle('Blobots')).toBe(false)
     expect(isThemeStyle('')).toBe(false)
     expect(isThemeStyle(undefined)).toBe(false)

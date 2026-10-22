@@ -1,8 +1,8 @@
 # Bot art system
 
-> **What this is:** how a bot's face is chosen and drawn: `BlobCanvas` dispatch, the six arts, the look model, painted shapes, status badges and how to add an art.
+> **What this is:** how a bot's face is chosen and drawn: `BlobCanvas` dispatch, the four offered arts and compatibility renderers, the look model, painted shapes, status badges and how to add an art.
 > **Status:** current; checked against `BlobCanvas.tsx`, `art/art.ts` and `look/index.ts` on 19 October 2026
-> **Last updated:** 2026-10-19
+> **Last updated:** 2026-10-20
 
 ## Purpose
 
@@ -29,19 +29,17 @@ switch (props.art ?? resolveArt(props.look, style)) {
 }
 ```
 
-That is `apps/desktop/src/blob/BlobCanvas.tsx:348-358`. `resolveArt` returns `look.art` when it is a valid art, otherwise `defaultArtForStyle(style)` (`apps/desktop/src/blob/art/art.ts:104-118`).
+That is `apps/desktop/src/blob/BlobCanvas.tsx:348-358`. `resolveArt` maps saved Flat/Dot robot ids to 2D robot; other explicit art wins, otherwise it uses `defaultArtForStyle(style)` (`apps/desktop/src/blob/art/art.ts:104-118`).
 
 A `style` prop overrides the document look for onboarding and look previews. An `art` prop overrides everything for the art sheet and the pickers. Production surfaces do neither.
 
-## The six arts
+## The four offered arts
 
 | Id | Label | Renderer | Default for |
 | --- | --- | --- | --- |
-| `robot` | 3D robot | Canvas, the heavy shaded robot | Legacy |
-| `robot-flat` | Flat robot | Inline SVG + CSS | Bitbots (Frost) |
-| `robot-pop` | Pop robot | Inline SVG + CSS | Pop |
-| `robot-dot` | Dot robot | Inline SVG + CSS | Dot |
-| `blob` | Glossy blob | Canvas blob engine, eight shapes | Blobots |
+| `robot` | 3D robot | Canvas, the heavy shaded robot | Explicit choice |
+| `robot-pop` | 2D robot | Inline SVG + CSS, four outlines | Bitbots |
+| `blob` | Glossy | Canvas blob engine, eight shapes | Blobots |
 | `painted` | Hand-painted | Inline SVG + CSS, twelve bodies | — |
 
 The robot arts share one head language but change the eyes, not the whole head:

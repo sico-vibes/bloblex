@@ -39,12 +39,12 @@
 /* Pop robot: ink outline, hard shadow, pastel shell. */
 .pop-shadow { fill: #1d1b18; }
 .pop-ink { fill: #1d1b18; }
-.pop-cap { fill: var(--bot); stroke: #1d1b18; stroke-width: 2.5; }
+.pop-cap { fill: var(--pop-trim, var(--bot)); stroke: #1d1b18; stroke-width: 2.5; }
 .pop-head { fill: var(--bot); stroke: #1d1b18; stroke-width: 3; }
 .pop-visor { fill: #1d1b18; }
 .pop-shine { fill: #fff; opacity: .22; }
-.pop-eyes rect { fill: #fffaf0; }
-.pop-eyes path { fill: none; stroke: #fffaf0; stroke-width: 2.6; stroke-linecap: round; }
+.pop-eyes rect { fill: var(--pop-screen, #fffaf0); }
+.pop-eyes path { fill: none; stroke: var(--pop-screen, #fffaf0); stroke-width: 2.6; stroke-linecap: round; }
 .pop-think-dots circle { fill: #9aa4b8; }
 .pop-type-pixels rect { fill: #9ff0c9; }
 .art-mood-typing .pop-eyes rect { fill: #9ff0c9; }
@@ -113,3 +113,6 @@
 .art-still .dot-type-a, .art-still .dot-type-b, .art-still .dot-tip, .art-still .dot-lit circle, .art-still .pb-badge { animation: none !important; transition: none !important; }
 .art-still .dot-type-b { display: none; }
 .art-still .art-type-pixels rect, .art-still .dot-wave circle { opacity: 1; }
+
+@keyframes pb-blink { 0%, 42%, 46%, 100% { transform: scaleY(1); } 44% { transform: scaleY(.1); } }
+@media (prefers-reduced-motion: no-preference) { .art-mood-idle:not(.art-still) .pb-eyes { animation: pb-blink 5.6s ease-in-out infinite; } }

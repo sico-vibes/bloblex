@@ -2,7 +2,7 @@
 
 > **What this is:** How to run, build and test Bitbots on Windows, using an isolated database.
 > **Status:** current
-> **Last updated:** 2026-10-19
+> **Last updated:** 2026-10-20
 
 These commands are the local development path. Do not point them at a live inspection database. Earlier notes in this file about a running executable lock are historical; the launcher stages a private daemon copy. A full native pass of the current tree is still Phase 7.
 
@@ -17,7 +17,7 @@ npm run desktop:dev
 
 The development script builds both `bitbotsd.exe` and `bitbots-hook.exe`, stages them as Tauri's target-triple-suffixed sidecars, then starts the native app with Vite. It defaults to the isolated `target/desktop-dev` Cargo folder, honoring an explicitly supplied `CARGO_TARGET_DIR`. The renderer never connects directly to the daemon process; Tauri holds its short-lived IPC capability and forwards authenticated calls.
 
-Current launcher source selects a free loopback development port from 1420–1435 and passes that same port to Vite, Tauri and the development CSP. It writes a generated configuration under the selected Cargo target and uses the development identifier `com.bitbots.desktop.dev` to separate development app/WebView data. This does not itself isolate the daemon database: startup verification explicitly supplies a fresh `BLOBLEX_DB_PATH`. The verified startup/rebuild result is recorded below.
+Current launcher source selects a free loopback development port from 1420–1435 and passes that same port to Vite, Tauri and the development CSP. It writes a generated configuration under the selected Cargo target and uses the development identifier `com.bitbots.desktop.dev` to separate development app/WebView data. The launcher now defaults `BLOBLEX_DB_PATH` to `dev-data/bloblex.db` under its Cargo target, retaining an explicit override (20 October 2026). The verified startup/rebuild result is recorded below.
 
 ## Build an unsigned local installer
 

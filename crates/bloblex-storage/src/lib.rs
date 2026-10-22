@@ -1277,7 +1277,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots","legacy","pop","dot"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="appearance.wallpaper" && !v.as_str().is_some_and(|s| ["lake","dusk","bloom","sand","custom"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="appearance.glass" && !v.as_str().is_some_and(|s| ["solid","balanced","clear"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if matches!(k,"appearance.font" | "appearance.monoFont") && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()<=40 && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c==b'-'))){return Err(StorageError::InvalidAgent)}
@@ -1485,10 +1485,16 @@ impl Storage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let path = path.as_ref();
         let conn = Connection::open(path)?;
-        Self::migrate(conn, Some(path))
+        Self::migrate(conn, Some(path))?.normalize_removed_theme()
     }
     pub fn open_in_memory() -> Result<Self, StorageError> {
-        Self::migrate(Connection::open_in_memory()?, None)
+        Self::migrate(Connection::open_in_memory()?, None)?.normalize_removed_theme()
+    }
+    fn normalize_removed_theme(self) -> Result<Self, StorageError> {
+        { let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+          c.execute("UPDATE settings SET value='\"bitbots\"' WHERE key='appearance.style' AND value IN ('\"legacy\"','\"pop\"','\"dot\"')", [])?;
+        }
+        Ok(self)
     }
     fn migrate(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -2319,6 +2325,54 @@ impl Storage {
         for a in changed_agents(&tx,&rt)?{if before.iter().find(|previous|previous["id"]==a["id"]).is_some_and(|previous|previous["sortOrder"]!=a["sortOrder"]){events.push(push_agent_event(&tx,"reordered",&a)?);}}
         tx.commit()?;Ok((archived,events))
     }
+    /// Includes both sides of a bot-to-bot conversation, even when archived.
+    pub fn agent_purge_sessions(&self, id: &str) -> Result<Vec<String>, StorageError> {
+        validate_agent_id(id)?;
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut statement = c.prepare("SELECT id FROM sessions WHERE agent_id=?1 OR (json_extract(data,'$.link.kind')='side' AND json_extract(data,'$.link.peerAgentId')=?1) ORDER BY id")?;
+        let ids = statement.query_map([id], |row| row.get(0))?.collect::<Result<Vec<String>, _>>()?;
+        Ok(ids)
+    }
+
+    /// One transaction: a busy related conversation prevents every deletion.
+    pub fn agent_purge(&self, id: &str) -> Result<(Vec<String>, Vec<Value>), StorageError> {
+        validate_agent_id(id)?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let agent = agent_read(&tx, id)?;
+        if agent["systemRole"].as_str() == Some("manager") || agent["locked"] == true { return Err(StorageError::AgentConflict); }
+        let sessions = {
+            let mut statement = tx.prepare("SELECT id,state FROM sessions WHERE agent_id=?1 OR (json_extract(data,'$.link.kind')='side' AND json_extract(data,'$.link.peerAgentId')=?1) ORDER BY id")?;
+            let rows = statement.query_map([id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            if rows.iter().any(|(_, state)| matches!(state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission")) { return Err(StorageError::SessionActive); }
+            rows.into_iter().map(|(id, _)| id).collect::<Vec<_>>()
+        };
+        for session in &sessions {
+            tx.execute("DELETE FROM active_turn_reservations WHERE session_id=?1", [session])?;
+            tx.execute("DELETE FROM exec_snapshots WHERE session_id=?1", [session])?;
+            tx.execute("DELETE FROM usage_valuations WHERE usage_event_id IN (SELECT id FROM usage_events WHERE session_id=?1)", [session])?;
+            for table in ["messages", "tool_calls", "file_changes", "permission_requests", "usage_events", "turns", "queued_prompts", "proposals"] {
+                tx.execute(&format!("DELETE FROM {table} WHERE session_id=?1"), [session])?;
+            }
+            tx.execute("DELETE FROM app_events WHERE json_valid(payload) AND (json_extract(payload,'$.sessionId')=?1 OR json_extract(payload,'$.session.id')=?1 OR (event_type='session.changed' AND json_extract(payload,'$.id')=?1))", [session])?;
+            tx.execute("DELETE FROM automation_runs WHERE session_id=?1", [session])?;
+            tx.execute("UPDATE automations SET enabled=0,pause_reason='conversation_deleted',reuse_session_id=NULL WHERE reuse_session_id=?1", [session])?;
+            tx.execute("DELETE FROM sessions WHERE id=?1", [session])?;
+        }
+        tx.execute("DELETE FROM automation_runs WHERE automation_id IN (SELECT id FROM automations WHERE agent_id=?1)", [id])?;
+        tx.execute("DELETE FROM automations WHERE agent_id=?1", [id])?;
+        tx.execute("DELETE FROM memory_versions WHERE record_id IN (SELECT id FROM memory_records WHERE scope='blob' AND scope_id=?1)", [id])?;
+        tx.execute("DELETE FROM memory_fts WHERE record_id IN (SELECT id FROM memory_records WHERE scope='blob' AND scope_id=?1)", [id])?;
+        tx.execute("DELETE FROM memory_records WHERE scope='blob' AND scope_id=?1", [id])?;
+        tx.execute("DELETE FROM skill_agent_settings WHERE agent_id=?1", [id])?;
+        tx.execute("DELETE FROM proposals WHERE agent_id=?1", [id])?;
+        tx.execute("DELETE FROM app_events WHERE event_type='agent.changed' AND json_extract(payload,'$.agentId')=?1", [id])?;
+        tx.execute("DELETE FROM agents WHERE id=?1", [id])?;
+        let event = push_agent_event(&tx, "deleted", &agent)?;
+        tx.commit()?;
+        Ok((sessions, vec![event]))
+    }
+
     pub fn agent_reorder(&self,runtime:&str,ids:&[String])->Result<(Vec<Value>,Vec<Value>),StorageError>{
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;if !runtime_exists(&tx,runtime)?{return Err(StorageError::AgentNotFound)}
         let current=active_ids(&tx,runtime)?; let mut supplied=ids.to_vec(); supplied.sort();let mut sorted=current.clone();sorted.sort(); if supplied!=sorted{return Err(StorageError::InvalidAgent)}
@@ -5651,6 +5705,22 @@ mod pricing_override_removal_tests {
         assert_eq!(decimal_to_minor("1.5", "JPY"), Some(2));
     }
     #[test]
+    fn removed_theme_preferences_migrate_without_removing_bots_or_conversations() {
+        for old in ["legacy", "pop", "dot"] {
+            let db = Storage::open_in_memory().unwrap();
+            db.upsert_runtime(&json!({"id":"theme-runtime","provider":"codex","status":"online"})).unwrap();
+            let agent = db.agent_create(&json!({"name":"Keep me","runtimeId":"theme-runtime"})).unwrap().0;
+            db.create_session_for_agent("theme-session", "theme-runtime", "codex", ".", "Keep this conversation", agent["id"].as_str()).unwrap();
+            db.conn.lock().unwrap().execute("INSERT INTO settings(key,value) VALUES('appearance.style',?1)", [json!(old).to_string()]).unwrap();
+            let db = db.normalize_removed_theme().unwrap();
+            assert_eq!(db.settings().unwrap()["appearance.style"], "bitbots");
+            assert!(db.agent_get(agent["id"].as_str().unwrap()).is_ok());
+            assert!(db.session_exists("theme-session").unwrap());
+            assert!(db.set_setting("appearance.style", &json!(old)).is_err());
+        }
+    }
+
+    #[test]
     fn v7_integer_minor_rate_overrides_migrate_losslessly_to_decimal_strings() {
         let dir = std::env::temp_dir().join(format!("bloblex-price-override-v8-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
@@ -5688,7 +5758,7 @@ mod tests {
     use super::*;
     #[test]
     fn appearance_values_validate() {
-        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
+        for style in ["bitbots", "blobots"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
         for wallpaper in ["lake", "dusk", "bloom", "sand", "custom"] { assert!(validate_setting_value("appearance.wallpaper", &json!(wallpaper)).is_ok()); }
         for glass in ["solid", "balanced", "clear"] { assert!(validate_setting_value("appearance.glass", &json!(glass)).is_ok()); }
         for key in ["appearance.font", "appearance.monoFont"] { for font in ["", "space-grotesk", "jersey-10"] { assert!(validate_setting_value(key, &json!(font)).is_ok()); } }

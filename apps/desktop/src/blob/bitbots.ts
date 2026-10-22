@@ -19,6 +19,7 @@ function readStyle(): ThemeStyle {
   try {
     const cached = localStorage.getItem(STYLE_KEY)
     if (isThemeStyle(cached)) return cached
+    if (cached) { localStorage.setItem(STYLE_KEY, 'bitbots'); return 'bitbots' }
     const legacy = localStorage.getItem(LEGACY_KEY)
     if (legacy === '1') return 'bitbots'
     if (legacy === '0') return 'blobots'
@@ -32,18 +33,8 @@ function readAccent(): string {
 
 let style = readStyle()
 let accent = readAccent()
-let legacyFontLoad: Promise<unknown> | undefined
 let customWallpaperUrl = ''
 const listeners = new Set<() => void>()
-
-function loadLegacyFonts() {
-  if (legacyFontLoad) return legacyFontLoad
-  legacyFontLoad = Promise.all([
-    import('@fontsource/doto/latin-700.css'), import('@fontsource/doto/latin-900.css'),
-    import('@fontsource/dm-mono/latin-400.css'), import('@fontsource/dm-mono/latin-500.css'),
-  ]).catch(() => { legacyFontLoad = undefined })
-  return legacyFontLoad
-}
 
 function applyAccent(root: HTMLElement) {
   if (accent) {
@@ -66,8 +57,7 @@ function applyDocument() {
   if (typeof document === 'undefined') return
   const root = document.documentElement
   root.dataset.style = style
-  if (style === 'legacy') root.dataset.bitbots = 'on'; else delete root.dataset.bitbots
-  if (style === 'legacy') void loadLegacyFonts()
+  delete root.dataset.bitbots
   root.dataset.wallpaper = readWallpaper()
   root.dataset.glass = readGlass()
   applyAccent(root)
@@ -78,8 +68,8 @@ applyDocument()
 export function themeStyle(): ThemeStyle { return style }
 
 export function setThemeStyle(next: ThemeStyle) {
-  style = next
-  try { localStorage.setItem(STYLE_KEY, next) } catch { /* The cache only avoids a flash. */ }
+  style = isThemeStyle(next) ? next : 'bitbots'
+  try { localStorage.setItem(STYLE_KEY, style) } catch { /* The cache only avoids a flash. */ }
   applyDocument()
   for (const listener of listeners) listener()
 }
@@ -103,9 +93,9 @@ if (typeof window !== 'undefined') {
   })
 }
 
-export function legacyPixelEnabled() { return style === 'legacy' }
+export function legacyPixelEnabled() { return false }
 /** @deprecated Use legacyPixelEnabled. */
-export function bitbotsEnabled() { return style === 'legacy' }
+export function bitbotsEnabled() { return false }
 
 export function setBitbotsEnabled(next: boolean) { setThemeStyle(next ? 'bitbots' : 'blobots') }
 

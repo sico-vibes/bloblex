@@ -46,15 +46,6 @@ describe('reduced motion audit', () => {
 })
 
 describe('Bitbots panel transitions', () => {
-  it('gives panels, dialogs, menus and the preview an eased timing function', () => {
-    const css = read('bitbots.css')
-    const eased = /\.settings-sheet[\s\S]*?\.sp-window\s*\{\s*transition-timing-function:\s*ease-out/.test(css)
-    expect(eased).toBe(true)
-    for (const selector of ['.settings-sheet', '.blob-dialog', '.menu-surface', '.select-menu', '.quick-switcher', '.look-preview', '.sp-window']) {
-      expect(css).toContain(selector)
-    }
-  })
-
   it('keeps the eased preview timing in the look picker stylesheet', () => {
     const css = read('lookPicker.css')
     expect(css).toMatch(/\.look-preview\s*\{[\s\S]*?transition-timing-function:\s*cubic-bezier/)

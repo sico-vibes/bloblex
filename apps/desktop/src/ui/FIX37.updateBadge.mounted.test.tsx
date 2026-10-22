@@ -188,4 +188,18 @@ describe('update badge', () => {
     await view.settle()
     expect(badge(view.host)?.textContent).toBe('Restart to update')
   })
+  it('shows the target and installed versions in the sidebar even at narrow widths', async () => {
+    vi.stubGlobal('matchMedia', narrowWindow())
+    h.updatesPhase.mockResolvedValue(phase({ phase: 'ready', version: '0.1.0-beta.99' }))
+    const view = mount(<UpdateBadge sidebar />); views.push(view)
+    await view.settle()
+    const update = badge(view.host) as HTMLButtonElement
+    expect(update.classList.contains('sidebar-update')).toBe(true)
+    expect(update.textContent).toContain('Update to 0.1.0-beta.99')
+    expect(update.textContent).toContain('v0.1.0-beta.36')
+    expect(update.classList.contains('is-compact')).toBe(false)
+    await act(async () => update.click())
+    expect(h.updatesInstall).toHaveBeenCalledOnce()
+  })
+
 })

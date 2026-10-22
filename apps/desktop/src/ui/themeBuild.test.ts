@@ -20,9 +20,6 @@ describe('look stylesheet loading', () => {
   it('statically imports every selectable look from the entry point', () => {
     for (const path of [
       './ui/themes/frost.css',
-      './ui/themes/pop.css',
-      './ui/themes/dot.css',
-      './ui/bitbots.css',
     ]) expect(ENTRY).toMatch(new RegExp(`import\\s+['"]${path.replaceAll('.', '\\.')}['"]`))
   })
 

@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks, runtimeAuthSummary } from './launchChecks'
 
 describe('runLaunchChecks', () => {
+  it('keeps native RPC string rejections useful instead of replacing them with a generic failure', async () => {
+    const checks = await runLaunchChecks([{ id: 'usage', label: 'Loading usage', timeoutMs: 100, run: async () => { throw 'internal: Usage totals could not be loaded.' } }], vi.fn(), new AbortController().signal)
+    expect(checks).toMatchObject([{ id: 'usage', state: 'failed', detail: 'internal: Usage totals could not be loaded.' }])
+  })
   it('hides OpenCode auth notices after a successful model load or confirmed sign-in', () => {
     const checks = [
       { id: 'auth:opencode-a', label: 'Checking OpenCode sign-in', state: 'warning', detail: 'Warning: OpenCode: sign-in could not be confirmed..' },

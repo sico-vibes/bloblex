@@ -34,15 +34,14 @@ function input(value: string, label: string) {
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; mocks.rpc.mockReset() })
 
 describe('FirstRunOnboarding', () => {
-  it('starts on the look step: Bitbots is tagged Primary, Blobots Alternative, and Continue waits for a choice', async () => {
+  it('offers only Bitbots and Blobots orbs and waits for a choice', async () => {
     const { host: mounted } = mount({ runtimes: [runtime] })
-    const cards = [...mounted.querySelectorAll<HTMLElement>('.look-card')]
-    expect(cards.map((card) => card.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
-    expect([...mounted.querySelectorAll<SVGElement>('.look-card .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
-    expect(mounted.querySelector('.look-card .blob-canvas-frame')).toBeNull()
-    expect(cards[0].textContent).toContain('Primary')
-    expect(cards[1].textContent).toContain('Alternative')
-    expect(cards.slice(2).every((card) => card.textContent?.includes('More'))).toBe(true)
+    const cards = [...mounted.querySelectorAll<HTMLElement>('.look-orb-choice')]
+    expect(cards.map((card) => card.dataset.look)).toEqual(['bitbots', 'blobots'])
+    expect([...mounted.querySelectorAll<SVGElement>('.look-orb-choice .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots'])
+    expect(mounted.querySelector('.look-orb-choice .blob-canvas-frame')).toBeNull()
+    expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual(['Bitbots', 'Blobots'])
+    expect(mounted.querySelector('.look-card-copy, .look-tag')).toBeNull()
     expect(button('Continue').disabled).toBe(true)
     expect(mounted.querySelector('.look-preview')?.getAttribute('data-open')).toBe('false')
     await act(async () => { cards[1].click(); await Promise.resolve() })

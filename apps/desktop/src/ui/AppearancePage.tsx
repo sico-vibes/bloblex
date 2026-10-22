@@ -6,7 +6,7 @@ import { THEME_LOOKS } from './appearance'
 import { AccentPicker } from './AccentPicker'
 import { useAccentColor, setAccentColor } from '../blob/bitbots'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
-import { LookOrb } from './LookOrb'
+import { LookPicker } from './LookPicker'
 import { applyAppearance, type ThemeChoice, type TextSizeChoice } from './appearance'
 import { SegmentedControl } from './SegmentedControl'
 import { setDensity as updateDensity, useDensity } from './uiPrefs'
@@ -65,14 +65,9 @@ export function AppearancePage() {
   }
   const pickGlass = async (id: typeof GLASS[number]) => { await save('appearance.glass', id); writeCache('bitbots.glass', id); setGlassValue(id); setGlass(id) }
   const pickFont = async (mono: boolean, id: string) => { await save(mono ? 'appearance.monoFont' : 'appearance.font', id); writeCache(mono ? 'bitbots.monoFont' : 'bitbots.font', id); if (mono) setMonoFont(id); else setUiFont(id); void applyFonts(mono ? uiFont : id, mono ? id : monoFont, style) }
-  const lookCard = (look: typeof THEME_LOOKS[number], small = false) => <button key={look.id} type="button" data-selected={style === look.id} onClick={() => void pickLook(look.id)}>
-    <LookOrb look={look.id} size={small ? 44 : 72} />
-    <span className="appearance-look-copy"><strong>{look.label}</strong><small>{look.description}</small></span>
-  </button>
   const fontDefaultLabel = (mono: boolean) => {
     const selectedDefault = FONT_DEFAULTS[style][mono ? 'mono' : 'ui']
     if (selectedDefault) return FONT_CATALOGUE.find((font) => font.id === selectedDefault)?.label ?? selectedDefault
-    if (style === 'legacy') return 'DM Mono'
     return mono ? 'Cascadia Mono' : 'System'
   }
   const fontPicker = (mono: boolean) => {
@@ -92,7 +87,7 @@ export function AppearancePage() {
     </div>
   }
   return <div className="appearance-page">
-    <SettingsGroup title="Look"><SettingsRow label="Choose a look" hint="Select a visual style for Bitbots." stacked><div className="appearance-primary-grid">{THEME_LOOKS.filter((look) => look.family !== 'more').map((look) => lookCard(look))}</div><h4 className="appearance-more-label">More looks</h4><div className="appearance-more-grid">{THEME_LOOKS.filter((look) => look.family === 'more').map((look) => lookCard(look, true))}</div></SettingsRow></SettingsGroup>
+    <SettingsGroup title="Look"><SettingsRow label="Choose a look" hint="Select a visual style for Bitbots." stacked><LookPicker value={style} onChange={(id) => void pickLook(id)} compact /></SettingsRow></SettingsGroup>
     <SettingsGroup title="Look options">{style === 'bitbots' ? <>
       <SettingsRow label="Wallpaper" hint="Choose the scene behind the glass." stacked><div className="wallpaper-options">{WALLPAPERS.map((id) => <button type="button" key={id} data-wallpaper={id} aria-pressed={wallpaper === id} onClick={() => void pickWallpaper(id)}><span className="wallpaper-thumb" style={{ backgroundImage: `url("${WALLPAPER_IMAGES[id]}")` }} aria-hidden="true"/>{id[0]!.toUpperCase()+id.slice(1)}</button>)}<button type="button" className="wallpaper-custom" aria-pressed={wallpaper === 'custom'} onClick={() => inDesktop ? void chooseWallpaper() : document.getElementById('wallpaper-file')?.click()}><span className="wallpaper-thumb" style={wallpaper === 'custom' && getCustomWallpaperUrl() ? { backgroundImage: `url("${getCustomWallpaperUrl()}")` } : undefined} aria-hidden="true"/>{wallpaper === 'custom' ? 'Replace image' : 'Your image'}</button>{wallpaper === 'custom' && <button type="button" onClick={async () => { await clearWallpaper(); setCustomWallpaperUrl(''); await pickWallpaper('lake') }}>Remove</button>}<input id="wallpaper-file" hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseWallpaper(event.target.files?.[0])} /></div>{wallpaperError && <small className="wallpaper-error" role="alert">{wallpaperError}</small>}</SettingsRow>
       <SettingsRow label="Glass" hint="How much of the wallpaper shows through."><SegmentedControl label="Glass" value={glass} options={GLASS.map((id) => ({ value: id, label: id[0]!.toUpperCase()+id.slice(1) }))} onChange={(id) => void pickGlass(id)} /></SettingsRow>

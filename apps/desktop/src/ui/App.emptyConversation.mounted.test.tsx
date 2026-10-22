@@ -340,4 +340,16 @@ describe('FIX38 H2 clicking a bot with no conversation', () => {
     expect(view.host.querySelector('[aria-label="Message Manager"]')).not.toBeNull()
     expect(conversationRowTitles(view.host)).not.toContain('Manager')
   })
+  it('keeps a new bot selected when an old runtime selection is echoed', async () => {
+    const handlers: Array<(id: string | null) => void> = []
+    h.listenForActiveRuntime.mockImplementation(async (handler: (id: string | null) => void) => { handlers.push(handler); return vi.fn() })
+    const view = startApp()
+    await view.settle()
+    await click(view.host.querySelector('.team-row[data-agent-id="agent-manager"]'))
+    await act(async () => { for (const handler of handlers) handler('runtime-codex'); await settleMicrotasks() })
+    const seen = await watchSelection(view, 4)
+    expect(seen).toEqual(['Manager'])
+    expect(view.host.querySelector('[aria-label="Message Manager"]')).not.toBeNull()
+  })
+
 })

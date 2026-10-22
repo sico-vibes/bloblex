@@ -99,7 +99,7 @@ export async function runLaunchChecks(steps: LaunchStep[], onChange: (checks: La
         if (signal.reason === LAUNCH_OVERALL_TIMEOUT_REASON) failOverall()
         return checks
       }
-      put({ id: step.id, label: step.label, state: 'failed', detail: error instanceof Error ? error.message : 'This check could not be completed.' })
+      put({ id: step.id, label: step.label, state: 'failed', detail: error instanceof Error ? error.message : typeof error === 'string' ? error : 'This check could not be completed.' })
       publish()
     } finally {
       signal.removeEventListener('abort', abortStage)

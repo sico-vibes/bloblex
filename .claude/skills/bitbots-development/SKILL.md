@@ -31,7 +31,7 @@ Bitbots is a Windows desktop app (Tauri 2) that runs *bots*: named, styled perso
 2. **Find the real code.** Use `references/codebase-map.md`, then search. Cite `path:line` in notes and reports.
 3. **Change the smallest correct thing**, matching the surrounding code style (dense one-line JSX and long lines are normal here; sparse comments; British-neutral sentence-case copy).
 4. **Test it**: add or update tests next to the code (`*.test.ts`, `*.mounted.test.tsx`, Rust `#[cfg(test)]`), then run the gates.
-5. **Look at it.** UI changes: check the browser preview in every look the change touches (Bitbots/Frost dark and light, Blobots, Legacy, Pop, Dot), and the production build when the change involves styles, assets or loading.
+5. **Look at it.** UI changes: check the browser preview in every look the change touches (Bitbots/Frost and Blobots, dark and light), and the production build when the change involves styles, assets or loading.
 6. **Record it**: update this skill (below), and the docs the change makes stale.
 
 ## When you are stuck, search the past first

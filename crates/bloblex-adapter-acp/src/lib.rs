@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use base64::Engine;
 use bloblex_agent_core::*;
 use bloblex_process::{prepare_command, ProcessTree, StdinWriter};
 use serde_json::{json, Value};
@@ -24,6 +25,16 @@ mod sha256;
 
 #[doc(hidden)]
 pub use sha256::sha256_hex;
+
+async fn image_prompt_content(req: &PromptRequest) -> Result<Vec<Value>, AdapterError> {
+    let mut content = vec![json!({"type":"text","text":req.text})];
+    for image in &req.attachments {
+        let bytes = tokio::fs::read(&image.path).await.map_err(|_| AdapterError::Process("An attached image is no longer readable.".into()))?;
+        if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 { return Err(AdapterError::Unsupported("An image must be smaller than 20 MB.".into())); }
+        content.push(json!({"type":"image","mimeType":image.media_type,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}));
+    }
+    Ok(content)
+}
 
 struct Conn {
     process: Arc<SharedProcess>,
@@ -63,6 +74,7 @@ struct SharedProcess {
     active_sessions: AtomicUsize,
     initialized: AtomicBool,
     load_session: AtomicBool,
+    image_prompts: AtomicBool,
     setup: Mutex<()>,
     alive: AtomicBool,
     shutdown_started: AtomicBool,
@@ -353,6 +365,7 @@ impl AcpAdapter {
             active_sessions: AtomicUsize::new(0),
             initialized: AtomicBool::new(false),
             load_session: AtomicBool::new(false),
+            image_prompts: AtomicBool::new(false),
             setup: Mutex::new(()),
             alive: AtomicBool::new(true),
             shutdown_started: AtomicBool::new(false),
@@ -460,6 +473,7 @@ impl AcpAdapter {
             "initialize",
             json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Bloblex","version":"0.1.0"}}),
         ).await?;
+        c.process.image_prompts.store(init["agentCapabilities"]["promptCapabilities"]["image"].as_bool().unwrap_or(false), Ordering::Release);
         let can_load = init["agentCapabilities"]["loadSession"].as_bool().unwrap_or(false);
         Self::notify(c, "initialized", json!({})).await?;
         c.process.load_session.store(can_load, Ordering::Release);
@@ -1178,9 +1192,6 @@ impl AgentAdapter for AcpAdapter {
     }
 
     async fn prompt(&self, handle: &SessionHandle, req: PromptRequest) -> Result<(), AdapterError> {
-        if !req.attachments.is_empty() {
-            return Err(AdapterError::Unsupported("This runtime does not accept image attachments.".into()));
-        }
         let mut c = self
             .sessions
             .lock()
@@ -1198,6 +1209,10 @@ impl AgentAdapter for AcpAdapter {
             c = self.reconnect(&handle.session_id, &c, &req.exec_options).await?;
         }
         let provider_id = c.session_id.lock().await.clone().ok_or_else(|| AdapterError::Process("ACP session missing provider id".into()))?;
+        if !req.attachments.is_empty() && !c.process.image_prompts.load(Ordering::Acquire) {
+            return Err(AdapterError::Unsupported("This coding agent did not advertise image support.".into()));
+        }
+        let prompt = image_prompt_content(&req).await?;
         Self::apply_options(&c, &provider_id, &req.exec_options, Some(&req.turn_id)).await?;
         *c.usage.lock().await = exec::UsageSnap::default();
         {
@@ -1211,7 +1226,7 @@ impl AgentAdapter for AcpAdapter {
         let result = match Self::request(
             &c,
             "session/prompt",
-            json!({"sessionId": provider_id, "prompt": [{"type": "text", "text": req.text}]}),
+            json!({"sessionId": provider_id, "prompt": prompt}),
         )
         .await
         {
@@ -1391,6 +1406,17 @@ fn resume_rejected_evidence(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn images_are_encoded_as_acp_content_blocks_without_exposing_a_local_path() {
+        let path = std::env::temp_dir().join(format!("acp-image-{}.png", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, [137,80,78,71]).await.unwrap();
+        let req = PromptRequest { turn_id:"image-test".into(), text:"Describe this".into(), exec_options:ExecOptions::default(), attachments:vec![PromptAttachment { path:path.clone(), name:"screenshot.png".into(), media_type:"image/png".into() }] };
+        let content = image_prompt_content(&req).await.unwrap();
+        assert_eq!(content, vec![json!({"type":"text","text":"Describe this"}), json!({"type":"image","mimeType":"image/png","data":"iVBORw=="})]);
+        assert!(!serde_json::to_string(&content).unwrap().contains(path.to_str().unwrap()));
+        tokio::fs::remove_file(path).await.unwrap();
+    }
 
     #[tokio::test]
     async fn activity_titles_include_the_tool_target() {

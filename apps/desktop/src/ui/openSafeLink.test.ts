@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -51,4 +52,12 @@ describe('openSafeLink', () => {
     expect(nativeBridge.invokeNative).not.toHaveBeenCalled()
     expect(nativeBridge.isNative).not.toHaveBeenCalled()
   })
+  it('grants only web URLs to the native opener, rather than an empty URL scope', () => {
+    const capability = JSON.parse(readFileSync('src-tauri/capabilities/main-links.json', 'utf8'))
+    const scope = capability.permissions.find((item: { identifier?: string }) => item.identifier === 'opener:allow-open-url')
+    expect(scope.allow).toEqual([{ url: 'https://*' }, { url: 'http://*' }])
+    expect(capability.windows).toContain('main')
+    expect(capability.windows).toContain('companion')
+  })
+
 })

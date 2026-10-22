@@ -1,14 +1,11 @@
 export type ThemeChoice = 'system' | 'dark' | 'light'
 export type TextSizeChoice = 'small' | 'default' | 'large' | 'larger'
 
-export type ThemeStyle = 'bitbots' | 'blobots' | 'legacy' | 'pop' | 'dot'
-export const THEME_STYLES: readonly ThemeStyle[] = ['bitbots', 'blobots', 'legacy', 'pop', 'dot']
-export const THEME_LOOKS: ReadonlyArray<{ id: ThemeStyle; label: string; family: 'primary' | 'alternative' | 'more'; description: string }> = [
+export type ThemeStyle = 'bitbots' | 'blobots'
+export const THEME_STYLES: readonly ThemeStyle[] = ['bitbots', 'blobots']
+export const THEME_LOOKS: ReadonlyArray<{ id: ThemeStyle; label: string; family: 'primary' | 'alternative'; description: string }> = [
   { id: 'bitbots', label: 'Bitbots', family: 'primary', description: 'Frosted glass over a wallpaper you choose.' },
   { id: 'blobots', label: 'Blobots', family: 'alternative', description: 'Soft, quiet and monochrome.' },
-  { id: 'legacy', label: 'Legacy', family: 'more', description: 'The original pixel look.' },
-  { id: 'pop', label: 'Pop', family: 'more', description: 'Retro colour, outlined cards.' },
-  { id: 'dot', label: 'Dot', family: 'more', description: 'Monochrome widgets, dot-matrix numbers.' },
 ]
 
 export function isThemeStyle(value: unknown): value is ThemeStyle {

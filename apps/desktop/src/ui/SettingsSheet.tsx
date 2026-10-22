@@ -2,6 +2,7 @@ import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
+import { SettingsSkeleton } from './SettingsSkeleton'
 import { usePlatform } from '../transport/platform'
 import type { Agent, Runtime, Snapshot } from '../types'
 import { labelize } from '../types'
@@ -497,7 +498,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
         <div className="settings-content">
           {formError && <div className="settings-banner error" role="alert"><ShieldAlert size={15} /><span>{formError}</span></div>}
           {notice && <div className="settings-banner" role="status"><Check size={14} /><span>{notice}</span></div>}
-          {loading && <div className="settings-loading">Loading settings…</div>}
+          {loading && <SettingsSkeleton />}
 
           {!loading && page === 'General' && <>
             <SettingsGroup title="System">

@@ -329,9 +329,7 @@ describe('BlobCanvas art dispatch', () => {
 
   it('follows the app look when the look names no art', () => {
     const expectations: Array<[string, string]> = [
-      ['bitbots', '[data-art="robot-flat"]'],
-      ['pop', '[data-art="robot-pop"]'],
-      ['dot', '[data-art="robot-dot"]'],
+      ['bitbots', '[data-art="robot-pop"]'],
       ['blobots', 'canvas.blob-canvas'],
     ]
     for (const [style, selector] of expectations) {

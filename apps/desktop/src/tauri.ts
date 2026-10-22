@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { UsageAnalyticsRequest } from './analyticsTypes'
 import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContract'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from './executionContract'
@@ -210,10 +210,7 @@ export async function showMainWindow(sessionId?: string | null): Promise<void> {
 
 export async function showMainSettings(sessionId?: string | null, page?: SettingsPageName): Promise<void> {
   if (!inDesktop) return
-  await invoke('show_main_settings', { sessionId: sessionId ?? await getActiveSession() })
-  // The native command shows the window and opens the sheet on its current page;
-  // a requested page rides on a second, global event the sheet listens for.
-  if (page) await emit('bloblex-open-settings', page)
+  await invoke('show_main_settings', { sessionId: sessionId ?? await getActiveSession(), page: page ?? null })
 }
 
 export async function setActiveSession(sessionId: string | null): Promise<void> {

@@ -1,4 +1,3 @@
-import { Check } from 'lucide-react'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import type { BlobMood } from '../blob/characterState'
 import { LookOrb } from './LookOrb'
@@ -7,7 +6,7 @@ import { THEME_LOOKS } from './appearance'
 import './lookPicker.css'
 
 /** The look the app ships with, in the order they are offered. */
-export const LOOKS = THEME_LOOKS.map((look) => ({ id: look.id, name: look.label, tag: look.family === 'primary' ? 'Primary' : look.family === 'alternative' ? 'Alternative' : 'More', blurb: look.description }))
+export const LOOKS = THEME_LOOKS.map((look) => ({ id: look.id, name: look.label, tag: look.family === 'primary' ? 'Primary' : 'Alternative', blurb: look.description }))
 
 /** The same default avatar colour in both looks, so only the style differs. */
 export const DEFAULT_AVATAR_COLOUR = '#b7a7f4'
@@ -27,22 +26,11 @@ export function LookPicker({ value, onChange, disabled = false, compact = false,
   compact?: boolean
   label?: string
 }) {
-  const card = (look: typeof LOOKS[number], small = false) => {
-      const selected = value === look.id
-      return <button key={look.id} type="button" role="radio" aria-checked={selected} disabled={disabled}
-        className={`look-card ${selected ? 'selected' : ''} ${value && !selected ? 'dim' : ''} ${small ? 'small' : ''}`} data-look={look.id}
-        onClick={() => onChange(look.id)}>
-        <span className={`look-tag ${look.tag === 'Primary' ? 'primary' : 'alternative'}`}>{look.tag}</span>
-        <span className="look-orb-wrap">
-          <LookOrb look={look.id} size={small ? 44 : compact ? 44 : 72} />
-        </span>
-        <span className="look-card-copy"><strong>{look.name}</strong>{!small && !compact && <small>{look.blurb}</small>}</span>
-        <span className="look-check" aria-hidden="true">{selected && <Check size={13} />}</span>
-      </button>
-  }
-  return <div className={`look-picker-wrap ${compact ? 'compact' : ''}`} role="radiogroup" aria-label={label}>
-    <div className="look-picker primary-looks">{LOOKS.filter((look) => look.tag !== 'More').map((look) => card(look))}</div>
-    <div className="more-looks-label">More looks</div>
-    <div className="look-picker more-looks">{LOOKS.filter((look) => look.tag === 'More').map((look) => card(look, true))}</div>
+  const order: ThemeStyle[] = ['bitbots', 'blobots']
+  return <div className={`look-orb-picker ${compact ? 'compact' : ''}`} role="radiogroup" aria-label={label}>
+    {order.map((id) => {
+      const look = LOOKS.find((item) => item.id === id)!
+      return <button key={id} type="button" className="look-orb-choice" data-look={id} role="radio" aria-label={look.name} aria-checked={value === id} disabled={disabled} title={look.name} onClick={() => onChange(id)}><LookOrb look={id} size={compact ? 54 : 68} /><span className="look-orb-tooltip">{look.name}</span></button>
+    })}
   </div>
 }

@@ -116,3 +116,9 @@
 @media (prefers-reduced-motion: reduce) {
   .update-progress.is-indeterminate > span { animation: none; transform: none; width: 100%; opacity: 0.55; }
 }
+
+.settings-skeleton { display: grid; gap: 28px; padding: 18px 0; }
+.settings-skeleton-group { display: grid; gap: 14px; }
+.settings-skeleton-heading { max-width: 100px; }
+.settings-skeleton-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px; border-bottom: 1px solid var(--line); }
+.settings-skeleton-row > .skeleton-text { max-width: 230px; }

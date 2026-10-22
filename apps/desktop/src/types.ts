@@ -474,6 +474,7 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
     const id = typeof payload.agentId === 'string' ? payload.agentId : undefined
     if (!id) return { ...snapshot, sequence }
     const agents = snapshot.agents ?? []
+    if (payload.action === 'deleted') return { ...snapshot, sequence, agents: agents.filter((agent) => agent.id !== id) }
     const existing = agents.find((agent) => agent.id === id)
     const projected = {
       ...(existing ?? { id, name: '', description: '', instructions: '', color: 'mint', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, createdAt: '' }),

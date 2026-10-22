@@ -72,4 +72,16 @@ describe('SafeMarkdown mounted', () => {
     expect(middleDown.defaultPrevented).toBe(true)
     expect(link.getAttribute('draggable')).toBe('false')
   })
+  it('turns a bare GitHub repository into a labelled link without fetching metadata', () => {
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    const onOpenLink = vi.fn()
+    act(() => root.render(<SafeMarkdown text="See https://github.com/hardbeat920/monocode." onOpenLink={onOpenLink} />))
+    const link = host.querySelector<HTMLAnchorElement>('a.markdown-repo-link')!
+    expect(link.textContent).toBe('GitHub · hardbeat920/monocode')
+    expect(link.href).toBe('https://github.com/hardbeat920/monocode')
+    expect(host.textContent?.endsWith('.')).toBe(true)
+    act(() => link.click())
+    expect(onOpenLink).toHaveBeenCalledExactlyOnceWith(link.href)
+  })
+
 })

@@ -64,7 +64,7 @@ import { BlobPage, ConfirmDialog } from './BlobPage'
 import { DictationButton } from './DictationButton'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
 import { configureDictation, DEFAULT_SPEECH_MODEL_ID, normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineInfo } from './dictation'
-import { UpdateAvailableBanner, useMainUpdateOffer } from './UpdateBanner'
+import { ArchivedBots } from './ArchivedBots'
 import { UpdateBadge } from './UpdateBadge'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
 import { ProfileMenu, readProfileName, saveProfileName, syncProfileName } from './ProfileMenu'
@@ -289,6 +289,8 @@ export function App() {
   const [baseline, setBaseline] = useState<AgentDraft | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [remoteNotice, setRemoteNotice] = useState<string | null>(null)
+  const [archivedBotsOpen, setArchivedBotsOpen] = useState(false)
+  const [purgeTarget, setPurgeTarget] = useState<Agent | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<Agent | null>(null)
   const [sessionDeleteTarget, setSessionDeleteTarget] = useState<Session | null>(null)
   const [rosterAnnouncement, setRosterAnnouncement] = useState('')
@@ -320,7 +322,6 @@ export function App() {
   const [settingsSheet, setSettingsSheet] = useState(false)
   const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>('General')
   const [settingsFocus, setSettingsFocus] = useState<null | 'updates'>(null)
-  const updateOffer = useMainUpdateOffer(companion)
   const now = useClock(10_000)
   const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
@@ -359,6 +360,7 @@ export function App() {
       const seen = agentEventSeq.current.get(agentId)
       if (seen !== undefined && eventSequence <= seen) continue
       agentEventSeq.current.set(agentId, eventSequence)
+      if (event.payload.action === 'deleted') continue
       void rpc<{ agent?: Agent }>('agent.get', { agentId }).then(({ agent }) => {
         if (!agent?.id) return
         const latest = agentEventSeq.current.get(agent.id)
@@ -1160,13 +1162,8 @@ export function App() {
     void listenForActiveRuntime((runtimeId) => {
       const list = snapshotRef.current?.agents ?? []
       const current = list.find((agent) => agent.id === selectedAgentIdRef.current)
-      if (!current) { setSelectedRuntimeId(runtimeId); return }
-      if (!runtimeId || current.runtimeId === runtimeId) return
-      const next = agentsForRuntime(list, runtimeId)[0]
-      if (!next) return
-      setSelectedAgentId(next.id)
-      setSelectedRuntimeId(next.runtimeId)
-      setSelectedSessionId(agentSessions(snapshotRef.current?.sessions ?? [], next.id)[0]?.id ?? null)
+      // Runtime echoes are transport state, not a request to select another bot.
+      if (!current) setSelectedRuntimeId(runtimeId)
     }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
     return () => { cancelled = true; unlisten?.() }
   }, [])
@@ -1361,7 +1358,7 @@ export function App() {
             node?.focus()
           }, 0)
           if (blobPage && blobPage.agentId === selectedAgentId) {
-            setArchiveNotice(`Archived “${name}”. Its conversations stay saved. Restoring a ${entityNoun(themeStyle())} is not available yet.`)
+            setArchiveNotice(`Archived “${name}”. Its conversations stay saved. Restore it from Archived bots in your profile menu.`)
             setBlobPage(null)
           }
         }
@@ -1370,7 +1367,7 @@ export function App() {
     if (editorId && editorId !== selectedAgentId) {
       const editor = list.find((agent) => agent.id === editorId)
       if (editor?.archived) {
-        setArchiveNotice(`Archived “${editor.name}”. Its conversations stay saved. Restoring a ${entityNoun(themeStyle())} is not available yet.`)
+        setArchiveNotice(`Archived “${editor.name}”. Its conversations stay saved. Restore it from Archived bots in your profile menu.`)
         setBlobPage(null)
       }
     }
@@ -1916,23 +1913,8 @@ export function App() {
       })
     }
   }
-  const handleComposerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
-    if (!imagesSupported) return
-    const directFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
-    const itemFiles = Array.from(event.clipboardData.items ?? [])
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null)
-    const files = directFiles.length ? directFiles : itemFiles
-    if (files.length) {
-      event.preventDefault()
-      addAttachments(files)
-      return
-    }
-    // Text pastes belong to the textarea. WebViews often report screenshot
-    // pastes as an empty event, so read the image from the native clipboard.
-    if (event.clipboardData.getData?.('text/plain')) return
-    event.preventDefault()
+  const pasteNativeComposerImage = () => {
+    if (!imagesSupported || !inDesktop) return
     const generation = ++clipboardReadGeneration.current
     const sessionId = selectedSessionIdRef.current
     setClipboardReadPending(true)
@@ -1950,6 +1932,27 @@ export function App() {
       .finally(() => {
         if (generation === clipboardReadGeneration.current) setClipboardReadPending(false)
       })
+  }
+  const handleComposerPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    if (!imagesSupported) return
+    const directFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
+    const itemFiles = Array.from(event.clipboardData.items ?? [])
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    const files = directFiles.length ? directFiles : itemFiles
+    if (files.length) {
+      clipboardReadGeneration.current += 1
+      setClipboardReadPending(false)
+      event.preventDefault()
+      addAttachments(files)
+      return
+    }
+    // Text pastes belong to the textarea. WebViews often report screenshot
+    // pastes as an empty event, so read the image from the native clipboard.
+    if (event.clipboardData.getData?.('text/plain')) return
+    event.preventDefault()
+    pasteNativeComposerImage()
   }
   useEffect(() => {
     clipboardReadGeneration.current += 1
@@ -2329,7 +2332,7 @@ export function App() {
     const timer = window.setInterval(() => setQueueNowMs(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [hasScheduledPrompt])
-  const imagesSupported = ['claude', 'codex'].includes(String(selectedRuntime?.provider ?? '').toLowerCase())
+  const imagesSupported = ['claude', 'codex', 'opencode'].includes(String(selectedRuntime?.provider ?? '').toLowerCase())
   const sessionQuota = (snapshot?.quotas ?? []).find((item) => String(item.provider) === String(selectedRuntime?.provider ?? '').toLowerCase()) ?? null
   const selectedModelLock = selectedSession?.modelLock
   const contextModel = selectedModelLock && Object.prototype.hasOwnProperty.call(selectedModelLock, 'model')
@@ -2486,6 +2489,7 @@ export function App() {
           onCreateProject: () => void createProject(),
           onEdit: openEdit,
           onArchive: setArchiveTarget,
+          onDeleteBot: setPurgeTarget,
           onDuplicate: (agent) => void duplicateAgent(agent),
           onExportBlob: (agent) => void exportBlob(agent),
           onRename: (agent) => setTextPrompt({ title: `Rename ${agent.name}`, label: `${Noun} name`, value: agent.name, confirmLabel: 'Rename', onSubmit: async (name) => { if (experiments.undo) await renameBlob(agent, name, agent.name); else await renameAgent(agent, name) } }),
@@ -2507,6 +2511,7 @@ export function App() {
         <RemoteChip onOpen={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} />
         <SidebarUsage quotas={snapshot?.quotas ?? []} onOpen={() => void showUsage()} />
         {platform.companion && <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" title={`Keep your ${noun} on screen while you work`} onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>}
+        {platform.updater && <UpdateBadge sidebar />}
         <ProfileMenu
           connection={connection}
           onShortcuts={experiments.shortcuts ? () => setShortcutsOpen(true) : undefined}
@@ -2516,6 +2521,7 @@ export function App() {
           onSchedules={() => { setAnalyticsOpen(false); setTasksOpen(false); setSchedulesAgentId(null); setSchedulesOpen(true) }}
           onRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }}
           onBackup={() => { setSettingsInitialPage('Backup'); setSettingsFocus(null); setSettingsSheet(true) }}
+          onArchivedBots={() => setArchivedBotsOpen(true)}
           onWhatsNew={() => setWhatsNewOpen(true)}
           schedulesActive={schedulesOpen}
           onSettings={() => { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }}
@@ -2528,21 +2534,20 @@ export function App() {
         : <aside className="conversations-panel" aria-hidden="true" />}
 
       <section className="conversation-pane">
-        {platform.updater && updateOffer.version && <UpdateAvailableBanner version={updateOffer.version} onView={() => { setSettingsInitialPage('General'); setSettingsFocus('updates'); setSettingsSheet(true) }} onLater={updateOffer.dismiss} />}
-        {(launchWarnings.length > 0 || discoveryStatus.retrying) && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} retrying={discoveryStatus.retrying} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
+        {(launchWarnings.length > 0 || discoveryStatus.retrying) && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} details={launchChecks.filter((check) => check.state === 'warning' || check.state === 'failed').map((check) => check.detail.startsWith(`${check.label}:`) ? check.detail : `${check.label}: ${check.detail}`).join('\n')} retrying={discoveryStatus.retrying} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
         {discoveryConfirmation && <aside className="launch-scan-confirmation" role="status">{discoveryConfirmation}</aside>}
         {tasksOpen ? <TasksView agents={agents} projects={projects} runtimes={runtimes} connected={connection === 'connected'} onBack={() => setTasksOpen(false)} onOpenSession={(sessionId) => { setTasksOpen(false); const session = sessions.find((item) => item.id === sessionId); if (session) { setSelectedAgentId(session.agentId || null); setSelectedSessionId(session.id) } }} /> : schedulesOpen ? <SchedulesView automations={snapshot?.automations ?? []} agents={agents} connected={connection === 'connected'} paused={schedulesPaused} nowMs={schedulesNowMs} agentId={schedulesAgentId} loadError={schedulesError} onBack={() => setSchedulesOpen(false)} onCreate={createAutomation} onUpdate={updateAutomation} onSetEnabled={setAutomationEnabled} onRunNow={runAutomationNow} onDelete={deleteAutomation} onLoadRuns={loadAutomationRuns} onPreview={previewAutomation} onSetPaused={setAutomationsPaused} onOpenSession={openAutomationSession} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} onOpenMemory={() => { setSettingsInitialPage('Memory'); setSettingsFocus(null); setSettingsSheet(true) }} onOpenSkills={() => { setSettingsInitialPage('Skills'); setSettingsFocus(null); setSettingsSheet(true) }} changes={draft && baseline ? changedFields(draft, baseline) : []} onDuplicate={editingAgent ? () => void duplicateAgent(editingAgent) : undefined} onExport={editingAgent ? () => void exportBlob(editingAgent) : undefined} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
         <header className="chat-header">
           <div className="chat-title">
             {activeSelectedAgent && !convosOpen && !sideSession && <button className="icon-button chat-convos-toggle" title="Show conversations" aria-label="Show conversations" onClick={() => setConvosVisible(true)}><PanelLeft size={16} /></button>}
             {sideSession
-              ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} permission={sideAgent && <PermissionModeControl session={sideSession} agent={sideAgent} disabled={connection !== 'connected' || sideAgent.locked === true} locked={sideAgent.locked === true} note={`Applies to this ${noun}, from the next turn.`} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />} />
+              ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} />
               : activeSelectedAgent
                 ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{selectedSession && <ConversationCrumb project={currentProjectName} title={selectedSession.title && selectedSession.title !== activeSelectedAgent.name ? selectedSession.title : 'New chat'} />}</>
                 : hasActiveBlobs ? <strong className="chat-title-text">{agentName}</strong> : null}
           </div>
           <div className="header-actions" hidden={!hasActiveBlobs && !selectedSession}>
-            <UpdateBadge />
+
             <ApprovalPill mode={headerMode} />
             {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
@@ -2621,7 +2626,7 @@ export function App() {
               {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
                 if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
                 if (slash && slashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : slashCandidates.length - 1)) % slashCandidates.length }); return }
@@ -2733,7 +2738,9 @@ export function App() {
         }
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
-      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restoring a " + noun + " is not available yet."} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
+      {archivedBotsOpen && <ArchivedBots onClose={() => setArchivedBotsOpen(false)} onRestore={restoreAgent} onDelete={setPurgeTarget} />}
+      {purgeTarget && <ConfirmDialog title={`Permanently delete ${agents.find((agent) => agent.id === purgeTarget.id)?.name || purgeTarget.name || 'this bot'}?`} body="This permanently removes the bot, all its conversations, and every side-conversation it took part in, including those shown under other bots. Its scheduled automations and private memory are also removed. This cannot be undone. Project files and the coding agent's own history are kept. Stop any running work first." confirmLabel="Delete bot and conversations" cancelLabel="Keep bot" holdToConfirm successTitle="Bot deleted" successBody="The bot and its conversations were permanently removed from Bitbots." onConfirm={async () => { await rpc('agent.purge', { agentId: purgeTarget.id, confirm: true }); await refresh() }} onComplete={() => setPurgeTarget(null)} onCancel={() => setPurgeTarget(null)} />}
+      {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restore it from Archived bots in your profile menu."} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody={experiments.undo ? "Deletion is scheduled. Use Undo within eight seconds to keep the conversation." : "This conversation and its messages were removed from Bitbots."} onConfirm={async () => { if (experiments.undo) await deleteConversation(sessionDeleteTarget); else await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {textPrompt && <TextPromptDialog {...textPrompt} onCancel={() => setTextPrompt(null)} onSubmit={async (value) => { try { await textPrompt.onSubmit(value); setTextPrompt(null) } catch (reason) { setError(messageOf(reason)) } }} />}
       {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); const memberIds = agents.filter((agent) => agent.projectId === project.id).map((agent) => agent.id); if (experiments.undo) void removeProject(project, memberIds); else void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}

@@ -59,11 +59,11 @@ export function WorkingBotsPanel({ sessions, agents, selectedId, onOpen }: { ses
     const title = session.link?.topic?.trim() || session.title?.trim() || 'Assigned task'
     return <li key={session.id}><button type="button" data-task-id={session.id} className={`working-bot-row${selectedId === session.id ? ' active' : ''}`} aria-current={selectedId === session.id ? 'page' : undefined} onClick={() => onOpen(session.id)} title={`${name}: ${title}`}>
       {agent && <BlobCanvas decorative color={agentColorHex(agent.color)} size={22} mini mood="idle" look={agentLook(agent)} label={name} />}
-      <span className="working-bot-copy"><strong>{name}</strong><span className="working-bot-title">{title}</span><span className="working-bot-status">{status}<span aria-hidden="true"> · </span><time aria-label="Elapsed time">{taskElapsed(session, status, now)}</time></span></span>
+      <span className="working-bot-copy"><span className="working-bot-line"><strong>{name}</strong><span className="working-bot-status">{status}<span aria-hidden="true"> · </span><time aria-label="Elapsed time">{taskElapsed(session, status, now)}</time></span></span><span className="working-bot-title">{title}</span></span>
     </button></li>
   }
   return <section className="working-bots" aria-label="Working bots">
     <button type="button" className="working-bots-heading" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}><ChevronRight size={12} className={expanded ? 'open' : ''} aria-hidden="true" /><strong>Working bots</strong><span>{active.length}</span></button>
-    {expanded && <><ul>{active.map(row)}</ul>{finished.length > 0 && <details><summary>{finished.length} finished</summary><ul>{finished.map(row)}</ul></details>}</>}
+    {expanded && <><ul>{active.map(row)}</ul>{finished.length > 0 && <details><summary><ChevronRight size={12} aria-hidden="true" /><span>{finished.length} finished</span></summary><ul>{finished.map(row)}</ul></details>}</>}
   </section>
 }

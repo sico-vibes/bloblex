@@ -23,22 +23,29 @@ describe('theme style switch', () => {
     expect(document.documentElement.dataset.glass).toBe('solid')
   })
 
-  it('keeps the bitbots marker exclusive to Legacy and applies wallpaper and glass preferences', async () => {
+  it('keeps the retired pixel marker absent and applies wallpaper and glass preferences', async () => {
     const bitbots = await loadModule()
-    for (const look of ['bitbots','blobots','pop','dot'] as const) {
+    for (const look of ['bitbots','blobots'] as const) {
       bitbots.setThemeStyle(look)
       expect(document.documentElement.dataset.style).toBe(look)
       expect(document.documentElement.dataset.bitbots).toBeUndefined()
     }
-    bitbots.setThemeStyle('legacy')
-    expect(document.documentElement.dataset.bitbots).toBe('on')
-    expect(bitbots.bitbotsEnabled()).toBe(true)
+    expect(bitbots.bitbotsEnabled()).toBe(false)
     bitbots.setWallpaper('dusk')
     bitbots.setGlass('clear')
     expect(document.documentElement.dataset.wallpaper).toBe('dusk')
     expect(document.documentElement.dataset.glass).toBe('clear')
     expect(localStorage.getItem('bitbots.wallpaper')).toBe('dusk')
     expect(localStorage.getItem('bitbots.glass')).toBe('clear')
+  })
+
+  it.each(['legacy', 'pop', 'dot'])('migrates a removed cached look %s to Bitbots', async (look) => {
+    localStorage.setItem('bitbots.style', look)
+    localStorage.setItem('bloblex.bitbots', '0')
+    const bitbots = await loadModule()
+    expect(bitbots.themeStyle()).toBe('bitbots')
+    expect(localStorage.getItem('bitbots.style')).toBe('bitbots')
+    expect(document.documentElement.dataset.bitbots).toBeUndefined()
   })
 
   it('reads the new cache key first', async () => {
@@ -74,8 +81,6 @@ describe('theme style switch', () => {
     expect(document.documentElement.dataset.bitbots).toBeUndefined()
     expect(localStorage.getItem('bitbots.style')).toBe('bitbots')
 
-    bitbots.setThemeStyle('legacy')
-    expect(document.documentElement.dataset.bitbots).toBe('on')
 
     bitbots.setBitbotsEnabled(false)
     expect(bitbots.bitbotsEnabled()).toBe(false)

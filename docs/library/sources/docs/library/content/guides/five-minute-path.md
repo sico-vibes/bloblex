@@ -26,7 +26,7 @@ The first launch may take a few seconds while the coding agents are checked. If 
 
 Onboarding has four steps:
 
-1. **Choose your look.** Bitbots (Frost) and Blobots are the two large cards; Legacy, Pop and Dot are under More looks. Each card shows an orb. You can change this at any time in Settings › Appearance.
+1. **Choose your look.** Choose the Bitbots (Frost) or Blobots orb. Its name appears on hover or keyboard focus. You can change this at any time in Settings › Appearance.
 2. **What should we call you?** The name stays on this device and is used in the app and in what the Manager knows about you.
 3. **Coding agents.** Bitbots lists the three tools it can find and says whether each looks signed in. Install a missing tool in another terminal, then press **Scan again**.
 4. **Meet your Manager.** Give the Manager a look, a name and a model. It is the permanent bot that plans across projects.

@@ -2,7 +2,7 @@
 
 > **What this is:** how to build, run and check Bitbots on Windows, and the lane rules this repository uses.
 > **Status:** current; from `README.md`, `docs/guides/windows-development.md` and the AGENTS.md amendments of 12–19 October 2026
-> **Last updated:** 2026-10-19
+> **Last updated:** 2026-10-20
 
 ## Purpose
 
@@ -28,7 +28,7 @@ npm run desktop:dev
 
 `desktop:dev` builds `bitbotsd.exe` and `bitbots-hook.exe`, stages them as Tauri's target-triple-suffixed sidecars, and starts the native app with Vite. It defaults to `target/desktop-dev` and honours an explicit `CARGO_TARGET_DIR`.
 
-The launcher picks a free loopback port from 1420–1435 and passes it to Vite, Tauri and the development CSP. It uses the development identifier `com.bitbots.desktop.dev`, which separates development app data from the installed app. It does not isolate the daemon database by itself: startup supplies a fresh `BLOBLEX_DB_PATH`.
+The launcher picks a free loopback port from 1420–1435 and passes it to Vite, Tauri and the development CSP. It uses the development identifier `com.bitbots.desktop.dev`, which separates development app data from the installed app. The launcher also defaults `BLOBLEX_DB_PATH` to `dev-data/bloblex.db` under its Cargo target, retaining an explicit override (20 October 2026).
 
 Never point development or tests at `%LOCALAPPDATA%\Bitbots`. That is the user's real store. A test that writes there is a bug.
 

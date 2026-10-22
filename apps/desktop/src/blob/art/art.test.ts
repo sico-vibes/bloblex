@@ -10,7 +10,7 @@ const MOODS: BlobMood[] = ['idle', 'online', 'thinking', 'working', 'tool_activi
 describe('bot art', () => {
   it('offers the six arts under two groups with labels', () => {
     expect([...BOT_ARTS]).toEqual(['robot', 'robot-flat', 'robot-pop', 'robot-dot', 'blob', 'painted'])
-    expect([...ROBOT_ARTS]).toEqual(['robot', 'robot-flat', 'robot-pop', 'robot-dot'])
+    expect([...ROBOT_ARTS]).toEqual(['robot', 'robot-pop'])
     expect([...BLOB_ARTS]).toEqual(['blob', 'painted'])
     for (const art of BOT_ARTS) expect(ART_LABELS[art]).toBeTruthy()
   })
@@ -25,19 +25,21 @@ describe('bot art', () => {
   })
 
   it('maps the app look to a default art, and anything else to a blob', () => {
-    expect(defaultArtForStyle('bitbots')).toBe('robot-flat')
+    expect(defaultArtForStyle('bitbots')).toBe('robot-pop')
     expect(defaultArtForStyle('blobots')).toBe('blob')
-    expect(defaultArtForStyle('legacy')).toBe('robot')
-    expect(defaultArtForStyle('pop')).toBe('robot-pop')
-    expect(defaultArtForStyle('dot')).toBe('robot-dot')
+    expect(defaultArtForStyle('legacy')).toBe('blob')
+    expect(defaultArtForStyle('pop')).toBe('blob')
+    expect(defaultArtForStyle('dot')).toBe('blob')
     expect(defaultArtForStyle('mystery')).toBe('blob')
     expect(defaultArtForStyle(undefined)).toBe('blob')
   })
 
   it('lets an explicit choice override the app look, and ignores a bad one', () => {
     expect(resolveArt({ art: 'painted' }, 'bitbots')).toBe('painted')
-    expect(resolveArt({}, 'dot')).toBe('robot-dot')
-    expect(resolveArt({ art: 'nonsense' }, 'legacy')).toBe('robot')
+    expect(resolveArt({}, 'bitbots')).toBe('robot-pop')
+    expect(resolveArt({ art: 'robot-flat' }, 'blobots')).toBe('robot-pop')
+    expect(resolveArt({ art: 'robot-dot' }, 'blobots')).toBe('robot-pop')
+    expect(resolveArt({ art: 'nonsense' }, 'bitbots')).toBe('robot-pop')
   })
 
   it('derives the painted body from the blob shape and prefers an explicit one', () => {

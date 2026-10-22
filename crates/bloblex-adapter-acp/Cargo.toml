@@ -3,6 +3,7 @@ name = "bloblex-adapter-acp"
 version.workspace = true
 edition.workspace = true
 [dependencies]
+base64.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 bloblex-agent-core = { path = "../bloblex-agent-core" }

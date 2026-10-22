@@ -465,18 +465,54 @@ mod approval_overlay_tests {
 
 #[tauri::command]
 async fn daemon_rpc(
+    app: AppHandle,
     state: State<'_, AppState>,
     method: String,
     params: Value,
 ) -> Result<Value, String> {
-    let conn = connection(&state)?;
-    let result = rpc_call(&conn, &method, params).await?;
+    let first = match connection(&state) {
+        Ok(conn) => rpc_call(&conn, &method, params.clone()).await,
+        Err(error) => Err(error),
+    };
+    let result = match first {
+        Err(error) if retry_startup_read(&method, &error) => {
+            start_daemon(&app, &state)?;
+            let current = connection(&state)?;
+            rpc_call(&current, &method, params).await?
+        }
+        other => other?,
+    };
     if method == "app.snapshot" {
         if let Some(sequence) = result.get("sequence").and_then(Value::as_u64) {
             state.event_cursor.store(sequence, Ordering::Release);
         }
     }
     Ok(result)
+}
+
+/// A lost transport can be retried once for observational startup calls only.
+fn retry_startup_read(method: &str, error: &str) -> bool {
+    matches!(method, "app.snapshot" | "runtime.refresh" | "runtime.models" | "runtime.capabilities" | "usage.summary" | "settings.get")
+        && (error.starts_with("Daemon request failed:")
+            || error == "The local Bitbots daemon is not running."
+            || error == "The local Bitbots daemon stopped unexpectedly.")
+}
+
+#[cfg(test)]
+mod startup_transport_tests {
+    use super::retry_startup_read;
+
+    #[test]
+    fn retries_only_startup_reads_after_a_transport_loss() {
+        for method in ["app.snapshot", "runtime.refresh", "runtime.models", "runtime.capabilities", "usage.summary", "settings.get"] {
+            assert!(retry_startup_read(method, "Daemon request failed: connection refused"));
+            assert!(!retry_startup_read(method, "unauthorized: capability refused"));
+            assert!(!retry_startup_read(method, "invalid_argument: bad params"));
+        }
+        for method in ["session.prompt", "agent.purge", "settings.set", "daemon.shutdown"] {
+            assert!(!retry_startup_read(method, "Daemon request failed: connection refused"));
+        }
+    }
 }
 
 #[tauri::command]
@@ -1313,9 +1349,9 @@ fn show_main_window(app: AppHandle, session_id: Option<String>) -> Result<(), St
 }
 
 #[tauri::command]
-fn show_main_settings(app: AppHandle, session_id: Option<String>) -> Result<(), String> {
+fn show_main_settings(app: AppHandle, session_id: Option<String>, page: Option<String>) -> Result<(), String> {
     show_main_window(app.clone(), session_id)?;
-    app.emit("bloblex-open-settings", ())
+    app.emit("bloblex-open-settings", page)
         .map_err(|error| error.to_string())
 }
 
@@ -2591,7 +2627,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = app.emit("bloblex-pause-all-requested", ());
                 }
                 "settings" => {
-                    let _ = show_main_settings(app.clone(), None);
+                    let _ = show_main_settings(app.clone(), None, None);
                 }
                 "quit" => {
                     if let Some(state) = app.try_state::<AppState>() {

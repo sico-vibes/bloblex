@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
+import { version as currentVersion } from '../../package.json'
 import {
   BADGE_FAILED_LABEL, BADGE_RESTART_LABEL, BADGE_RESTART_SHORT_LABEL, IDLE_UPDATE_PHASE,
   describeUpdatePhase, type UpdatePhaseState,
@@ -69,9 +70,10 @@ function useCompactUpdateBadge(): boolean {
   return compact
 }
 
-export function UpdateBadge() {
+export function UpdateBadge({ sidebar = false }: { sidebar?: boolean }) {
   const state = useUpdatePhase()
-  const compact = useCompactUpdateBadge()
+  const narrow = useCompactUpdateBadge()
+  const compact = !sidebar && narrow
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
 
@@ -104,18 +106,18 @@ export function UpdateBadge() {
     // FIX39 P5 follow-up: at a narrow window the badge keeps only the ring and a
     // short label, so it can never reach the conversation title.
     const short = percent == null ? 'Updating…' : `${percent}%`
-    return <span className={`update-badge is-downloading${compact ? ' is-compact' : ''}`} data-update-badge="downloading" role="status" aria-label={label} title={tooltip}>
+    return <span className={`update-badge is-downloading${sidebar ? ' sidebar-update' : ''}${compact ? ' is-compact' : ''}`} data-update-badge="downloading" role="status" aria-label={label} title={tooltip}>
       <ProgressRing percent={percent} />
       <span className="update-badge-label">{compact ? short : label}</span>
     </span>
   }
 
   if (state.phase === 'ready') {
-    return <button type="button" className={`update-badge-button primary-button small${compact ? ' is-compact' : ''}`} data-update-badge="ready" title={compact ? `${BADGE_RESTART_LABEL} — ${tooltip}` : tooltip} aria-label={BADGE_RESTART_LABEL} disabled={busy} onClick={() => void restart()}>{compact && <RotateCw size={13} aria-hidden="true" />}{compact ? BADGE_RESTART_SHORT_LABEL : BADGE_RESTART_LABEL}</button>
+    return <button type="button" className={`update-badge-button primary-button small${sidebar ? ' sidebar-update' : ''}${compact ? ' is-compact' : ''}`} data-update-badge="ready" title={sidebar ? 'Restart Bitbots to install the downloaded update' : compact ? `${BADGE_RESTART_LABEL} — ${tooltip}` : tooltip} aria-label={BADGE_RESTART_LABEL} disabled={busy} onClick={() => void restart()}>{(compact || sidebar) && <RotateCw size={13} aria-hidden="true" />}<span>{sidebar && state.version ? `Update to ${state.version}` : compact ? BADGE_RESTART_SHORT_LABEL : BADGE_RESTART_LABEL}</span>{sidebar && <small>v{currentVersion}</small>}</button>
   }
 
   if (state.phase === 'error') {
-    return <button type="button" className="update-badge-button quiet" data-update-badge="error" title={tooltip} onClick={retry}>{BADGE_FAILED_LABEL}</button>
+    return <button type="button" className={`update-badge-button quiet${sidebar ? ' sidebar-update' : ''}`} data-update-badge="error" title={tooltip} onClick={retry}>{BADGE_FAILED_LABEL}</button>
   }
 
   return null

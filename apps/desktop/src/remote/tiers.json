@@ -931,10 +931,18 @@
       "minTier": null,
       "why": "Run history is not projected to remote devices in this slice.",
       "params": null
+    },
+    {
+      "method": "agent.purge",
+      "class": "never",
+      "minTier": null,
+      "why": "Permanent bot and conversation deletion is local-only.",
+      "params": null
     }
   ],
   "events": {
-    "message.delta": "allow",    "message.completed": "allow",
+    "message.delta": "allow",
+    "message.completed": "allow",
     "session.changed": "allow",
     "session.deleted": "allow",
     "skills.changed": "allow",

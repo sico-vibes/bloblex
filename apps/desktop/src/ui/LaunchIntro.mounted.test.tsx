@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { LaunchIntro } from './LaunchIntro'
+import { LaunchIntro, LaunchWarnings } from './LaunchIntro'
 import { setThemeStyle } from '../blob/bitbots'
 import type { LaunchCheck } from './launchChecks'
 import type { BlobCanvasProps } from '../blob/BlobCanvas'
@@ -26,10 +26,10 @@ afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = n
 beforeEach(() => { setThemeStyle('blobots') })
 
 describe('LaunchIntro', () => {
-  it('uses pixel welcome details only for Legacy', () => {
-    setThemeStyle('legacy')
+  it('does not use the retired pixel welcome in either supported look', () => {
+    setThemeStyle('blobots')
     const { host: mounted } = mount([{ id: 'service', label: 'Connecting', state: 'running', detail: 'Checking' }])
-    expect(mounted.querySelector('.launch-pixel-scan')).not.toBeNull()
+    expect(mounted.querySelector('.launch-pixel-scan')).toBeNull()
     act(() => setThemeStyle('bitbots'))
     expect(mounted.querySelector('.launch-pixel-scan')).toBeNull()
   })
@@ -43,7 +43,7 @@ describe('LaunchIntro', () => {
   })
 
   it('uses the active look art for its greeting and completes through the canvas callback', () => {
-    setThemeStyle('dot')
+    setThemeStyle('bitbots')
     const { host: mounted, complete } = mount([{ id: 'service', label: 'Connecting', state: 'ok', detail: 'Connected' }])
     const canvas = mounted.querySelector<HTMLCanvasElement>('.launch-blob-stage canvas.blob-canvas')
     expect(canvas?.dataset.greeting).toBe('true')
@@ -82,5 +82,16 @@ describe('LaunchIntro', () => {
     expect(second.complete).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
     vi.useRealTimers()
+  })
+})
+
+
+describe('startup warning context', () => {
+  it('names the failed step and keeps local transport addresses out of the notice', () => {
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    act(() => root!.render(<LaunchWarnings warnings={['Connection failed']} details="Loading usage and limits: Daemon request failed: error sending request for url (http://127.0.0.1:12345/v1/rpc)" onSettings={vi.fn()} onDismiss={vi.fn()} />))
+    expect(host.textContent).toContain('Loading usage and limits: The local service connection was interrupted.')
+    expect(host.querySelector('[role="status"]')?.getAttribute('title')).not.toContain('127.0.0.1')
+    expect(host.textContent).not.toContain('/v1/rpc')
   })
 })

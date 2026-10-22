@@ -1,3 +1,4 @@
+import { resolveBot } from '../look'
 import { useId, type CSSProperties } from 'react'
 import type { BlobCanvasProps } from '../BlobCanvas'
 import { ArtFrame, artAria, artBox, prefersReducedMotion, useArtMood } from './shared'
@@ -6,7 +7,9 @@ const THINK_DOTS = [27, 32, 37]
 const TYPE_PIXELS = [0, 1, 2, 3, 4]
 
 /** The pop robot: ink outline, hard offset shadow, pastel shell and a cap. */
-export function PopRobot({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, onGreetingComplete }: BlobCanvasProps) {
+export function PopRobot({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, look = null, onGreetingComplete }: BlobCanvasProps) {
+  const bot = resolveBot(look, color)
+  const head = (className: string) => bot.shape === 'circle' ? <ellipse className={className} cx="32" cy="35" rx="26" ry="24" /> : bot.shape === 'hexagon' ? <path className={className} d="M19 12H45L59 34L45 57H19L5 34Z" /> : <rect className={className} x={bot.shape === 'square' ? 10 : 6} y="12" width={bot.shape === 'square' ? 44 : 52} height="45" rx={bot.shape === 'square' ? 8 : 14} />
   const uid = useId().replace(/:/g, '')
   const { artMood, effectiveMood } = useArtMood({ mood, fileStage, greeting, onGreetingComplete })
   const { width, height } = artBox(size, greeting)
@@ -18,18 +21,18 @@ export function PopRobot({ color, size = 52, mood = 'idle', className = '', labe
       id={`pop-${uid}`}
       className={`art-svg art-mood-${artMood}${still ? ' art-still' : ''}`}
       viewBox="0 0 64 64"
-      style={{ width: renderSize, height: renderSize, '--bot': color } as CSSProperties}
+      style={{ width: renderSize, height: renderSize, '--bot': bot.shell, '--pop-trim': bot.trim, '--pop-screen': bot.screen } as CSSProperties}
       {...artAria(decorative, label, effectiveMood)}
     >
       <defs>
         <clipPath id={visorId}><rect x="14" y="22" width="36" height="25" rx="8" /></clipPath>
       </defs>
-      <rect className="pop-shadow" x="9" y="15" width="52" height="45" rx="14" />
+      <g transform="translate(3 3)">{head('pop-shadow')}</g>
       <rect className="pop-ink" x="29" y="5" width="6" height="9" rx="2" />
       <rect className="pop-cap" x="25" y="2" width="14" height="7" rx="3.5" />
       <rect className="pop-ink" x="1" y="28" width="7" height="15" rx="3" />
       <rect className="pop-ink" x="56" y="28" width="7" height="15" rx="3" />
-      <rect className="pop-head" x="6" y="12" width="52" height="45" rx="14" />
+      {head('pop-head')}
       <rect className="pop-visor" x="14" y="22" width="36" height="25" rx="8" />
       <rect className="pop-shine" x="18" y="25" width="10" height="3" rx="1.5" />
       <g clipPath={`url(#${visorId})`}>

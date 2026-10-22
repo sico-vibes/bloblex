@@ -905,6 +905,32 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             automations::pause_for_agent(st, id).await;
             Ok(json!({"agent":agent}))
         }
+        "agent.purge" => {
+            let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            if p["confirm"] != true { return Err(derr("invalid_argument", "Confirm permanent deletion of the bot and its conversations.", StatusCode::BAD_REQUEST)); }
+            let agent = st.db.agent_get(id).map_err(agent_error)?;
+            if bot_is_locked(&agent) { return Err(locked_bot_error()); }
+            if agent["systemRole"] == "manager" { return Err(derr("conflict", "The Manager can't be removed; you can rename it or change its model", StatusCode::CONFLICT)); }
+            let ids = st.db.agent_purge_sessions(id).map_err(agent_error)?;
+            let mut guards = Vec::new();
+            for sid in &ids { guards.push(gate_for_session(st, sid).await.lock_owned().await); }
+            let (deleted, events) = st.db.agent_purge(id).map_err(|error| match error {
+                bloblex_storage::StorageError::SessionActive => derr("conflict", "Stop all of this bot's conversations and side-conversations before deleting it.", StatusCode::CONFLICT),
+                other => agent_error(other),
+            })?;
+            st.broadcast_persisted(events);
+            for sid in &deleted {
+                st.deleted_sessions.lock().await.insert(sid.clone());
+                let active = st.sessions.lock().await.remove(sid);
+                if let Some(active) = active { let _ = active.adapter.close_session(&active.handle).await; }
+                if let Some(turn) = st.active_turns.lock().await.remove(sid) { st.denied_turns.lock().await.remove(&turn); }
+                st.warm_lru.lock().await.retain(|warmed| warmed != sid);
+                st.team.forget(sid); st.queue.forget(sid); st.memory.forget(sid); st.knowledge.forget(sid); st.skills.forget(sid);
+                st.emit("session.deleted", json!({"sessionId":sid})).await;
+            }
+            drop(guards);
+            Ok(json!({"deleted":true,"sessionIds":deleted}))
+        }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
         "app.snapshot" => st.db.snapshot().map_err(|e| {
             derr(
@@ -1352,7 +1378,7 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     if k == "memory.sharedAgentWrites" && !value.is_boolean() { return Err(derr("invalid_argument", "memory.sharedAgentWrites requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "skills.enabled" && !value.is_boolean() { return Err(derr("invalid_argument", "skills.enabled requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "conversations.autoTitle" && !value.is_boolean() { return Err(derr("invalid_argument", "conversations.autoTitle requires a JSON boolean", StatusCode::BAD_REQUEST)); }
-    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots", "legacy", "pop", "dot"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots, blobots, legacy, pop or dot", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots or blobots", StatusCode::BAD_REQUEST)); }
     if k == "appearance.wallpaper" && !value.as_str().is_some_and(|v| ["lake", "dusk", "bloom", "sand", "custom"].contains(&v)) { return Err(derr("invalid_argument", "appearance.wallpaper must be lake, dusk, bloom, sand or custom", StatusCode::BAD_REQUEST)); }
     if k == "appearance.glass" && !value.as_str().is_some_and(|v| ["solid", "balanced", "clear"].contains(&v)) { return Err(derr("invalid_argument", "appearance.glass must be solid, balanced or clear", StatusCode::BAD_REQUEST)); }
     if matches!(k, "appearance.font" | "appearance.monoFont") && !value.as_str().is_some_and(|v| v.is_empty() || (v.len() <= 40 && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))) { return Err(derr("invalid_argument", "appearance.font and appearance.monoFont must be empty or lowercase letters, digits and hyphens (maximum 40 characters)", StatusCode::BAD_REQUEST)); }
@@ -2996,7 +3022,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     // stored message keeps the text exactly as typed.
     let references = team::reference_context(st, &sid, &p["conversationRefs"]);
     let provider = session_before["provider"].as_str().unwrap_or("").to_owned();
-    if !attachments.is_empty() && !matches!(provider.as_str(), "claude" | "codex") {
+    if !attachments.is_empty() && !matches!(provider.as_str(), "claude" | "codex" | "opencode") {
         return Err(derr("unsupported", "This coding agent does not accept image attachments.", StatusCode::BAD_REQUEST));
     }
     let gate = gate_for_session(st, &sid).await;
@@ -5256,6 +5282,34 @@ mod phase2a_tests {
         let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
         let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
+    #[tokio::test]
+    async fn bot_purge_is_confirmed_atomic_and_removes_both_sides_only() {
+        let (st, _) = state();
+        let bot = st.db.agent_create(&json!({"name":"Remove","runtimeId":"rt-test"})).unwrap().0;
+        let peer = st.db.agent_create(&json!({"name":"Keep","runtimeId":"rt-test"})).unwrap().0;
+        let id = bot["id"].as_str().unwrap();
+        let peer_id = peer["id"].as_str().unwrap();
+        st.db.create_session_for_agent("own", "rt-test", "codex", ".", "Own", Some(id)).unwrap();
+        st.db.create_session_for_agent("side", "rt-test", "codex", ".", "Side", Some(peer_id)).unwrap();
+        st.db.set_session_link("side", &json!({"kind":"side","peerAgentId":id})).unwrap();
+        st.db.create_session_for_agent("keep", "rt-test", "codex", ".", "Keep", Some(peer_id)).unwrap();
+        for sid in ["own", "side", "keep"] { st.db.update_session_state(sid, "idle").unwrap(); }
+        assert_eq!(dispatch(&st, "agent.purge", json!({"agentId":id})).await.unwrap_err().1.code, "invalid_argument");
+        st.db.update_session_state("side", "working").unwrap();
+        assert_eq!(dispatch(&st, "agent.purge", json!({"agentId":id,"confirm":true})).await.unwrap_err().1.code, "conflict");
+        assert!(st.db.session_exists("own").unwrap());
+        assert!(st.db.agent_get(id).is_ok());
+        st.db.update_session_state("side", "idle").unwrap();
+        let result = dispatch(&st, "agent.purge", json!({"agentId":id,"confirm":true})).await.unwrap();
+        assert_eq!(result["sessionIds"], json!(["own","side"]));
+        assert!(st.db.agent_get(id).is_err());
+        assert!(!st.db.session_exists("own").unwrap());
+        assert!(!st.db.session_exists("side").unwrap());
+        assert!(st.db.session_exists("keep").unwrap());
+        assert!(st.db.agent_get(peer_id).is_ok());
+        assert!(st.deleted_sessions.lock().await.contains("side"));
+    }
+
     #[tokio::test]
     async fn session_management_rpcs_validate_persist_emit_and_protect_active_sessions() {
         let (st, mut events) = state();
@@ -8795,10 +8849,11 @@ mod phase2a_tests {
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
         assert!(events.try_recv().is_err(), "an unchanged value does not re-broadcast");
 
-        for style in ["bitbots", "blobots", "legacy", "pop", "dot"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
+        for style in ["bitbots", "blobots"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
         for (key, value) in [("appearance.wallpaper", "lake"), ("appearance.wallpaper", "dusk"), ("appearance.wallpaper", "bloom"), ("appearance.wallpaper", "sand"), ("appearance.wallpaper", "custom"), ("appearance.glass", "solid"), ("appearance.glass", "balanced"), ("appearance.glass", "clear"), ("appearance.font", ""), ("appearance.font", "space-grotesk"), ("appearance.monoFont", "jetbrains-mono")] {
             dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap();
         }
+        for retired in ["legacy", "pop", "dot"] { assert_eq!(dispatch(&st, "settings.set", json!({"key":"appearance.style","value":retired})).await.unwrap_err().1.code, "invalid_argument"); }
         for (key, value) in [("appearance.wallpaper", "unknown"), ("appearance.glass", "opaque"), ("appearance.font", "A Font"), ("appearance.monoFont", "font_name")] {
             assert_eq!(dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap_err().1.code, "invalid_argument");
         }

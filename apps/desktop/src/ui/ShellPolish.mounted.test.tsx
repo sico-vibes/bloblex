@@ -12,7 +12,7 @@ beforeEach(() => {
   previousTheme = root.getAttribute('data-theme')
   previousLook = root.getAttribute('data-bitbots')
   style = document.createElement('style')
-  style.textContent = ['theme.css', 'shell.css', 'settings.css', 'botWizard.css', 'bitbots.css', 'tooltipPortal.css']
+  style.textContent = ['theme.css', 'shell.css', 'settings.css', 'botWizard.css', 'tooltipPortal.css']
     .map((file) => readFileSync(resolve(process.cwd(), 'src/ui', file), 'utf8')).join('\n')
   document.head.append(style)
   host = document.createElement('div'); document.body.append(host)

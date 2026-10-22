@@ -139,7 +139,7 @@ describe('look editor', () => {
   it('sets and clears the art style from the Style control', () => {
     const explicit = mount({ shape: 'circle', seed: 'a', art: 'painted', paint: 'ufo' })
     const styleOptions = [...explicit.host.querySelectorAll('[data-style-option]')]
-    expect(styleOptions).toHaveLength(7)
+    expect(styleOptions).toHaveLength(5)
     expect(explicit.host.querySelector('[data-style-option="painted"][aria-checked="true"]')).toBeTruthy()
     click(explicit.host.querySelector('[data-style-option="robot-pop"]'))
     expect(explicit.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-pop', paint: 'ufo' })
@@ -148,8 +148,8 @@ describe('look editor', () => {
 
     const automatic = mount({ shape: 'circle', seed: 'a' })
     expect(automatic.host.querySelector('[data-style-option="auto"][aria-checked="true"]')).toBeTruthy()
-    click(automatic.host.querySelector('[data-style-option="robot-dot"]'))
-    expect(automatic.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-dot' })
+    click(automatic.host.querySelector('[data-style-option="robot-pop"]'))
+    expect(automatic.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-pop' })
   })
 
   it('shows the twelve painted bodies and writes the chosen one', () => {
@@ -171,7 +171,7 @@ describe('look editor', () => {
 
   it('makes the Style control and painted grid inert while the bot is locked', () => {
     const { host, onLookChange } = mount({ shape: 'circle', seed: 'a', art: 'painted' }, true)
-    expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')]).toHaveLength(7)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')]).toHaveLength(5)
     expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')].every((button) => button.disabled)).toBe(true)
     expect([...host.querySelectorAll<HTMLButtonElement>('[aria-label="Painted shape"] [role="radio"]')].every((button) => button.disabled)).toBe(true)
     click(host.querySelector('.look-style-option'))

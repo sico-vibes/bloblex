@@ -72,7 +72,10 @@ describe('remote build output', () => {
     expect(worker).toContain('bitbots-remote-')
     const precache = /\[(?:"\/[^"]*",?)+\]/.exec(worker)?.[0] ?? ''
     expect(precache.length).toBeGreaterThan(0)
-    expect(precache.split(',').length).toBeGreaterThan(10)
+    const cached = JSON.parse(precache) as string[]
+    const shipped = walk(DIST).map((file) => `/${relative(DIST, file).replaceAll('\\', '/')}`).filter((file) => file !== '/remote-sw.js' && !file.endsWith('.map'))
+    expect(cached).toEqual(expect.arrayContaining(shipped))
+    expect(new Set(cached).size).toBe(cached.length)
     expect(worker).not.toMatch(/\bimport\s*[({"']/)
   })
 

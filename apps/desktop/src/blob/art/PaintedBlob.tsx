@@ -1,3 +1,4 @@
+import { useEyeTracking } from './useEyeTracking'
 import { useId, type CSSProperties, type ReactNode } from 'react'
 import type { BlobCanvasProps } from '../BlobCanvas'
 import type { BlobMood } from '../characterState'
@@ -67,6 +68,7 @@ function badgeFor(artMood: ArtMood, mood: BlobMood): BadgeSpec | null {
 
 /** A hand-painted bot: flat paint, a darker crescent and a soft highlight. */
 export function PaintedBlob({ color, size = 52, mood = 'idle', className = '', label = 'Agent', dragRegion = false, fileStage, greeting = false, mini = false, decorative = false, look = null, onGreetingComplete }: BlobCanvasProps) {
+  const eyes = useEyeTracking(!mini && size >= 32 && !['sleeping', 'offline'].includes(mood), 3)
   const uid = useId().replace(/:/g, '')
   const { artMood, effectiveMood } = useArtMood({ mood, fileStage, greeting, onGreetingComplete })
   const { width, height } = artBox(size, greeting)
@@ -105,7 +107,7 @@ export function PaintedBlob({ color, size = 52, mood = 'idle', className = '', l
           <g className="pb-paint" transform="translate(-5 -6)">{body}</g>
           {!mini && <ellipse className="pb-light" cx={lx} cy={ly} rx={lrx} ry={lry} transform={`rotate(${lrot} ${lx} ${ly})`} />}
         </g>
-        <g className="pb-eyes">
+        <g ref={eyes} className="pb-gaze"><g className="pb-eyes">
           {happy
             ? <>
               <path className="pb-eye-line" d={`M${leftCentre - 4.5 * scale} ${arcY} Q${leftCentre} ${arcY - 7 * scale} ${leftCentre + 4.5 * scale} ${arcY}`} />
@@ -114,6 +116,7 @@ export function PaintedBlob({ color, size = 52, mood = 'idle', className = '', l
             : flat
               ? <><rect className="pb-eye-line" x={leftX} y={ey} width={eyeWidth} height={3 * scale} rx={1.5 * scale} /><rect className="pb-eye-line" x={rightX} y={ey} width={eyeWidth} height={3 * scale} rx={1.5 * scale} /></>
               : <><rect className="pb-eye" x={leftX} y={eyeTop} width={eyeWidth} height={eyeHeight} rx={Math.min(eyeWidth, eyeHeight) / 2} /><rect className="pb-eye" x={rightX} y={eyeTop} width={eyeWidth} height={eyeHeight} rx={Math.min(eyeWidth, eyeHeight) / 2} /></>}
+        </g>
         </g>
         <g className={`pb-badge${badge ? ' on' : ''}`} style={{ '--badge': badge?.color ?? '#8b5cf6' } as CSSProperties} aria-hidden="true">
           <circle className="pb-badge-ring" cx={bx} cy={by} r={badgeRadius + 1.6} />

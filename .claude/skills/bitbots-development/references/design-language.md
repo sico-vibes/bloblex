@@ -1,24 +1,21 @@
 # Design language
 
-Last reviewed: 2026-10-19. Source of truth for rules: `docs/design/design-system.md` and `docs/library/content/reference/theme-system.md`. When the owner changes a visual rule, edit the rule here in place and in `docs/design/design-system.md`.
+Last reviewed: 2026-10-20. Source of truth for rules: `docs/design/design-system.md` and `docs/library/content/reference/theme-system.md`. When the owner changes a visual rule, edit the rule here in place and in `docs/design/design-system.md`.
 
 ## Product feel
 
-A calm chat app for developers moving between coding-agent sessions. The bots supply warmth; the chrome stays quiet. Say each thing once per screen (a bot's name, state and model appear in one place). Status colour only when something is happening. In Blobots chrome that means amber for working or approval, red for failure and green only for added lines (`docs/design/design-system.md`); Frost, Pop, Dot and the bot arts' status badges follow their own look's palette. One animated bot per place.
+A calm chat app for developers moving between coding-agent sessions. The bots supply warmth; the chrome stays quiet. Say each thing once per screen (a bot's name, state and model appear in one place). Status colour only when something is happening. In Blobots chrome that means amber for working or approval, red for failure and green only for added lines (`docs/design/design-system.md`); Frost and the bot arts' status badges follow their own palettes. One animated bot per place.
 
-## The five looks
+## The two looks
 
-`appearance.style` → `<html data-style>`. Families: **Bitbots** (primary) and **Blobots** (alternative), with **Legacy**, **Pop** and **Dot** under "More looks".
+`appearance.style` → `<html data-style>`. Settings and onboarding use one orb row, ordered **Bitbots, Blobots** (owner review, 20 October 2026). Names appear on hover/focus, with no card subtext or visible family grouping.
 
 | Look (value) | Feel | Default bot art | Default fonts |
 |---|---|---|---|
-| Bitbots (`bitbots`) = Frost | Flat translucent panels over a wallpaper (Lake default; Dusk, Bloom, Sand, the user's image), 10 px gaps between floating panels, 20 px panel radius, hairline borders. Glass: Solid (tint .93, blur 24 px, default), Balanced (.58/10), Clear (.36/6). | Flat robot | Inter + system mono |
+| Bitbots (`bitbots`) = Frost | Flat translucent panels over a wallpaper (Lake default; Dusk, Bloom, Sand, the user's image), 10 px gaps between floating panels, 20 px panel radius, hairline borders. Glass: Solid (tint .93, blur 24 px, default), Balanced (.58/10), Clear (.36/6). | 2D robot | Inter + system mono |
 | Blobots (`blobots`) | Monochrome dark or light, flush panels | Glossy blob | Segoe UI stack |
-| Legacy (`legacy`) | The original pixel look (`data-bitbots="on"`, `ui/bitbots.css`): square corners, dotted borders, hard shadows, Doto and DM Mono | 3D robot | DM Mono / Doto (from its stylesheet) |
-| Pop (`pop`) | Retro colour, not pixel: cream paper with a dot grid, 2px ink outlines, hard offset shadows (4/3/2/5 px), pastel fills (butter, mint, lilac, coral, sky, peach), butter selection, coral accent with ink text | Pop robot | DM Sans + Bricolage Grotesque headings |
-| Dot (`dot`) | Monochrome widgets, one red (`#ff4b2b`), dot-matrix meters and numbers (Doto for figures only), inverted selection, mono uppercase labels | Dot robot | Geist + Geist Mono |
 
-All five support dark and light, and Frost, Pop and Dot also style the companion and dictation windows (Legacy and Blobots keep theirs).
+Both support dark and light. Frost styles the companion and dictation windows; Blobots keeps its existing overlay palette. Pop, Dot and Legacy themes and stylesheets are removed (owner direction, 20 October 2026); old saved choices migrate to Bitbots.
 
 ## Rules that apply to every look added after Legacy
 
@@ -36,7 +33,9 @@ All colours, sizes and radii come from `apps/desktop/src/ui/theme.css` tokens (`
 
 ## Bot art
 
-Per bot, in the bot editor's Style control (`look.art`; Automatic = follow the look): Robots: 3D robot (`robot`, canvas, heavy: use only when chosen), Flat robot (`robot-flat`), Pop robot (`robot-pop`), Dot robot (`robot-dot`, 7×5 dot screen with an antenna; typing = stepped eye patterns + a pixel wave); Blobs: Glossy blob (`blob`, canvas), Hand-painted (`painted`, twelve shapes via `look.paint`: classic, cube, star, flower, pear, peanut, ghost, bunny, kitty, ufo, boxbot, tile). The light arts are pure SVG + CSS (no canvas, no rAF, no listeners), stop animating under reduced motion, and change the eyes rather than moving the body. Hand-painted bots never move; status shows in a top-left corner badge (dots for thinking/typing, "!" for waiting, green/red dots, "z" sleeping; plain dot on mini avatars). Manager badge: white star on orange, the only star icon in the app.
+Per bot, offer Automatic, 3D robot (`robot`), 2D robot (`robot-pop`), Glossy (`blob`) and Hand-painted (`painted`). Both robots use the four `look.bot.shape` outlines and shell/trim/screen controls. Saved `robot-flat` and `robot-dot` ids remain valid and resolve to 2D robot. Automatic uses 2D for Bitbots and Glossy for Blobots. Hand-painted has twelve `look.paint` shapes; its body stays still, its eyes blink and large avatars track the pointer (`useEyeTracking.ts`). Mini avatars have no pointer listener; listeners and animation frames are cleaned up, and reduced motion stays still. Corner status badges retain their meaning. Manager badge: white star on orange.
+
+The update notice lives immediately above the profile in the left sidebar, including without a selected conversation. Settings use row-shaped skeletons while loading. Finished tasks use two lines, with status/time beside the name. Selected and hovered surfaces must pair every descendant with readable text; user-bubble links inherit the bubble foreground.
 
 ## Copy
 

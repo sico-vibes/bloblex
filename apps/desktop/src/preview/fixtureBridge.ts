@@ -371,7 +371,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
     if (flags().get('style')) fixtureSettings['appearance.style'] = flags().get('style')
-    if (flags().get('style') && ['bitbots','blobots','legacy','pop','dot'].includes(String(flags().get('style')))) localStorage.setItem('bitbots.style', String(flags().get('style')))
+    if (flags().get('style') && ['bitbots','blobots'].includes(String(flags().get('style')))) localStorage.setItem('bitbots.style', String(flags().get('style')))
     if (['system','dark','light'].includes(String(flags().get('theme')))) { fixtureSettings['appearance.theme'] = flags().get('theme'); try { const saved = JSON.parse(localStorage.getItem('bloblex.appearance') ?? '{}'); localStorage.setItem('bloblex.appearance', JSON.stringify({ ...saved, theme: flags().get('theme') })) } catch {} }
     if (flags().get('accent')) fixtureSettings['appearance.accent'] = flags().get('accent')
     if (flags().get('density')) fixtureSettings['appearance.density'] = flags().get('density')
@@ -423,6 +423,18 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const file = session?.files?.find((f) => f.id === params.fileChangeId)
     if (!file) throw rpcError('not_found', 'File change not found.')
     return { reverted: true } as T
+  }
+  if (method === 'agent.purge') {
+    const index = agents.findIndex((agent) => agent.id === params.agentId)
+    if (index < 0) throw rpcError('not_found', 'Bot not found.')
+    const agent = agents[index]
+    if (params.confirm !== true || agent.locked || agent.systemRole === 'manager') throw rpcError('conflict', 'This bot cannot be deleted.')
+    const related = sessions.filter((session) => session.agentId === agent.id || session.link?.kind === 'side' && session.link.peerAgentId === agent.id)
+    if (related.some((session) => ['starting', 'working', 'cancelling', 'waiting_permission'].includes(String(session.state)))) throw rpcError('conflict', 'Stop the bot first.')
+    for (const session of related) { const i = sessions.findIndex((item) => item.id === session.id); sessions.splice(i, 1); notifyFixtureDaemon('session.deleted', { sessionId: session.id }) }
+    agents.splice(index, 1)
+    notifyFixtureDaemon('agent.changed', { agentId: agent.id, action: 'deleted' })
+    return { deleted: true, sessionIds: related.map((session) => session.id) } as T
   }
   if (method === 'agent.restore') {
     const agent = agents.find((a) => a.id === params.agentId)

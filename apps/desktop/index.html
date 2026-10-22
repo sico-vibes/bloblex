@@ -15,9 +15,8 @@
         try {
           const settings = JSON.parse(localStorage.getItem('bloblex.appearance') || '{}')
           const storedStyle = localStorage.getItem('bitbots.style')
-          const style = ['bitbots', 'blobots', 'legacy', 'pop', 'dot'].includes(storedStyle) ? storedStyle : 'bitbots'
+          const style = ['bitbots', 'blobots'].includes(storedStyle) ? storedStyle : 'bitbots'
           document.documentElement.dataset.style = style
-          if (style === 'legacy') document.documentElement.dataset.bitbots = 'on'
           const glass = localStorage.getItem('bitbots.glass')
           document.documentElement.dataset.glass = ['solid', 'balanced', 'clear'].includes(glass) ? glass : 'solid'
           const wallpaper = localStorage.getItem('bitbots.wallpaper')

@@ -576,3 +576,18 @@
 .message-pending-note { margin-top: 4px; color: var(--text-3); font-size: var(--fs-2xs); text-align: right; animation: pending-pulse 1.4s ease-in-out infinite; }
 @keyframes pending-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { .message-pending-note { animation: none; } }
+
+/* Live development review: surfaces keep their own foreground. */
+.sidebar-update { margin: 4px 10px 8px; padding: 10px; min-height: 40px; display: flex; align-items: center; gap: 8px; align-self: stretch; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-selected-strong); color: var(--text-1); text-align: left; font-size: var(--fs-xs); }
+.sidebar-update > span:not(.update-badge-label) { flex: 1; }
+.sidebar-update small { margin-left: auto; color: var(--text-2); font-size: var(--fs-2xs); }
+.profile-menu .menu-separator { display: block; flex-shrink: 0; min-height: 1px; background: var(--line-strong); margin: 7px 6px; }
+.safe-markdown :not(pre) > code { color: var(--text-1); background: var(--surface-input); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.message-code pre code { color: inherit; background: transparent; border: 0; padding: 0; }
+.markdown-repo-link { display: inline-flex; align-items: baseline; gap: 4px; font-weight: 500; }
+.markdown-repo-link svg { align-self: center; flex-shrink: 0; }
+.message-row.user .message-bubble .markdown-link { color: inherit; border-bottom-color: currentColor; }
+
+.archived-bots { max-height: min(600px, 80vh); overflow: auto; }
+.archived-bot-row { display: flex; align-items: center; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line); }
+.archived-bot-row > strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }

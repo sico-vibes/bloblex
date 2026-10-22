@@ -8,5 +8,10 @@
 .working-bot-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
 .working-bot-copy strong { font-size: var(--fs-sm); font-weight: 500; }
 .working-bot-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
-.working-bot-status, .working-bots summary { color: var(--text-3); font-size: var(--fs-xs); }
-.working-bots summary { padding: 8px; cursor: pointer; }
+.working-bot-status, .working-bots summary { color: var(--text-2); font-size: var(--fs-xs); }
+.working-bot-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.working-bot-line strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.working-bot-status { margin-left: auto; flex-shrink: 0; }
+.working-bots summary { padding: 8px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; font-weight: 500; }
+.working-bots summary::-webkit-details-marker { display: none; }
+.working-bots details[open] > summary svg { transform: rotate(90deg); }

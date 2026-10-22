@@ -96,6 +96,9 @@ pub fn migrate_before_start() {
             true,
         ),
     );
+    // Development has its own database; it must not migrate the installed store
+    // or rewrite the installed application's autostart entry.
+    if tauri::is_dev() { return; }
     // The shared directory doubles as the install directory: merge instead of
     // replacing so the installed application is never deleted.
     report(

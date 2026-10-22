@@ -51,19 +51,19 @@ afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstub
 
 describe('General settings mounted controls', () => {
 
-  it('offers five looks, Bitbots-only options and font settings', async () => {
+  it('offers two looks, Bitbots-only options and font settings', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect([...host.querySelectorAll('.appearance-primary-grid button strong,.appearance-more-grid button strong')].map((button) => button.textContent)).toEqual(['Bitbots','Blobots','Legacy','Pop','Dot'])
-    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots', 'legacy', 'pop', 'dot'])
+    expect([...host.querySelectorAll('.look-orb-choice .look-orb-tooltip')].map((button) => button.textContent)).toEqual(['Bitbots','Blobots'])
+    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots'])
     expect(host.querySelector('.appearance-page .look-window')).toBeNull()
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-primary-grid button,.appearance-more-grid button')].find((button) => button.textContent?.includes('Pop'))?.click(); await Promise.resolve() })
-    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'pop' })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Blobots'))?.click(); await Promise.resolve() })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'blobots' })
     expect(host.textContent).toContain('This look has no extra options yet.')
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-primary-grid button,.appearance-more-grid button')].find((button) => button.textContent?.includes('Bitbots'))?.click(); await Promise.resolve() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Bitbots'))?.click(); await Promise.resolve() })
     expect(host.textContent).toContain('Wallpaper')
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-page .density-control button')].find((button) => button.textContent === 'Balanced')?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.glass', value: 'balanced' })

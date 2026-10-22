@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "63f4b39",
-  "documentCount": 294,
+  "revision": "64344a6",
+  "documentCount": 295,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -108,7 +108,7 @@
       "title": "The five-minute path",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "b84926f0a7e8bd91b28942911d668e5c12a4c46de8b9f426a6816469fec0d1c8",
+      "sha256": "9455860755dfe10855ae105b56c511ccaa537eecb4a44f133644d051998027b3",
       "headings": [
         {
           "id": "before-you-start",
@@ -163,7 +163,7 @@
       "title": "What Bitbots is",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "1d6870cbbdb7ccb1bcec3d24fd7a1a2fc437811e9bd3323ab0d33c80ca2050b0",
+      "sha256": "5f900dee848216340179060d8bc2f58a79f178fa6aa3a3e9925d4bdc32b81f2f",
       "headings": [
         {
           "id": "the-pieces",
@@ -1247,66 +1247,31 @@
       "title": "Theme system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "75f6037d94d94a433aa3bf996c76f9401740a99334f68d67fad07208e4a42421",
+      "sha256": "46170e61f4c28ada5cd81414c2741595063985cf1e33251b839905be45fd0b56",
       "headings": [
         {
-          "id": "purpose",
-          "text": "Purpose",
+          "id": "supported-looks",
+          "text": "Supported looks",
           "level": 2
         },
         {
-          "id": "the-attributes",
-          "text": "The attributes",
+          "id": "attributes-and-settings",
+          "text": "Attributes and settings",
           "level": 2
         },
         {
-          "id": "loading",
-          "text": "Loading",
+          "id": "type-colour-and-shape",
+          "text": "Type, colour and shape",
           "level": 2
         },
         {
-          "id": "what-a-look-overrides",
-          "text": "What a look overrides",
+          "id": "overlay-windows",
+          "text": "Overlay windows",
           "level": 2
         },
         {
-          "id": "shape-rule",
-          "text": "Shape rule",
-          "level": 3
-        },
-        {
-          "id": "glass",
-          "text": "Glass",
-          "level": 3
-        },
-        {
-          "id": "type",
-          "text": "Type",
-          "level": 3
-        },
-        {
-          "id": "accent",
-          "text": "Accent",
-          "level": 3
-        },
-        {
-          "id": "the-overlay-windows",
-          "text": "The overlay windows",
-          "level": 2
-        },
-        {
-          "id": "orbs",
-          "text": "Orbs",
-          "level": 2
-        },
-        {
-          "id": "adding-a-look",
-          "text": "Adding a look",
-          "level": 2
-        },
-        {
-          "id": "gotchas",
-          "text": "Gotchas",
+          "id": "verification",
+          "text": "Verification",
           "level": 2
         }
       ]
@@ -1317,7 +1282,7 @@
       "title": "Bot art system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "1204591ffc23608360ecbd45340ce280762d7841adc0d0f0601f790c656fbad6",
+      "sha256": "9e5b6817637c7a1a1275757de15d0adb70545b118274223fe8fe0de96b267a24",
       "headings": [
         {
           "id": "purpose",
@@ -1330,8 +1295,8 @@
           "level": 2
         },
         {
-          "id": "the-six-arts",
-          "text": "The six arts",
+          "id": "the-four-offered-arts",
+          "text": "The four offered arts",
           "level": 2
         },
         {
@@ -1522,7 +1487,7 @@
       "title": "Development and testing",
       "section": "Remote, release & delivery",
       "status": "Reference",
-      "sha256": "417a5e4f5acb98d78e50b9ae437aa3548f865e2b4a77b0a4fc122ae9cc65de09",
+      "sha256": "80195598e77baab7128d7fe3428b2f7f5ee916acd4816650b762f7c55d0c0d4f",
       "headings": [
         {
           "id": "purpose",
@@ -1717,7 +1682,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "ddeb6ae022d50d922109e5ea0395b65d4b652e5bdf2a792743f84c525fffb732",
+      "sha256": "3b57667c9432310365c02250cf3ab21ea501aa540bf9913b1d8c11cd8e2533c7",
       "headings": [
         {
           "id": "update-commands",
@@ -1812,7 +1777,7 @@
       "title": "Bitbots documentation",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "9e5f671d7313a89f9c2e675fe3b0797ac8668eee749ab1690765eedfaa01a3ef",
+      "sha256": "5e6e0ef7c2431c93ce2576693688dddb19d98b17c5bc58a5e1fdb684f12a0252",
       "headings": [
         {
           "id": "start-here",
@@ -2191,6 +2156,41 @@
       "headings": []
     },
     {
+      "id": "reference/live-development-review-2026-10-20",
+      "source": "docs/library/content/reference/live-development-review-2026-10-20.md",
+      "title": "Live development review, 20 October 2026",
+      "section": "Project documentation",
+      "status": "Project reference",
+      "sha256": "52bbb76b5f8fbae5bcc82c3807b7795bf5e36f03028c652928720a53cf71d1d9",
+      "headings": [
+        {
+          "id": "result",
+          "text": "Result",
+          "level": 2
+        },
+        {
+          "id": "screenshot-checklist",
+          "text": "Screenshot checklist",
+          "level": 2
+        },
+        {
+          "id": "development-workflow-repairs",
+          "text": "Development workflow repairs",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "limits",
+          "text": "Limits",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/guides/native-smoke",
       "source": "docs/guides/native-smoke.md",
       "title": "Native smoke tooling",
@@ -2380,7 +2380,7 @@
       "title": "Windows desktop development",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "c3d908d8db2984571e74eb113d930a90504b1868351e9e0f74faf03a9e8ce97d",
+      "sha256": "603ed1f115bb1334b598ad735b7d431c11b5613b9b762b99105cdc1f91107ae6",
       "headings": [
         {
           "id": "run-locally",
@@ -2424,7 +2424,7 @@
       "title": "Bitbots Design System",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "dfd2569b454b0073228a7c647863a305a4453c431c2e0eeaf419fd2431e5d760",
+      "sha256": "c5ac7cd84dc3ad51fa550ff555229cd47cebf1bc7bf1d8514567ee718f540d8d",
       "headings": [
         {
           "id": "scene-and-register",
@@ -2479,11 +2479,6 @@
         {
           "id": "frost-bitbots",
           "text": "Frost (Bitbots)",
-          "level": 3
-        },
-        {
-          "id": "pop-and-dot",
-          "text": "Pop and Dot",
           "level": 3
         },
         {

@@ -1,7 +1,7 @@
 // Live end-to-end check of the composer paths through the real daemon and the
-// user's installed, signed-in CLIs: image attachments (Claude Code, Codex),
+// user's installed, signed-in CLIs: image attachments (Claude Code, Codex and image-capable OpenCode models),
 // per-conversation speed/permission updates, fast-mode catalog detection, and
-// OpenCode's attachment rejection. Uses an isolated database and temp project,
+// ACP image delivery. Uses an isolated database and temp project,
 // sends two trivial prompts with a 64x64 solid-colour PNG, and prints verdicts
 // only (never raw provider payloads or credentials).
 //
@@ -40,7 +40,9 @@ function solidPng(size, [r, g, b]) {
 const image = path.join(work, 'swatch.png')
 fs.writeFileSync(image, solidPng(64, [220, 20, 30]))
 
-const child = spawn(daemonExe, [], { env: { ...process.env, BLOBLEX_DB_PATH: path.join(work, 'live.db') }, stdio: ['ignore', 'pipe', 'ignore'] })
+const runtimeExe = path.join(work, 'bitbotsd.exe')
+fs.copyFileSync(daemonExe, runtimeExe)
+const child = spawn(runtimeExe, [], { env: { ...process.env, BLOBLEX_DB_PATH: path.join(work, 'live.db') }, stdio: ['ignore', 'pipe', 'ignore'] })
 const ready = await new Promise((resolve, reject) => {
   const lines = readline.createInterface({ input: child.stdout })
   const timer = setTimeout(() => reject(new Error('daemon did not start')), 60_000)
@@ -92,13 +94,6 @@ try {
       // Mode-only update: keeps model/effort, pins permission mode for this conversation.
       const pinned = await rpc('session.model.update', { sessionId, approvalMode: 'ask' })
       verdict(provider, 'permission-only update keeps model', pinned.modelChanged === false && pinned.session?.modelLock?.approvalMode === 'ask')
-
-      if (provider === 'opencode') {
-        const rejected = await rpc('session.prompt', { sessionId, text: 'hello', attachments: [{ path: image, name: 'swatch.png' }] }).then(() => null, (error) => error)
-        const detail = await rpc('session.get', { sessionId })
-        verdict(provider, 'image attachment rejected before delivery', rejected?.code === 'unsupported' && !(detail.messages ?? []).length, rejected?.code ?? 'accepted')
-        continue
-      }
 
       // Cheapest advertised model and lowest effort keep the check inexpensive.
       const cheap = (catalog.models ?? []).find((model) => /haiku|mini/i.test(`${model.id} ${model.displayName}`))

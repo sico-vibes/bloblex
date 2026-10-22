@@ -24,6 +24,21 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **Fix:** wait about a second and take the screenshot again. Reset the emulation with the `desktop` preset and check at the pane's own size.
 - **Avoid:** never judge a layout from one screenshot taken straight after a change, and never judge it from an emulated size larger than the pane.
 
+## 2026-10-21 · Startup reads during daemon replacement
+The native window could keep a startup warning after an RPC used a stopped loopback listener while the current daemon was listening elsewhere. Independent catalog checks and a clone of the development store were healthy. `daemon_rpc` now retries once on a transport/not-running error for an explicit list of observational startup methods, reacquiring the current native-held connection after `start_daemon`. Never replay `session.prompt`, settings writes, deletion, shutdown, authorization errors or invalid arguments. Native tests pin this allowlist. `runLaunchChecks` preserves string rejections from Tauri; the notice names the failed step and strips transport URLs. A rebuilt native startup was verified without the warning.
+
+## 2026-10-20 · Owner direction · Two app themes only
+Only Bitbots and Blobots remain. Remove retired look CSS and registrations, normalize old cached/database/backup selections to Bitbots, and keep bot art independent. Do not delete saved bot-art ids as part of removing an app theme. Tests for removed themes are replaced by migration/rejection coverage. Service-worker tests must compare the precache against emitted files, not an arbitrary minimum count: deleting unused theme font chunks reduced the legitimate asset count.
+
+## 2026-10-20 · Native links and settings events
+- Calling the opener with only `opener:allow-open-url` left its URL scope empty: every valid link was rejected and the UI swallowed the error. `capabilities/main-links.json` now allows only `https://*` and `http://*`; unsafe schemes and credential-bearing URLs remain refused.
+- `showMainSettings` used a renderer `emit` without emit permission. Pass the requested page through `show_main_settings` and emit it from Rust instead of broadening event permissions. Update its tray caller when changing the signature.
+
+## 2026-10-20 · Selection, paste and development isolation
+- Runtime-selection echoes must not choose a different bot. A newly selected bot may have only a local draft; preserve it and publish a session only once one exists. `App.emptyConversation.mounted.test.tsx` covers an old runtime echo and companion round trips.
+- Some WebView2 image pastes have no DOM paste event. The composer also reads the native clipboard from Ctrl+V, invalidates duplicate reads when DOM image files arrive, and keeps ordinary text pastes intact. OpenCode images use advertised ACP image capability and base64 content blocks, rather than a blanket provider rejection.
+- Live probes must copy the daemon executable into their own temp folder before spawning it; otherwise a concurrent Cargo build can hit Windows error 5. `live-composer.mjs` now follows the shell's private-copy pattern.
+
 ## 2026-10-19 · Process · A piped gate hid a failure before a push
 - **Symptom:** the Director ran `git merge ... && node scripts/docs-library.mjs check 2>&1 | tail -1 && ... && git push`; the check failed, but `main` was pushed anyway (`917f730`).
 - **Root cause:** in a pipe, the exit status is the last command's (`tail`, which succeeds), so `&&` never saw the failure.

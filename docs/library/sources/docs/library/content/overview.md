@@ -27,11 +27,11 @@ The permanent **Manager** is a bot with a special role. It works across every pr
 
 The main window is three columns: bots and projects, conversations, and the conversation itself. A details panel can show the coding agent, files and conversation facts. Settings holds appearance, agents, the Manager, memory, skills, backup, speech and updates.
 
-The five **looks** change the whole app: Bitbots (Frost), Blobots, Legacy, Pop and Dot. A bot's **art** is separate: six styles, from 3D robot to hand-painted blob. The look decides the default art for a bot that has not chosen one; an explicit choice always wins.
+The two **looks** change the whole app: Bitbots (Frost) and Blobots. A bot's **art** is separate: 3D robot, 2D robot, Glossy or Hand-painted. The look decides the default art for a bot that has not chosen one; an explicit choice always wins.
 
 ![Settings › Appearance: the look cards and the Wallpaper row](../assets/screens/settings-appearance.png)
 
-*Settings › Appearance. The two large cards are the primary and alternative looks; Legacy, Pop and Dot sit under More looks. Each card shows an orb, not a screenshot. Fixture data.*
+*Settings › Appearance. The two orb choices are Bitbots and Blobots. Names appear on hover or keyboard focus. Fixture data.*
 
 ## Where your work lives
 

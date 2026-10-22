@@ -12,13 +12,13 @@ export const BOT_ARTS = ['robot', 'robot-flat', 'robot-pop', 'robot-dot', 'blob'
 export const ART_LABELS: Record<BotArt, string> = {
   robot: '3D robot',
   'robot-flat': 'Flat robot',
-  'robot-pop': 'Pop robot',
+  'robot-pop': '2D robot',
   'robot-dot': 'Dot robot',
-  blob: 'Glossy blob',
+  blob: 'Glossy',
   painted: 'Hand-painted',
 }
 
-export const ROBOT_ARTS: readonly BotArt[] = ['robot', 'robot-flat', 'robot-pop', 'robot-dot']
+export const ROBOT_ARTS: readonly BotArt[] = ['robot', 'robot-pop']
 export const BLOB_ARTS: readonly BotArt[] = ['blob', 'painted']
 
 export type PaintedShape = 'classic' | 'cube' | 'star' | 'flower' | 'pear' | 'peanut' | 'ghost' | 'bunny' | 'kitty' | 'ufo' | 'boxbot' | 'tile'
@@ -103,18 +103,16 @@ export function artMoodFor(mood: BlobMood): ArtMood {
 /** The art a bot wears when it has not chosen one. */
 export function defaultArtForStyle(style: string | null | undefined): BotArt {
   switch (style) {
-    case 'bitbots': return 'robot-flat'
+    case 'bitbots': return 'robot-pop'
     case 'blobots': return 'blob'
-    case 'legacy': return 'robot'
-    case 'pop': return 'robot-pop'
-    case 'dot': return 'robot-dot'
     default: return 'blob'
   }
 }
 
 /** An explicit choice wins; otherwise the app look decides. */
 export function resolveArt(look: { art?: unknown } | null | undefined, style: string | null | undefined): BotArt {
-  return isBotArt(look?.art) ? look.art : defaultArtForStyle(style)
+  const art = isBotArt(look?.art) ? look.art : defaultArtForStyle(style)
+  return art === 'robot-flat' || art === 'robot-dot' ? 'robot-pop' : art
 }
 
 export function paintForShape(shape: string | null | undefined): PaintedShape {

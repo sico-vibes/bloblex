@@ -1,12 +1,12 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "861853f",
-  "documentCount": 300,
+  "revision": "26ec193",
+  "documentCount": 310,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
-      "sha256": "3e0c94b7e37ca314ae03b9a9fef9f9acc7e61b8f820796cfae70e175a9042325"
+      "sha256": "e4176c7c105b2a490b42b7d1550038644219acc521de2dbbe10cb7667d2c0e47"
     },
     {
       "source": "docs/library/assets/bitbots.png",
@@ -35,6 +35,130 @@
     {
       "source": "docs/library/assets/diagrams/remote-gateway.svg",
       "sha256": "bbb19cc123b2ca301beae7280a96d1f051023ce23237c7b6dcfef80150e2936b"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-bitbots-dark-1000.png",
+      "sha256": "0729cf05f060d4e3b81f5dddc8eb80a727cbf40581909668580ee5647e4fdb94"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-bitbots-dark-1440.png",
+      "sha256": "bece61ebc5f1d6f29c6f317b6d4ab77341a2077055e4a8d71e86a4105e29158d"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-bitbots-light-1000.png",
+      "sha256": "83865d307f23a1403b128af2c60c0d58dd3fb335cc07e9a0de4b938962523646"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-bitbots-light-1440.png",
+      "sha256": "584af02c9b5d187158f400e878767fed7ef35ce2371ad820974cf1c39a2e57b5"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-blobots-dark-1440.png",
+      "sha256": "82cd75a17c5eda30db86eb822c29fb2440dd3bec1d839877e06720233298243a"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-blobots-light-1440.png",
+      "sha256": "97c89704afaa7e1193804b983b81dde1166324e1857699967de157760a988e5c"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-dot-dark-1440.png",
+      "sha256": "2cea40fd9c6d406fcc8adc6141da38fb26d342146ff391aaec371cb70e723c30"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-dot-light-1440.png",
+      "sha256": "dee70a5803aa4e927d90d0148f3547f077725e7d8c7d9bbe2fc43b1c2334d355"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-legacy-dark-1440.png",
+      "sha256": "c6ab73d4e8eb8e50372c48187934668075f88dee6030842f187e3c7d40c4f55b"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-legacy-light-1440.png",
+      "sha256": "8dac07fa83a89c279dab90cb91f107cfc01825bd398c261158970f65358bf1b7"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-pop-dark-1440.png",
+      "sha256": "18da683ac5521c203bcfe8db4d29b445656b264da20899c89a52037189d29886"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-board-pop-light-1440.png",
+      "sha256": "ee2c2113580744d1ad35e8412380d334c54962663fcdf090c18c900976b9cd96"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-chat-background-settings-dark-1440.png",
+      "sha256": "20fb1a4debff94d6dd665986e401a20a86ffcc0663a8647768d2f6199d589fcf"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-computer-settings-dark-1440.png",
+      "sha256": "d3e4be297bfab3c46c5ba80c6e393f4170a57b88decde964e541fa2ea0ca1082"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-connections-settings-dark-1440.png",
+      "sha256": "27cb5c04580b163baf39c95f479f61cc4ac9229ababc457391720c0a2f196531"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-github-inbox-dark-1440.png",
+      "sha256": "e2cd4c2b41666f94a4e1f8e2c17b084d5151d0879387c3d217ec9a1a646cacf8"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-handoff-page-rendered-offline-1600.png",
+      "sha256": "c0e8b843fd976e15fc7c3c583e706c855332fe908860bb308f7e579308d4459c"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-main-shell-no-terminal-dock-dark-1440.png",
+      "sha256": "10e71dc83050cb6a3ebc01de973aad3752d9283841c0f2c7f97d0fe9ba09e596"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-onboarding-provider-choice-dark-1440.png",
+      "sha256": "6f097e6d53fcffe1d38a8df6ed5b7ef39b924278e8ae2294a8a7b49397890542"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-provider-settings-dark-1440.png",
+      "sha256": "cb620ffba0611c6ea4bb0efffb87c9d48b4f3b3a798b3afc886ccb63b069777a"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-remote-pwa-dark-1440.png",
+      "sha256": "3469f9722278d11b1c593a288b800f11dde78f5c184d9ca206050ed3ae2cfc44"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-remote-settings-dark-1440.png",
+      "sha256": "bd46167188c60fa22bf9a09a815a5ffb8d78dc431f613e13672728658ff8d2e0"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-schedules-bitbots-dark-1440.png",
+      "sha256": "cc856f2d68f5b08f355b0ea1acba9eb26c3b5936ed5938c745472b1eafe05e73"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-timeline-bitbots-dark-1440.png",
+      "sha256": "5e85a75c5b43f7b45a505a0ce980d20c7988022de7bf0d67d92e0f6a8a80aaff"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/current-tree-bitbots-dark-1440.png",
+      "sha256": "fd1f20fc0e49b431a70fcfd30a96d6a2fb7f650ccf927822194bfdd553988dee"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/wanted-board-schedules.png",
+      "sha256": "ef417eb8e181f6bf565fe22bce835c904c289d66f201fecf3b16c1cb12bcec28"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/wanted-connectors-computer-phone.png",
+      "sha256": "c34ff723dc25a470ba13bb44446daedb2038d791d30f62ad7013add8fd71f196"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/wanted-free-setup.png",
+      "sha256": "442fc28904afa144f4ced62d3f7ac2788e65aeb2ed67bd407b12aed29400ea7e"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/wanted-providers-github.png",
+      "sha256": "3dfd45c95d941a0485925208fafcf2a47977a476f6b476cf16d7ec83c73de650"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/wanted-task-chart-timeline.png",
+      "sha256": "0ee0183d92c94f5b0079b60d1cfd4ba0fac430cd014e9d73b2c5f948e89f00b7"
+    },
+    {
+      "source": "docs/library/assets/expansion-2026-10-21/wanted-terminal-background.png",
+      "sha256": "567d90f528ffc5d7d05566d1f192b695adb74d91d31512ec490f40059a13463d"
     },
     {
       "source": "docs/library/assets/screens/bot-art-painted.png",
@@ -1777,7 +1901,7 @@
       "title": "Bitbots documentation",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "5e6e0ef7c2431c93ce2576693688dddb19d98b17c5bc58a5e1fdb684f12a0252",
+      "sha256": "52c241ef8e60959d5e95fac65e085580f0e98e89a81c1bd1676fdb597bb430ab",
       "headings": [
         {
           "id": "start-here",
@@ -2072,6 +2196,16 @@
         {
           "id": "director-log",
           "text": "Director log",
+          "level": 3
+        },
+        {
+          "id": "product-expansion-20-and-21-october-2026-paused-records",
+          "text": "Product expansion, 20 and 21 October 2026 (paused records)",
+          "level": 3
+        },
+        {
+          "id": "product-expansion-v2-from-21-october-2026",
+          "text": "Product expansion v2, from 21 October 2026",
           "level": 3
         },
         {
@@ -2410,6 +2544,36 @@
       ]
     },
     {
+      "id": "guides/expansion-handoff",
+      "source": "docs/library/content/guides/expansion-handoff.md",
+      "title": "Product expansion: wanted and current",
+      "section": "Expansion handoff",
+      "status": "Guide",
+      "sha256": "42327948fc851932ec4554d750ba25fd21f48a80a6dcbe835fe477da973cd915",
+      "headings": [
+        {
+          "id": "original-plan-and-accepted-choices",
+          "text": "Original plan and accepted choices",
+          "level": 2
+        },
+        {
+          "id": "wanted-and-current-images",
+          "text": "Wanted and current images",
+          "level": 2
+        },
+        {
+          "id": "feature-status-and-next-steps",
+          "text": "Feature status and next steps",
+          "level": 2
+        },
+        {
+          "id": "verification-and-pause-boundary",
+          "text": "Verification and pause boundary",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/design/archive/README",
       "source": "docs/design/archive/README.md",
       "title": "Archived design images",
@@ -2689,8 +2853,18 @@
       "title": "Bitbots session handoff",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "16393fedf3e3a97b63e0c1cba3990f9202a7b1e99c7d319517c9ee19a71b03a8",
+      "sha256": "808386560a8dbf627d51aafaddb39224408d71d4e24a1dad826881f377ae1b09",
       "headings": [
+        {
+          "id": "22-october-2026-phase-1-on-main-after-the-owners-resume",
+          "text": "22 October 2026: phase 1 on main after the owner's resume",
+          "level": 2
+        },
+        {
+          "id": "owner-pause-product-expansion-21-october-2026",
+          "text": "Owner pause: product expansion (21 October 2026)",
+          "level": 2
+        },
         {
           "id": "fix40-looks-and-bot-art-19-october-2026",
           "text": "FIX40 looks and bot art (19 October 2026)",
@@ -2914,8 +3088,13 @@
       "title": "Implementation status",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "4156c82f082079e819629d2d72b78bb98847c42a58f122ee090d08ef3095d25a",
+      "sha256": "a47d5a3473968bd0c6aec22507e188cf891b199b88045880715d60d11059957f",
       "headings": [
+        {
+          "id": "22-october-2026-phase-1-on-main",
+          "text": "22 October 2026: phase 1 on main",
+          "level": 2
+        },
         {
           "id": "recovered-claude-scope-released-in-beta6",
           "text": "Recovered Claude scope released in beta.6",
@@ -3019,6 +3198,41 @@
         {
           "id": "8-coordination",
           "text": "8. Coordination",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/operations/expansion-handoff-2026-10-21",
+      "source": "docs/operations/expansion-handoff-2026-10-21.md",
+      "title": "Product expansion pause handoff — 21 October 2026",
+      "section": "Operations",
+      "status": "Operations",
+      "sha256": "8bf63e13d8313acf92eb104589881db2cb24de327e85ad8d3a2d7a0cf7105808",
+      "headings": [
+        {
+          "id": "pause-boundary",
+          "text": "Pause boundary",
+          "level": 2
+        },
+        {
+          "id": "status-by-accepted-feature",
+          "text": "Status by accepted feature",
+          "level": 2
+        },
+        {
+          "id": "requested-direction-and-current-ui-captures",
+          "text": "Requested direction and current UI captures",
+          "level": 2
+        },
+        {
+          "id": "test-ledger-at-pause",
+          "text": "Test ledger at pause",
+          "level": 2
+        },
+        {
+          "id": "snapshot-notes-and-resume-sequence",
+          "text": "Snapshot notes and resume sequence",
           "level": 2
         }
       ]
@@ -3159,6 +3373,31 @@
         {
           "id": "mit-license",
           "text": "MIT License",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/plans/reference-expansion-plan",
+      "source": "docs/plans/reference-expansion-plan.md",
+      "title": "Accepted product expansion plan",
+      "section": "Plans & briefs",
+      "status": "Plan",
+      "sha256": "d70983ddbe8716d443d8dc8ad9a34573ce0127e970ddaef2b8647e4937537a62",
+      "headings": [
+        {
+          "id": "product-scope",
+          "text": "Product scope",
+          "level": 2
+        },
+        {
+          "id": "shared-constraints",
+          "text": "Shared constraints",
+          "level": 2
+        },
+        {
+          "id": "state-vocabulary",
+          "text": "State vocabulary",
           "level": 2
         }
       ]
@@ -3454,6 +3693,15 @@
       ]
     },
     {
+      "id": "project/history/expansion/README",
+      "source": "docs/history/expansion/README.md",
+      "title": "20–21 October product expansion records",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "7cc0d97e9a5db09b472057db3f1f30e7f0ba5e69fda3045339f5f028e06ac9a1",
+      "headings": []
+    },
+    {
       "id": "project/history/improvement/plan-v1-qa-draft",
       "source": "docs/history/improvement/plan-v1-qa-draft.md",
       "title": "Bitbots improvement plan: CLI connectivity, reasoning effort, and dictation",
@@ -3644,6 +3892,36 @@
       ]
     },
     {
+      "id": "project/history/expansion/tasks-contract",
+      "source": "docs/history/expansion/tasks-contract.md",
+      "title": "Durable tasks contract",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "7a0d303a98d4300ac5e6b8a3965a86b80f5518c6925ce3a55a8e83612d5c7e64",
+      "headings": [
+        {
+          "id": "task-and-run-records",
+          "text": "Task and run records",
+          "level": 2
+        },
+        {
+          "id": "rpcs-and-event-names",
+          "text": "RPCs and event names",
+          "level": 2
+        },
+        {
+          "id": "supervision-and-schedules",
+          "text": "Supervision and schedules",
+          "level": 2
+        },
+        {
+          "id": "authority-and-restart-behavior",
+          "text": "Authority and restart behavior",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/history/expansion-v2/README",
       "source": "docs/history/expansion-v2/README.md",
       "title": "Expansion v2 records",
@@ -3679,7 +3957,7 @@
       "title": "Expansion v2 status",
       "section": "History records",
       "status": "Historical record",
-      "sha256": "8ef1ef61d623a6d0b7b1891d2656df6eec59370e4f7db31eec490967955c64a6",
+      "sha256": "68e6da1aa06f080476d2b091b581471d7c6d28bd0ade5e50a922b6a3b95d1449",
       "headings": [
         {
           "id": "states",
@@ -13008,6 +13286,151 @@
       ]
     },
     {
+      "id": "project/history/expansion/platform-contract",
+      "source": "docs/history/expansion/platform-contract.md",
+      "title": "Platform contract",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "6a009e8d8dc93f301f0f990e0271978f3e4693353b0ce652f36a4281b30b0af6",
+      "headings": [
+        {
+          "id": "daemon-rpcs",
+          "text": "Daemon RPCs",
+          "level": 2
+        },
+        {
+          "id": "runtime-setup",
+          "text": "Runtime setup",
+          "level": 3
+        },
+        {
+          "id": "github-inbox",
+          "text": "GitHub inbox",
+          "level": 3
+        },
+        {
+          "id": "mcp-connectors",
+          "text": "MCP connectors",
+          "level": 3
+        },
+        {
+          "id": "local-computer-control",
+          "text": "Local computer control",
+          "level": 3
+        },
+        {
+          "id": "relay",
+          "text": "Relay",
+          "level": 3
+        },
+        {
+          "id": "native-shell",
+          "text": "Native shell",
+          "level": 2
+        },
+        {
+          "id": "events-and-data-handling",
+          "text": "Events and data handling",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion/platform-report",
+      "source": "docs/history/expansion/platform-report.md",
+      "title": "Platform implementation report — paused handoff",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "d966f622163e8f57059c3686d08de9277a1a61dc832ab6c4b990fa3c4bc5b223",
+      "headings": [
+        {
+          "id": "feature-status",
+          "text": "Feature status",
+          "level": 2
+        },
+        {
+          "id": "exact-verification-record",
+          "text": "Exact verification record",
+          "level": 2
+        },
+        {
+          "id": "manual-integration-notes-for-the-next-authorized-implementation-turn",
+          "text": "Manual integration notes for the next authorized implementation turn",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion/platform-snapshot-manifest",
+      "source": "docs/history/expansion/platform-snapshot-manifest.md",
+      "title": "Platform lane paused snapshot manifest",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "e6e47a41ce3e3f1e241d9619321ba9b92bfa6801d9c679f0f91164ad0bc0a60b",
+      "headings": [
+        {
+          "id": "source-files-in-this-snapshot",
+          "text": "Source files in this snapshot",
+          "level": 2
+        },
+        {
+          "id": "worktree-status",
+          "text": "Worktree status",
+          "level": 2
+        },
+        {
+          "id": "cross-worktree-copies-known-from-messages",
+          "text": "Cross-worktree copies known from messages",
+          "level": 2
+        },
+        {
+          "id": "manifest-and-dependency-delta",
+          "text": "Manifest and dependency delta",
+          "level": 2
+        },
+        {
+          "id": "last-known-processtest-boundary",
+          "text": "Last-known process/test boundary",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion/tasks-report",
+      "source": "docs/history/expansion/tasks-report.md",
+      "title": "Task and daemon lane paused report",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "6773fe7de14ebfaa44324a4646c3c99b590a62de11a2d7cc2e46794c34808c09",
+      "headings": [
+        {
+          "id": "worktree-contents",
+          "text": "Worktree contents",
+          "level": 2
+        },
+        {
+          "id": "verified-commands-and-limits",
+          "text": "Verified commands and limits",
+          "level": 2
+        },
+        {
+          "id": "implemented-in-source-not-yet-verified-as-a-complete-product-path",
+          "text": "Implemented in source, not yet verified as a complete product path",
+          "level": 2
+        },
+        {
+          "id": "outstanding-acceptance-work",
+          "text": "Outstanding acceptance work",
+          "level": 2
+        },
+        {
+          "id": "safe-continuation",
+          "text": "Safe continuation",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/history/expansion-v2/task-rpc-shapes",
       "source": "docs/history/expansion-v2/task-rpc-shapes.md",
       "title": "Task RPC shapes (slice 1A)",
@@ -13083,6 +13506,41 @@
         {
           "id": "events",
           "text": "Events",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion/ui-report",
+      "source": "docs/history/expansion/ui-report.md",
+      "title": "UI lane pause report",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "862b7286ea8bc295966b1e3b4f80f639bdc82e34e9bd7daa8f9053fdc60ddcfa",
+      "headings": [
+        {
+          "id": "context",
+          "text": "Context",
+          "level": 2
+        },
+        {
+          "id": "current-ui-state-by-accepted-feature",
+          "text": "Current UI state by accepted feature",
+          "level": 2
+        },
+        {
+          "id": "changed-paths-in-the-ui-worktree",
+          "text": "Changed paths in the UI worktree",
+          "level": 2
+        },
+        {
+          "id": "verification-record",
+          "text": "Verification record",
+          "level": 2
+        },
+        {
+          "id": "peer-and-platform-notes",
+          "text": "Peer and platform notes",
           "level": 2
         }
       ]

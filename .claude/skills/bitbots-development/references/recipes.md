@@ -1,6 +1,6 @@
 # Recipes for recurring changes
 
-Last reviewed: 2026-10-19. Each recipe lists every place that must change together; missing one is the usual cause of a broken gate or a feature that works only in the preview. Update a recipe when you find a step it lacks.
+Last reviewed: 2026-10-22. Each recipe lists every place that must change together; missing one is the usual cause of a broken gate or a feature that works only in the preview. Update a recipe when you find a step it lacks.
 
 ## Add a settings key
 

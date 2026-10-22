@@ -1,6 +1,6 @@
 # Design language
 
-Last reviewed: 2026-10-20. Source of truth for rules: `docs/design/design-system.md` and `docs/library/content/reference/theme-system.md`. When the owner changes a visual rule, edit the rule here in place and in `docs/design/design-system.md`.
+Last reviewed: 2026-10-22. Source of truth for rules: `docs/design/design-system.md` and `docs/library/content/reference/theme-system.md`. When the owner changes a visual rule, edit the rule here in place and in `docs/design/design-system.md`.
 
 ## Product feel
 
@@ -17,11 +17,11 @@ A calm chat app for developers moving between coding-agent sessions. The bots su
 
 Both support dark and light. Frost styles the companion and dictation windows; Blobots keeps its existing overlay palette. Pop, Dot and Legacy themes and stylesheets are removed (owner direction, 20 October 2026); old saved choices migrate to Bitbots.
 
-## Rules that apply to every look added after Legacy
+## Rules that apply to every look
 
 - **Shape:** rounded rectangles like the logo (`--radius-sm 9px`, `--radius-md 12px`, `--radius-lg 16px`, `--radius-pill 12px`, panels about 20 to 22 px). No pill or circle controls or surfaces: buttons, chips, composer, toggles and knobs, segmented controls, swatches and avatar frames are rounded rectangles. Exceptions: the circular Manager badge and locked-bot badge on avatars (`docs/design/design-system.md`), and the look orbs (the owner asked for orbs). Bot artwork is not UI and keeps its own shape.
-- **Flat:** no glow, no halo, no decorative gradients, no text shimmer (the owner's words for Frost: "slick, smooth, premium; no glow"). Shadows only where the look's language has them (Pop's hard offsets) or one soft shadow on floating menus and dialogs.
-- **Readable selection:** in looks that fill a selected row (Dot inverts, Pop uses butter), every descendant of the selected element takes the selected text colour (names, role chips, times, status lines, icons). This was missed twice (FIX40 Dot and Pop); test it in dark and light.
+- **Flat:** no glow, no halo, no decorative gradients, no text shimmer (the owner's words for Frost: "slick, smooth, premium; no glow"). Shadows only where a look's own language has them, or one soft shadow on floating menus and dialogs.
+- **Readable selection:** in any look that fills a selected row, every descendant of the selected element takes the selected text colour (names, role chips, times, status lines, icons). Dot (inverted) and Pop (butter) were the two that needed it, and both were removed on 20 October 2026. This was missed twice (FIX40, Dot and Pop); test any filled selected row in dark and light.
 - **Contrast:** body text at least 4.5:1 against the surface it sits on, including over wallpapers at the default glass level.
 - **Keep focus rings and selected states visible.** Never blanket-remove `box-shadow` (the focus ring is a box shadow).
 - **User accent wins:** `--user-accent` (from `appearance.accent`) overrides each look's default accent.
@@ -33,7 +33,7 @@ All colours, sizes and radii come from `apps/desktop/src/ui/theme.css` tokens (`
 
 ## Bot art
 
-Per bot, offer Automatic, 3D robot (`robot`), 2D robot (`robot-pop`), Glossy (`blob`) and Hand-painted (`painted`). Both robots use the four `look.bot.shape` outlines and shell/trim/screen controls. Saved `robot-flat` and `robot-dot` ids remain valid and resolve to 2D robot. Automatic uses 2D for Bitbots and Glossy for Blobots. Hand-painted has twelve `look.paint` shapes; its body stays still, its eyes blink and large avatars track the pointer (`useEyeTracking.ts`). Mini avatars have no pointer listener; listeners and animation frames are cleaned up, and reduced motion stays still. Corner status badges retain their meaning. Manager badge: white star on orange.
+Per bot, offer Automatic, 3D robot (`robot`), 2D robot (`robot-pop`), Glossy (`blob`) and Hand-painted (`painted`). Both robots use the four `look.bot.shape` outlines and shell/trim/screen controls. Saved `robot-flat` and `robot-dot` ids remain valid in the daemon (`valid_look`) and resolve to 2D robot in the app (`resolveArt`, `blob/art/art.ts`); the Flat and Dot renderers stay in the code and on the character sheet (`/preview.html`), but the picker does not offer them. Automatic uses 2D for Bitbots and Glossy for Blobots. Hand-painted has twelve `look.paint` shapes; its body stays still, its eyes blink and large avatars track the pointer (`useEyeTracking.ts`). Mini avatars have no pointer listener; listeners and animation frames are cleaned up, and reduced motion stays still. Corner status badges retain their meaning. Manager badge: white star on orange.
 
 The update notice lives immediately above the profile in the left sidebar, including without a selected conversation. Settings use row-shaped skeletons while loading. Finished tasks use two lines, with status/time beside the name. Selected and hovered surfaces must pair every descendant with readable text; user-bubble links inherit the bubble foreground.
 

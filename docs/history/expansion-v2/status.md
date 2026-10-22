@@ -20,11 +20,11 @@ The evidence column names the run, the commit or the screen check that backs the
 
 | Slice | Name | Owner lane | State | Evidence |
 | --- | --- | --- | --- | --- |
-| 1A backend | Durable task ledger and board RPCs (backend) | OpenCode DeepSeek | in-progress | Lane running in `D:\fx60` (branch `exp/tasks-backend`). Not reviewed. |
-| 1A UI | Board UI (the UI half of 1A) | Director | implemented-unverified | UI branch `exp/board-ui` commit `fec61f4`: typecheck clean, 13 new tests pass (taskModel 5, taskViews 4, DelegateBoard mounted 4), `npm run build` passes, board, tree and timeline checked in the browser preview (Frost dark and Pop light only; Dot, Legacy, Blobots and light Frost not yet checked). Runs against fixture data only, not the daemon. |
+| 1A backend | Durable task ledger and board RPCs (backend) | OpenCode DeepSeek | targeted-tests-pass | Commit `67611fd`, merged to `main` at `26ec193`. Director reran storage (125) and daemon (464) tests and clippy on the merged tree. Fake-adapter tests only: no live provider run. `bounded` and `manager_completes` supervision return `unsupported`. |
+| 1A UI | Board UI (the UI half of 1A) | Director | implemented-unverified | Commits `fec61f4` and `4107d5d`, merged to `main` at `26ec193`. Typecheck, 1,377 UI tests and both production builds pass on the merged tree. Checked in the browser preview against fixture data (Bitbots dark Board; Frost and Pop before the theme removal). The real app was launched once with an isolated database; no task was dispatched to a real bot. |
 | 1B | Supervision policies | OpenCode DeepSeek (backend) | not-started | |
 | 1C | Task schedules | OpenCode DeepSeek (backend) | not-started | |
-| 1D | Tree and timeline views | Director (UI) | implemented-unverified | UI branch `exp/board-ui` commit `fec61f4`: typecheck clean, 13 new tests pass (taskModel 5, taskViews 4, DelegateBoard mounted 4), `npm run build` passes, board, tree and timeline checked in the browser preview (Frost dark and Pop light only; Dot, Legacy, Blobots and light Frost not yet checked). Runs against fixture data only, not the daemon. |
+| 1D | Tree and timeline views | Director (UI) | implemented-unverified | Same commits and gates as 1A UI. Preview only, fixture data; the Tree and Blobots looks were not re-checked after the merge. |
 
 Phase 1 has five slices in the approved plan. The fifth is not yet named in the brief, so it has no row here. It is added when it is named. Slice 1E in the earlier working notes is a phase 5 item (remote read-only list), not a phase 1 slice.
 

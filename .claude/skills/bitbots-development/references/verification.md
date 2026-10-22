@@ -1,6 +1,6 @@
 # Verification
 
-Last reviewed: 2026-10-21 (Rust 1.94.0 stable, Node 24, OpenCode 2.0.32, Codex CLI 0.163). Update this file when a gate, tool or environment fact changes.
+Last reviewed: 2026-10-22 (Rust 1.94.0 stable, Node 24, OpenCode 2.0.32, Codex CLI 0.163). Update this file when a gate, tool or environment fact changes.
 
 ## Gates (run all before calling work done)
 
@@ -40,7 +40,7 @@ When measuring theme contrast, wait for colour transitions to finish (250 ms in 
 
 The local launch file `.claude/launch.json` (git-ignored, so it is not in the repository) has a `board-preview` configuration on port 5176 for the worktree at `D:/fx61` (branch `exp/board-ui`). Its board data comes from `apps/desktop/src/preview/fixtureTasks.ts`, a preview-only ledger that mimics the task contract, so the board checks run without the daemon.
 
-Useful URLs: `/` (main window; add `?style=bitbots|blobots`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`), `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
+Useful URLs: `/` (main window; add `?style=bitbots|blobots`, `&theme=light|dark`, `&wallpaper=`, `&glass=`, `&font=`, `&accent=%23rrggbb`, `&density=`), `/?preview-settings` (settings sheet), `/?companion&mode=home&view=chat|activity|settings`, `/preview.html` (bot art sheet, which shows all six arts, including Flat and Dot that the picker does not offer; `?art=robot|robot-flat|robot-pop|robot-dot|blob|painted`), `/launch-preview.html?fixture=in-progress|onboarding-step-1`, `/dictation-preview.html`, `/gallery.html`.
 
 The app plays a launch intro and fades the shell in; screenshots taken in the first seconds show a dimmed or empty window. Wait or check `getComputedStyle(document.querySelector('.app-shell')).opacity === '1'`. The real window is at least 1000 px wide; layout overlaps seen only below that width are not bugs.
 

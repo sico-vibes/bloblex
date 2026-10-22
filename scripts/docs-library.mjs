@@ -75,6 +75,7 @@ const definitions = [
     ],
   ],
   ['Project library', 'Project documentation', 'book-open', []],
+  ['Project library', 'Expansion handoff', 'clipboard-list', ['guides/expansion-handoff']],
   ['Project library', 'Design & product', 'pencil-ruler', []],
   ['Project library', 'Operations', 'settings-2', []],
   ['Project library', 'Legal', 'scale', []],
@@ -224,6 +225,14 @@ async function discover() {
   const newContent = await walk(path.join(library, 'content'));
   for (const source of newContent) {
     if (source.endsWith('.md')) files.push(path.relative(root, source).split(path.sep).join('/'));
+  }
+  const expansionDocs = [
+    path.join(root, 'docs', 'operations', 'expansion-handoff-2026-10-21.md'),
+    path.join(root, 'docs', 'plans', 'reference-expansion-plan.md'),
+    ...(await walk(path.join(root, 'docs', 'history', 'expansion'))),
+  ];
+  for (const source of expansionDocs) {
+    if (source.endsWith('.md') && existsSync(source)) files.push(path.relative(root, source).split(path.sep).join('/'));
   }
   return [...new Set(files)]
     .filter(
@@ -409,6 +418,12 @@ export function renderMarkdown(document, bySource, warnings = []) {
     },
     link({ href, title, tokens }) {
       const label = this.parser.parseInline(tokens);
+      if (!/^https?:/i.test(href) && /\.(png|jpe?g|webp|gif)$/i.test(href.split('?')[0])) {
+        const image = path.resolve(root, path.dirname(document.source), href.split('?')[0]);
+        if (insideRoot(image) && existsSync(image)) {
+          return `<a href="__LOCAL_IMAGE_LINK__${encodeURIComponent(image)}"${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</a>`;
+        }
+      }
       const resolved = resolveLink(href, document.source, bySource);
       if (resolved.kind === 'blocked' || resolved.kind === 'missing') {
         if (resolved.kind === 'missing') {
@@ -492,6 +507,15 @@ async function embedLocalImages(body) {
       continue;
     }
     const type = extension === 'jpg' ? 'jpeg' : extension;
+    const bytes = await readFile(source);
+    body = body.replace(match[0], `data:image/${type};base64,${bytes.toString('base64')}`);
+  }
+  const linkMatches = [...body.matchAll(/__LOCAL_IMAGE_LINK__([^"<>]+)/g)];
+  for (const match of linkMatches) {
+    const source = decodeURIComponent(match[1]);
+    const extension = path.extname(source).slice(1).toLowerCase();
+    const type = extension === 'jpg' ? 'jpeg' : extension;
+    if (!insideRoot(source) || !['png', 'jpeg', 'webp', 'gif'].includes(type) || !existsSync(source)) continue;
     const bytes = await readFile(source);
     body = body.replace(match[0], `data:image/${type};base64,${bytes.toString('base64')}`);
   }
@@ -736,7 +760,7 @@ export async function check() {
     errors.push('HTML depends on external runtime assets.');
   }
   if (/<img[^>]+src="https?:/.test(html)) errors.push('HTML embeds a remote image.');
-  if (/__LOCAL_IMAGE__/.test(html)) errors.push('HTML contains an unresolved local image placeholder.');
+  if (/__LOCAL_IMAGE(?:_LINK)?__/.test(html)) errors.push('HTML contains an unresolved local image placeholder.');
   if (/\bferry\b/i.test(html)) errors.push('The output still contains the reference project name.');
   if (/\bferry\b/i.test(JSON.stringify(manifest))) errors.push('The catalogue still contains the reference project name.');
   if (errors.length) throw new Error(errors.join('\n'));

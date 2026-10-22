@@ -1,8 +1,8 @@
 # Bitbots documentation
 
 > **What this is:** the index of every Markdown document in the repository, grouped by purpose. Use it to find the current document for a task.
-> **Status:** current. Rewritten by the documentation library pass of 19 October 2026 (structure and index only; facts were not changed).
-> **Last updated:** 2026-10-19
+> **Status:** current. Rewritten by the documentation library pass of 19 October 2026 (structure and index only; facts were not changed); updated 22 October 2026 for the merged phase 1 and the expansion records.
+> **Last updated:** 2026-10-22
 
 Where a document and the code disagree, the code wins. For rules, [AGENTS.md](../AGENTS.md) wins. For anything else, the status line of the document says whether it is current, historical or superseded.
 
@@ -13,7 +13,8 @@ Where a document and the code disagree, the code wins. For rules, [AGENTS.md](..
 - **AI agents and the delivery process:** read [AGENTS.md](../AGENTS.md) first, then [operations/operating-model.md](operations/operating-model.md) (a summary of AGENTS.md dated 14 October 2026, not updated for the 16 to 19 October amendments; AGENTS.md wins), [operations/implementation-status.md](operations/implementation-status.md) (open gaps), and [operations/release-checklist.md](operations/release-checklist.md) (release state).
 - **New contributors:** [README.md](../README.md), then [reference/architecture.md](reference/architecture.md), [guides/windows-development.md](guides/windows-development.md), [product.md](design/product.md), [design-system.md](design/design-system.md), [ipc-contract.md](ipc-contract.md) and [reference/runtime-capabilities.md](reference/runtime-capabilities.md).
 - **Plan and roadmap:** [plans/e2e-plan-v2.md](plans/e2e-plan-v2.md) is the plan. [plans/improvement-plan.md](plans/improvement-plan.md) is the roadmap that AGENTS.md names.
-- **Release state:** [session-handoff.md](operations/session-handoff.md) is the dated handoff. The current release is `v0.1.0-beta.35` ([release notes](releases/0.1.0-beta.35.md)). Beta.32 and later update themselves ([operations/updater.md](operations/updater.md)).
+- **Product expansion:** [plans/expansion-plan-v2.md](plans/expansion-plan-v2.md) is the approved expansion plan (21 October 2026). Phase 1 (the tasks board, tree, timeline and task backend) is on `main`; its status is in [history/expansion-v2/](history/expansion-v2/). The 20 and 21 October records are historical: the [pause handoff](operations/expansion-handoff-2026-10-21.md), the [accepted reference plan](plans/reference-expansion-plan.md) and the [lane records](history/expansion/README.md). Each carries a 22 October update.
+- **Release state:** [session-handoff.md](operations/session-handoff.md) is the dated handoff. The current release is `v0.1.0-beta.36` ([release notes](releases/0.1.0-beta.36.md)); `main` has later work that is not released. Beta.32 and later update themselves ([operations/updater.md](operations/updater.md)).
 - **Reading the documentation offline:** open [DOCUMENTATION.html](DOCUMENTATION.html), one self-contained file at the top of `docs/` with the guides, the reference and every project document. Rebuild and check it with `node scripts/docs-library.mjs build` and `node scripts/docs-library.mjs check`.
 - **Writing or editing a document:** [STYLE.md](STYLE.md).
 
@@ -117,6 +118,8 @@ The current plan and the roadmap.
 | --- | --- | --- | --- |
 | [Bitbots E2E plan: configurable blobs, sessions tree, token analytics, provider quota, release](plans/e2e-plan-v2.md) | The whole-product plan (E2E v2): the phases, the dated checkpoints and the open work. | current plan; its status section is dated 5 to 6 October 2026, and the release figure in the kept status paragraph (beta.23) is out of date; see [implementation-status.md](operations/implementation-status.md) | 2026-10-19 |
 | [Bitbots improvement plan v2: a BB-informed, companion-style roadmap](plans/improvement-plan.md) | The v2 improvement roadmap for Bitbots: a companion-style plan that builds on the E2E plan. | current; the roadmap named by AGENTS.md (12 October 2026 amendment) | 2026-10-15 |
+| [Expansion plan v2: tasks, desktop wins, providers, trusted access and phone relay](plans/expansion-plan-v2.md) | The approved expansion plan: the verdict on the first Codex draft, the features, five phases with gates, and 23 slices. | current; approved 21 October 2026; phase 1 is on `main` | 2026-10-21 |
+| [Accepted product expansion plan (20 and 21 October 2026)](plans/reference-expansion-plan.md) | The owner's accepted scope and constraints for the 20 and 21 October expansion. | historical record, superseded in part (see its 22 October update) | 2026-10-22 |
 
 ## Operations
 
@@ -124,11 +127,12 @@ Process, release and status records.
 
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
-| [Implementation status](operations/implementation-status.md) | The implementation status: released versions, phase status, work after the plan and the open gaps. | current through the FIX40 wave, released as v0.1.0-beta.35 (19 October 2026) | 2026-10-19 |
+| [Implementation status](operations/implementation-status.md) | The implementation status: released versions, phase status, work after the plan and the open gaps. | current; latest release v0.1.0-beta.36; a 22 October 2026 section covers phase 1 on `main` | 2026-10-22 |
 | [Native smoke test results (Phase 2a + Phase 3)](operations/native-smoke-results.md) | Results of the native smoke test run on 2 October 2026 against an isolated database. | historical; a record of 2 October 2026 | 2026-10-15 |
 | [Operating model: a dated summary of the rules (14 October 2026)](operations/operating-model.md) | A summary, dated 14 October 2026, of the rules in AGENTS.md. AGENTS.md wins on any conflict. The amendments of 16 to 19 October 2026 are not all reflected here. | current; a dated summary (14 October 2026), not updated for the 16 to 19 October amendments | 2026-10-19 |
 | [Release checklist](operations/release-checklist.md) | The checklist for each Bitbots release: gates, publishing, digests, clean-up and open release items. | current | 2026-10-19 |
-| [Bitbots session handoff](operations/session-handoff.md) | The session handoff: dated sections, newest first, with the current release and the open items. | historical handoff with dated sections; the current release is v0.1.0-beta.35 | 2026-10-19 |
+| [Bitbots session handoff](operations/session-handoff.md) | The session handoff: dated sections, newest first, with the current release and the open items. | current handoff with dated sections, newest first; the latest entry is 22 October 2026; the current release is v0.1.0-beta.36 | 2026-10-22 |
+| [Product expansion pause handoff (21 October 2026)](operations/expansion-handoff-2026-10-21.md) | Lane status, exact evidence and image comparisons at the owner's pause. | historical record, superseded in part (see its 22 October update) | 2026-10-22 |
 | [Auto-update and release contract](operations/updater.md) | The auto-update contract: decisions, channels, app behaviour, commands and the release process. | current | 2026-10-15 |
 
 ## Audits
@@ -211,6 +215,7 @@ One note per release. The app reads these files at build time, so they keep thei
 | [Bitbots 0.1.0-beta.33](releases/0.1.0-beta.33.md) | Release notes for 0.1.0-beta.33. | release note (protected path) | 2026-10-18 |
 | [Bitbots 0.1.0-beta.34](releases/0.1.0-beta.34.md) | Release notes for 0.1.0-beta.34. | release note (protected path) | 2026-10-18 |
 | [Bitbots 0.1.0-beta.35](releases/0.1.0-beta.35.md) | Release notes for 0.1.0-beta.35. | release note (protected path) | 2026-10-19 |
+| [Bitbots 0.1.0-beta.36](releases/0.1.0-beta.36.md) | Release notes for 0.1.0-beta.36. | release note (protected path) | 2026-10-19 |
 | [Bloblex 0.1.0-beta.4](releases/0.1.0-beta.4.md) | Release notes for 0.1.0-beta.4. | release note (protected path) | 2026-10-04 |
 | [Bloblex 0.1.0-beta.5](releases/0.1.0-beta.5.md) | Release notes for 0.1.0-beta.5. | release note (protected path) | 2026-10-04 |
 | [Bloblex 0.1.0-beta.6](releases/0.1.0-beta.6.md) | Release notes for 0.1.0-beta.6. | release note (protected path) | 2026-10-04 |
@@ -605,6 +610,19 @@ Dated records of the work. Each FIX wave has its own folder with its specs, brie
 | Document | What it is | Status | Last updated |
 | --- | --- | --- | --- |
 | [Director log](history/director-log.md) | Director log of the delegated work, kept as a dated record. | historical | 2026-10-15 |
+
+### Product expansion, 20 and 21 October 2026 (paused records)
+
+| Document | What it is | Status | Last updated |
+| --- | --- | --- | --- |
+| [Lane records and contracts](history/expansion/README.md) | Index of the paused lane reports, contracts and snapshot manifests from the owner's pause. | historical record, superseded in part (see its 22 October update) | 2026-10-22 |
+
+### Product expansion v2, from 21 October 2026
+
+| Document | What it is | Status | Last updated |
+| --- | --- | --- | --- |
+| [Expansion v2 records](history/expansion-v2/README.md) | Index of the phase 1 plan records, the working arrangement and the status table. | current index; its status table was written before the 22 October merge | 2026-10-22 |
+| [Phase 1 status](history/expansion-v2/status.md) | Status of each phase 1 slice, with its evidence. | written before the 22 October merge; the 22 October entry in implementation status gives the merged state | 2026-10-21 |
 
 ## Library work records
 

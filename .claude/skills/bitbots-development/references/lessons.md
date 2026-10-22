@@ -7,11 +7,16 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **Root cause:** "the bot has a live turn" is read from `active_turns`. The event loop removes the entry when a turn really ends; a test that calls the after-turn hook itself never does.
 - **Avoid:** in tests, call the hook and then `st.active_turns.lock().await.remove(session)` (see `end_turn` in `main.rs` `mod task_board_tests`), or let the fake adapter emit the turn-end event.
 
-## 2026-10-21 · UI · A new page's segmented control was unstyled in the main window
-- **Symptom:** a new Tasks page used the shared `segmented` class; in the main window it rendered as plain stacked buttons.
-- **Root cause:** the main window has no unscoped base style for `.segmented`. The only unscoped rule is in `companion.css` (companion window). The main window gets styling only from the Legacy, Pop and Dot look rules, each scoped to its own look (`bitbots.css`, `themes/pop.css`, `themes/dot.css`), so the default Frost look had none.
-- **Fix:** `ui/tasks.css` adds a scoped base rule, `.tasks-page .segmented`.
-- **Avoid:** before using a shared class in a new page, grep for its rule (`rg -n "\.segmented" apps/desktop/src`). If only the companion or a look styles it, add a scoped base rule in the page's own stylesheet.
+## 2026-10-21 · UI · A handed-off UI lane drifted from the owner's reference images
+- **Symptom:** the Codex UI lane's screens passed fixture screenshots and mounted tests but did not look like the owner's references. The tree was an indented list, not a node graph; the timeline bars were unlabelled; the board's main action was a native select plus Assign; the connections page had a duplicated heading and text-only cards; onboarding showed fixture chips.
+- **Root cause:** the briefs described features, not the reference composition, and passing mounted tests was taken as acceptance of the UI.
+- **Avoid:** put the reference image beside each UI brief and name the composition to match it. The Director compares each screen with its reference in the preview before accepting it. Fixture screenshots are not native or live evidence. Check new pages for duplicated headings and raw native controls such as `<select>`.
+
+## 2026-10-21 · UI · A new page's segmented control was not styled in the main window
+- **Symptom:** the Tasks page used the shared `segmented` class (`ui/SegmentedControl.tsx`) and needed its own styling in the main window. The visible symptom was not recorded in detail.
+- **Root cause (corrected the same day; the first version named the wrong cause):** `ui/companion.css` has an unscoped `.segmented` rule, and `main.tsx` loads that sheet in the main window too. The rule reads companion-only tokens (`--companion-alpha-07`, `--c-tab-on`, `--c-dim-2`), which are defined only under `.companion-surface` and `.companion-root` (`companion.css:4`). In the main window those tokens are undefined, so the background and colours fall back to their initial values. Pop, Dot and Legacy, now removed, had styled the control under their own scopes.
+- **Fix:** the Tasks page's own stylesheet adds a scoped rule, `.tasks-page .segmented` (`ui/tasks.css`, on branch `exp/board-ui`).
+- **Avoid:** before using a shared class in a new page, grep for its rules (`rg -n "\.segmented" apps/desktop/src`) and check which tokens each rule reads. A token defined only under the companion scope does not apply in the main window.
 
 ## 2026-10-21 · Process · The Bash tool rejects long heredocs with apostrophes
 - **Symptom:** a `cat > file <<'EOF'` heredoc that contained apostrophes failed with "unexpected EOF while looking for matching quote".
@@ -65,7 +70,7 @@ Only Bitbots and Blobots remain. Remove retired look CSS and registrations, norm
 ## 2026-10-19 · Looks · Frost and Pop never applied in the installed app (FIX42)
 - **Symptom:** beta.35 installed: Settings showed Bitbots and a wallpaper selected, the window stayed plain dark; the browser preview looked right.
 - **Root cause:** `loadStyle` in `apps/desktop/src/blob/bitbots.ts` picked the look stylesheet with a nested ternary of three CSS-only `import()` calls. Vite's production build turned it into one `__vitePreload(..., __vite__mapDeps([7]))` whose dependency list was only the last branch (`dot.css`), so Frost and Pop loaded Dot's CSS. Proven over the WebView2 debugging port (loaded sheets: `index`, `inter`, `dot`) and in the built JS. The dev server does not rewrite preloads, so the preview hid it.
-- **Fix:** all look stylesheets are static imports in `apps/desktop/src/main.tsx`; `src/ui/themeBuild.test.ts` forbids dynamic imports of look CSS (`098831e`, merged in `c119f93`, shipped in v0.1.0-beta.36).
+- **Fix:** all look stylesheets are static imports in `apps/desktop/src/main.tsx`; `src/ui/themeBuild.test.ts` forbids dynamic imports of look CSS (`098831e`, merged in `c119f93`, shipped in v0.1.0-beta.36). Since 20 October 2026 the only look stylesheet is `ui/themes/frost.css`; the Dot and Pop sheets named above were removed in `5eb6879`.
 - **Avoid:** never put several `import()` calls in one conditional expression; give each its own arrow function (as `ui/fonts.ts` does). Check bundling-sensitive changes in `npm run build` output or the installed app, not only the preview.
 
 ## 2026-10-19 · Process · A lane's root cause can be wrong while its fix works
@@ -90,7 +95,7 @@ Full Vitest runs alongside cargo builds or lanes produced 57 and 100 false failu
 A daemon test that sets many settings must assert the broadcast events it cares about before setting more keys: every `settings.set` queues a `settings.changed` event, and later `events.recv()` calls read the queued ones first (FIX40 `appearance_settings_validate_persist_and_broadcast`).
 
 ## 2026-10-19 · Design · Selected rows in filled looks
-Dot (inverted) and Pop (butter) selections both shipped with unreadable descendants at first (white title on white; cream role chip and amber status on butter) because base rules for `.role-chip`, row times and `.bot-row-preview.waiting` are more specific. Scope the overrides under the selected element with enough specificity and check every descendant in dark and light.
+Dot and Pop were removed on 20 October 2026, but the rule stands for any filled look. Dot (inverted) and Pop (butter) selections both shipped with unreadable descendants at first (white title on white; cream role chip and amber status on butter) because base rules for `.role-chip`, row times and `.bot-row-preview.waiting` are more specific. Scope the overrides under the selected element with enough specificity and check every descendant in dark and light.
 
 ## 2026-10-19 · Design · Frost glass level
 At tint .84 the Lake wallpaper's bright band bled through all panels as a stripe; Solid is tint .93 / blur 24 px. The owner wants Solid as the default and no glow anywhere.

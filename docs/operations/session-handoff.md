@@ -1,8 +1,28 @@
 # Bitbots session handoff
 
 > **What this is:** The session handoff: dated sections, newest first, with the current release and the open items.
-> **Status:** historical handoff with dated sections; the current release is v0.1.0-beta.35
-> **Last updated:** 2026-10-19
+> **Status:** current handoff with dated sections, newest first; the latest entry is 22 October 2026, and the current release is v0.1.0-beta.36
+> **Last updated:** 2026-10-22
+
+## 22 October 2026: phase 1 on main after the owner's resume
+
+**State.** The owner resumed the product expansion on 21 October 2026. Phase 1 (the task ledger and task backend, the board, the tree and the timeline) and Codex's live-development fixes are on `main` at `26ec193` (merge `861853f`, then the rebuilt documentation library). `main` is not released: its version is still `0.1.0-beta.36`, the release tagged at `63f4b39`, and no release has been made since. The plan is [plans/expansion-plan-v2.md](../plans/expansion-plan-v2.md). The phase 1 status table, [history/expansion-v2/status.md](../history/expansion-v2/status.md), was written before the merge and needs its states reset from this entry. The 21 October pause handoff ([expansion-handoff-2026-10-21.md](expansion-handoff-2026-10-21.md)) and the reference plan are historical and superseded in part.
+
+**What is on main.** The phase 1 tasks work: a durable task ledger, a board with an Unassigned list and a lane per bot, the tree and the timeline. The live-development fixes (commit `5eb6879`) keep two themes only, Bitbots and Blobots; Pop, Dot and Legacy are removed and saved choices move to Bitbots. They also trim the bot art picker, open links externally with an explicit scope, add permanent bot deletion with a hold-to-confirm, an Archived bots view, an update notice in the sidebar, settings skeletons, and dev-script database isolation.
+
+**Verified (Director, on this tree).** Typecheck; 1,377 UI tests; Rust workspace tests, with `bloblex-daemon` 464; clippy; desktop crate 64 tests; both production builds; the documentation check. The Director reports one launch of the real app with an isolated database. This documentation pass did not drive or inspect that launch.
+
+**Not verified.**
+- No run against the live provider CLIs for the tasks slice. No task has been dispatched to a real Claude, Codex, OpenCode, Cursor or Grok session.
+- The merged board, tree and timeline have not been checked against the references in every look in this pass. The visual checks in the phase 1 status were recorded on the UI branch before the merge, in Frost dark and Pop light only; Pop has since been removed.
+- No native end-to-end run of dispatch, restart, stop or the update notice.
+- The platform work (terminal, chat background, GitHub inbox, connectors, computer control and relay) is not on `main`, and the new plan has not started it. The Codex worktrees under `C:\Users\SicoZ\.codex\worktrees` remain unmerged reference only.
+
+**Next.** Check the merged board, tree and timeline against the references in Bitbots and Blobots, dark and light. The plan's phase 1 gate names five looks; three were removed on 20 October 2026, so the check covers the two that remain. Then slices 1B (supervision policies) and 1C (task schedules). Do not start the platform slices until the owner asks.
+
+## Owner pause: product expansion (21 October 2026)
+
+Superseded in part by the 22 October entry above. The record below is kept as written.
 
 Original status line, kept as written: historical handoff with dated sections, newest first. The current release is `v0.1.0-beta.35` ([docs/releases/0.1.0-beta.35.md](../releases/0.1.0-beta.35.md)), published and tagged at `71475d4` (installer SHA-256 `eb9378c7d797136dbf918b794240aaba414b0f82bc3f52fcf6ea96664bb0cd56`). The previous release is `v0.1.0-beta.34` ([docs/releases/0.1.0-beta.34.md](../releases/0.1.0-beta.34.md)). The "Lanes" section near the end is superseded by the delegation rules in [AGENTS.md](../../AGENTS.md) (16 October amendment: two lanes only). Budget clauses are retired (AGENTS.md, 12 October amendment). Index: [docs/README.md](../README.md).
 

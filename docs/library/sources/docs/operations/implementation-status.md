@@ -1,8 +1,20 @@
 # Implementation status
 
 > **What this is:** The implementation status: released versions, phase status, work after the plan and the open gaps.
-> **Status:** current through the FIX40 wave, released as v0.1.0-beta.35 (19 October 2026)
-> **Last updated:** 2026-10-19
+> **Status:** current through phase 1 on `main` (22 October 2026); the latest release is v0.1.0-beta.36
+> **Last updated:** 2026-10-22
+
+## 22 October 2026: phase 1 on main
+
+**Released.** The latest release is `v0.1.0-beta.36` (tag `63f4b39`, [releases/0.1.0-beta.36.md](../releases/0.1.0-beta.36.md)). `main` at `26ec193` is not released, and its version is still `0.1.0-beta.36`.
+
+**Merged to main.** Phase 1 of the expansion (the task ledger and task backend, the board, the tree and the timeline) and Codex's live-development fixes (commit `5eb6879`, merged at `861853f`). The live-development fixes keep two looks, Bitbots and Blobots; Pop, Dot and Legacy are removed. The plan is [plans/expansion-plan-v2.md](../plans/expansion-plan-v2.md).
+
+**Verified (Director, on this tree).** Typecheck; 1,377 UI tests; Rust workspace tests (`bloblex-daemon` 464); clippy; desktop crate 64 tests; both production builds; the documentation check. One launch of the real app with an isolated database was reported; it was not driven in this pass.
+
+**Not verified.** No live provider CLI run for the tasks slice. The merged board, tree and timeline have not been checked against the references in every look. No native end-to-end run of task dispatch, restart or stop. Platform work (terminal, chat background, GitHub inbox, providers beyond the existing ones, connectors, computer control and relay) is not on `main` and is not started under the new plan.
+
+**Records.** The phase 1 status table is [history/expansion-v2/status.md](../history/expansion-v2/status.md), written before the merge. The 21 October pause handoff and reference plan are historical records, superseded in part; see [expansion-handoff-2026-10-21.md](expansion-handoff-2026-10-21.md).
 
 Original status line, kept as written: current through the 19 October FIX40 wave, released as `v0.1.0-beta.35` ([releases/0.1.0-beta.35.md](../releases/0.1.0-beta.35.md); tag `71475d4`, with its follow-ups and FIX41). The previous release is `v0.1.0-beta.34` ([releases/0.1.0-beta.34.md](../releases/0.1.0-beta.34.md); tag `5b6ee88`), which carried the 18 October FIX39 wave. The "Phase status" and "Work after the plan phases" tables describe the 1-12 October worktree and are historical; the "Still open" list is the current gap list.
 

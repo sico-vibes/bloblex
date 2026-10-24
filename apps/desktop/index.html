@@ -15,7 +15,7 @@
         try {
           const settings = JSON.parse(localStorage.getItem('bloblex.appearance') || '{}')
           const storedStyle = localStorage.getItem('bitbots.style')
-          const style = ['bitbots', 'blobots'].includes(storedStyle) ? storedStyle : 'bitbots'
+          const style = ['haze', 'bitbots', 'blobots'].includes(storedStyle) ? storedStyle : storedStyle ? 'bitbots' : 'haze'
           document.documentElement.dataset.style = style
           const glass = localStorage.getItem('bitbots.glass')
           document.documentElement.dataset.glass = ['solid', 'balanced', 'clear'].includes(glass) ? glass : 'solid'

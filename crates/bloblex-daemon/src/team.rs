@@ -963,7 +963,7 @@ fn manager_tool_schemas() -> Vec<Value> {
         "blob":{"type":"string","description":"Exact bot id or name."},
         "name":{"type":"string","maxLength":40}, "description":{"type":"string","maxLength":255},
         "role":{"type":"string","maxLength":40}, "instructions":{"type":"string","maxLength":4000},
-        "look":{"type":["object","null"],"description":"Bot look: shape, optional seed, traits, optional art (robot, robot-flat, robot-pop, robot-dot, blob, painted), optional paint (classic, cube, star, flower, pear, peanut, ghost, bunny, kitty, ufo, boxbot, tile) and bot outline/colors, as returned by read_blob."},
+        "look":{"type":["object","null"],"description":"Bot look: shape, optional seed, traits, optional art (robot, robot-flat, robot-pop, robot-dot, blob, painted), optional paint (classic, cube, star, flower, pear, peanut, ghost, bunny, kitty, ufo, boxbot, tile), optional icon (logo, logo-tint, logo-mono, px-robot, px-cat, px-ghost, px-alien, px-fox, px-frog, px-owl, px-bunny, px-bear, px-octopus, px-mushroom, px-slime, px-wizard, px-duck, px-rocket, px-bolt) and bot outline/colors, as returned by read_blob. Haze look: the bot's mark. logo, logo-tint and logo-mono show the runtime's logo in its own colours, the bot colour or one colour; px-* are pixel icons."},
         "model":{"type":["string","null"]}, "thinking":{"type":["string","null"],"description":"Effort id, or null for model default."},
         "approvalMode":{"type":"string","enum":["ask","auto"]},
         "tags":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":24}}

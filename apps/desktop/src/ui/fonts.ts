@@ -23,7 +23,7 @@ const FONT_ROWS: Array<[string, string, FontCategory, string]> = [
 ]
 export const FONT_CATALOGUE: readonly FontItem[] = FONT_ROWS.map(([id, label, category, family]) => ({ id, label, category, family, load: LOADERS[id]! }))
 export const FONT_DEFAULTS: Record<ThemeStyle, { ui: string; mono: string }> = {
-  bitbots: { ui: 'inter', mono: '' }, blobots: { ui: '', mono: '' },
+  haze: { ui: 'inter', mono: '' }, bitbots: { ui: 'inter', mono: '' }, blobots: { ui: '', mono: '' },
 }
 export async function applyFonts(uiId: string, monoId: string, style: ThemeStyle = 'bitbots') {
   const ui = FONT_CATALOGUE.find((font) => font.id === (uiId || FONT_DEFAULTS[style].ui))

@@ -16,6 +16,9 @@ import { inDesktop } from '../tauri'
 import { SwatchGrid } from './SwatchGrid'
 import { AGENT_SWATCHES, swatchForColor } from './agentColor'
 import { useEntityNoun } from './vocabulary'
+import { HAZE_ICONS, ICON_LABELS, LOGO_ICONS, PIXEL_ICONS, type HazeIcon } from '../blob/haze/icons'
+import { rememberLookRuntime, useLookProvider } from '../blob/haze/runtimeRegistry'
+import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
 
 type LookTab = 'style' | 'tune'
 
@@ -49,8 +52,10 @@ function nextColor(color: string) {
  * A bot's look: an art style, a live stage that previews moods, and the
  * controls the chosen art reads. Every change is a draft until the page saves.
  */
-export function LookEditor({ look, color, colorHex, name, locked = false, onLookChange, onColorChange }: {
+export function LookEditor({ look, color, colorHex, name, locked = false, runtimeId, onLookChange, onColorChange }: {
   look: BlobLook
+  /** The bot's runtime, so the Haze look can show its logo. */
+  runtimeId?: string | null
   color: string
   colorHex: string
   name: string
@@ -65,6 +70,8 @@ export function LookEditor({ look, color, colorHex, name, locked = false, onLook
   const style = useThemeStyle() as string
   const art = resolveArt(look, style)
   const tabsId = useId()
+  rememberLookRuntime(look, runtimeId)
+  const provider = useLookProvider(look)
 
   const chooseArt = (next: BotArt | undefined) => {
     if (next) { onLookChange({ ...look, art: next }); return }
@@ -86,6 +93,44 @@ export function LookEditor({ look, color, colorHex, name, locked = false, onLook
     const next = TABS[(index + step + TABS.length) % TABS.length]
     setTab(next.id)
     document.getElementById(`${tabsId}-${next.id}`)?.focus()
+  }
+
+  if (style === 'haze') {
+    const pick = (icon: HazeIcon) => onLookChange({ ...look, icon })
+    const current = look.icon ?? 'logo'
+    const option = (icon: HazeIcon) => {
+      const preview = { ...look, icon }
+      rememberLookRuntime(preview, runtimeId)
+      const selected = current === icon
+      return <button key={icon} type="button" role="radio" aria-checked={selected} aria-label={ICON_LABELS[icon]} title={ICON_LABELS[icon]} tabIndex={selected ? 0 : -1} disabled={locked || (!provider && !icon.startsWith('px-'))} className={`look-style-option haze-icon-option${selected ? ' selected' : ''}`} onClick={() => pick(icon)}>
+        <BlobCanvas decorative color={colorHex} size={icon.startsWith('px-') ? 30 : 26} look={preview} label={ICON_LABELS[icon]} />
+      </button>
+    }
+    const onGridKey = (event: KeyboardEvent<HTMLDivElement>) => {
+      const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0
+      if (!step || locked) return
+      event.preventDefault()
+      const choices = provider ? HAZE_ICONS : PIXEL_ICONS
+      const next = choices[(choices.indexOf(current as never) + step + choices.length) % choices.length]!
+      pick(next)
+      requestAnimationFrame(() => (event.currentTarget.ownerDocument.querySelector(`.haze-icon-option[aria-label="${ICON_LABELS[next]}"]`) as HTMLElement | null)?.focus())
+    }
+    return <div className="look-editor haze-look-editor" style={{ ['--look-accent' as string]: colorHex }}>
+      <div className="look-stage">
+        <div className="look-stage-hero haze-look-hero"><BlobCanvas color={colorHex} size={88} mood={mood} look={look} label={`${name} preview`} /></div>
+        <div className="haze-look-row" aria-hidden="true"><HazeAura status={auraStatusFor(mood)} color={colorHex} selected /><BlobCanvas decorative color={colorHex} size={18} look={look} label={name} /><span>{name}</span></div>
+        <div className="look-moods" role="radiogroup" aria-label="Preview status">
+          {PREVIEW_MOODS.filter((item) => item.mood !== 'sleeping').map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} disabled={locked} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
+        </div>
+      </div>
+      <div className="look-panel" role="radiogroup" aria-label="Icon" onKeyDown={onGridKey}>
+        <span className="look-section-label">Logo{!provider && ' · choose a coding agent first'}</span>
+        <div className="haze-icon-grid logos">{LOGO_ICONS.map(option)}</div>
+        <span className="look-section-label">Pixel icon</span>
+        <div className="haze-icon-grid">{PIXEL_ICONS.map(option)}</div>
+        <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>
+      </div>
+    </div>
   }
 
   return <div className="look-editor" style={{ ['--look-accent' as string]: colorHex }}>

@@ -13,11 +13,12 @@ async function loadModule() {
 describe('theme style switch', () => {
   beforeEach(() => { localStorage.clear() })
 
-  it('defaults to bitbots and marks the document', async () => {
+  // The owner made Haze the primary look on 24 October 2026; a new install starts in it.
+  it('defaults to haze and marks the document', async () => {
     const bitbots = await loadModule()
-    expect(bitbots.themeStyle()).toBe('bitbots')
+    expect(bitbots.themeStyle()).toBe('haze')
     expect(bitbots.bitbotsEnabled()).toBe(false)
-    expect(document.documentElement.dataset.style).toBe('bitbots')
+    expect(document.documentElement.dataset.style).toBe('haze')
     expect(document.documentElement.dataset.bitbots).toBeUndefined()
     expect(document.documentElement.dataset.wallpaper).toBe('lake')
     expect(document.documentElement.dataset.glass).toBe('solid')

@@ -15,7 +15,7 @@ Last reviewed: 2026-10-22. Each recipe lists every place that must change togeth
 
 ## Add a look
 
-The owner limited the product to Bitbots and Blobots on 20 October 2026. Add another look only when explicitly requested. Keep retired preferences normalized to Bitbots in the pre-paint cache, `blob/bitbots.ts`, storage startup and backup import.
+The owner limited the product to Bitbots and Blobots on 20 October 2026, then chose **Haze** as the new primary look and the default for new installs on 24 October 2026. Add another look only when explicitly requested. Keep retired preferences normalized to Bitbots in the pre-paint cache, `blob/bitbots.ts`, storage startup and backup import.
 
 1. `apps/desktop/src/ui/appearance.ts`: add the value to `ThemeStyle`, `THEME_STYLES`, `THEME_LOOKS` (label, family, one-line description).
 2. Daemon validation of `appearance.style` (both layers, see "Add a settings key").
@@ -30,6 +30,7 @@ The owner limited the product to Bitbots and Blobots on 20 October 2026. Add ano
 
 - Art: add the value to `BotArt`, `BOT_ARTS`, `ART_LABELS` and the robot or blob group in `apps/desktop/src/blob/art/art.ts`; a renderer in `blob/art/` (SVG + CSS, `ArtFrame`, `useArtMood`, `artAria`, unique ids via `useId`, reduced-motion still pose); a case in `BlobCanvas`'s switch; the daemon's `valid_look` `ARTS` list (`crates/bloblex-storage/src/lib.rs`) and its test; the Manager tool schema description in `crates/bloblex-daemon/src/team.rs`; the `LookEditor` Style control picks it up from the groups; tests in `blob/art/*.test.ts(x)`; the character sheet `/preview.html?art=<value>`.
 - Painted shape: add it to `PaintedShape`, `PAINTED_SHAPES`, `PAINTED_LABELS` (`art.ts`), a body/eye/light/badge entry in `PaintedBlob.tsx` `SHAPES`, the daemon `PAINTS` list in `valid_look` and its test. Check it at 16 to 22 px.
+- Haze mark (`look.icon`): the value list is `ICONS` in `valid_look` (`crates/bloblex-storage/src/lib.rs`) — `logo`, `logo-tint`, `logo-mono`, then `px-*` pixel icons; `null` means no mark and any other value is invalid. A new value needs the list and its test here, plus the Manager descriptions in `crates/bloblex-daemon/src/team.rs` (tool schema) and `crates/bloblex-daemon/src/proposals.rs` (`propose_bot`).
 
 ## Add a daemon RPC or event
 

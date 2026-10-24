@@ -51,19 +51,19 @@ afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstub
 
 describe('General settings mounted controls', () => {
 
-  it('offers two looks, Bitbots-only options and font settings', async () => {
+  it('offers three looks, Bitbots-only options and font settings', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect([...host.querySelectorAll('.look-orb-choice .look-orb-tooltip')].map((button) => button.textContent)).toEqual(['Bitbots','Blobots'])
-    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['bitbots', 'blobots'])
+    expect([...host.querySelectorAll('.look-orb-choice .look-orb-tooltip')].map((button) => button.textContent)).toEqual(['Haze','Frost','Stone'])
+    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['haze', 'bitbots', 'blobots'])
     expect(host.querySelector('.appearance-page .look-window')).toBeNull()
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Blobots'))?.click(); await Promise.resolve() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Stone'))?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'blobots' })
     expect(host.textContent).toContain('This look has no extra options yet.')
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Bitbots'))?.click(); await Promise.resolve() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Frost'))?.click(); await Promise.resolve() })
     expect(host.textContent).toContain('Wallpaper')
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-page .density-control button')].find((button) => button.textContent === 'Balanced')?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.glass', value: 'balanced' })

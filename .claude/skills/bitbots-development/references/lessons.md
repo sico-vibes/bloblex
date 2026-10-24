@@ -2,6 +2,17 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-24 · Gates · `cargo fmt --all -- --check` fails on `main` (3,766 diffs at f091ff7)
+- **Symptom:** the fmt gate fails in files no lane touched (`bloblex-wsl`, `bloblex-speech`, `bloblex-process`, `cron.rs`, `tasks.rs`, `team.rs`).
+- **Root cause:** the repository is not rustfmt-formatted; it uses deliberate dense, long lines. A `git archive HEAD` copy of `f091ff7` in a temp directory reports 3,766 `Diff in` blocks, so this is the baseline.
+- **Avoid:** expect the fmt gate to fail; never run `cargo fmt` to "fix" it (it rewrites thousands of lines). Keep new lines under ~100 characters where the surrounding code allows, and report the baseline count rather than claiming the gate passed.
+
+## 2026-10-24 · Daemon tests · Debug test threads overflow the stack
+- **Symptom:** `cargo test -p bloblex-daemon` aborts with `STATUS_STACK_OVERFLOW` (0xc00000fd) in `fix39_p5_tests` (e.g. `row_manager_update_blob_refuses_a_locked_bot`), killing the whole binary so the rest never runs.
+- **Root cause:** the default 2 MiB test-thread stack is too small for those tests' frames on this toolchain; the same tests overflow with HEAD sources restored, so it is not lane work.
+- **Fix:** run daemon tests with `RUST_MIN_STACK=16777216` (`$env:RUST_MIN_STACK=16777216` in PowerShell); the suite then passes (465/465 on 2026-10-24).
+- **Avoid:** if a single daemon test crashes the run without a failure line, run it alone with `--no-capture` and try `RUST_MIN_STACK` before suspecting the change.
+
 ## 2026-10-22 · Docs · Retiring a look leaves stale words in many documents
 - **Symptom:** after Pop, Dot and Legacy were retired (AGENTS.md, 22 October 2026), about 40 current documents and the library still described five looks, the Flat and Dot robots as picker choices, and the pixel theme file that no longer exists.
 - **Root cause:** nothing in the code gate checks prose, and the retirement changed code, tests and the handoff but not the reference pages.
@@ -109,10 +120,20 @@ At tint .84 the Lake wallpaper's bright band bled through all panels as a stripe
 `ArtFrame` marks small avatars with `data-mini`, not a class; style them with `.art-frame[data-mini] ...`.
 
 ## 2026-10-19 · Daemon · Look and settings keys are allowlisted
-`valid_look` rejects unknown top-level look keys, and `normalizeLook`, `agentLook`, `lookKey` rebuild looks from known keys only: a new look field must be added in both TypeScript and `crates/bloblex-storage/src/lib.rs`, or it is silently dropped or rejected.
+`valid_look` rejects unknown top-level look keys, and `normalizeLook`, `agentLook`, `lookKey` rebuild looks from known keys only: a new look field must be added in both TypeScript and `crates/bloblex-storage/src/lib.rs`, or it is silently dropped or rejected. Haze's `icon` key (null or one of `logo`, `logo-tint`, `logo-mono`, `px-robot` … `px-bolt`, `ICONS` in `valid_look`) is the latest example: it also needs the Manager descriptions in `team.rs` and `proposals.rs`.
 
 ## 2026-10-19 · Links · Safe opener
 Chat links are `<a href target="_blank">` routed through `openSafeLink`; middle-click and Ctrl/Cmd/Shift-click must also go through it (`onAuxClick`), and the desktop app must never fall back to `window.open` inside the webview.
 
 ## 2026-10-19 · Release · SHA256SUMS
 `scripts/release-windows.ps1` does not create `SHA256SUMS.txt`; upload it separately (format `<sha256>  <installer>` and a newline) and verify its digest.
+
+## 2026-10-24 · Preview · Portals into a React-owned node
+Portaling tooltips and drag ghosts into the page's root `.mini` element (rendered by React) threw `removeChild ... not a child of this node` on unmount. Portal into an empty host element that React renders but never fills (`<div id="mini-portal" />`) and keep it inside the themed root so its CSS variables still apply. A page that is both a Vite entry and edited live also re-runs `createRoot` on hot reload; keep the root on the container (`host.miniRoot ??= createRoot(host)`).
+
+## 2026-10-24 · CSS · Lifting content above a background layer broke absolutely placed children
+- **Symptom:** in Haze the side-conversation pill shrank to 23 px around one logo, and the companion focus card's avatar slid onto the name.
+- **Root cause:** `.chat-header > :not(.haze-aura) { position: relative; z-index: 1 }` (and the same on `.island-card.focus`) made `.chat-title` the containing block of the absolutely centred `.side-header`, and overrode `.card-bot`'s `position: absolute`.
+- **Fix:** keep the children as they are; give the parent `isolation: isolate` and the background layer `z-index: -1`.
+- **Avoid:** never re-position a component's children from a theme to stack them; push the decoration down instead. Likewise, a theme token used as a page background (`--surface-panel`, `--surface-app`) is also used by popovers and ring cut-outs: making it transparent made the profile menu see-through and the usage rings pies (rings now cut their centre with a mask).
+

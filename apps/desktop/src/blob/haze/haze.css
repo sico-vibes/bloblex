@@ -1,0 +1,55 @@
+/* Haze marks and the status gradient. The look's tokens and layout live in ui/themes/haze.css. */
+
+.haze-mark { position: relative; flex: 0 0 auto; display: inline-grid; place-items: center; color: var(--text-1); line-height: 0; transition: opacity 400ms ease; }
+.haze-mark.is-resting { opacity: .5; }
+.haze-mark.is-greeting { animation: haze-mark-in 900ms cubic-bezier(.2,.8,.2,1) both; }
+@keyframes haze-mark-in { from { opacity: 0; transform: scale(.86) } to { opacity: 1; transform: none } }
+.haze-mark .haze-logo { width: 80%; height: 80%; overflow: visible; }
+.haze-mark .provider-logo { width: 80% !important; height: 80% !important; }
+.haze-mark .provider-logo-image { width: 100%; height: 100%; object-fit: contain; }
+.haze-mark .haze-pixel { width: 92%; height: 92%; }
+
+/* The aura fills its positioned, clipping parent, behind the content. */
+.haze-aura { position: absolute; inset: 0; z-index: 0; overflow: hidden; border-radius: inherit; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to left, #000 0%, rgba(0,0,0,.7) 22%, rgba(0,0,0,.2) 55%, transparent 82%);
+  mask-image: linear-gradient(to left, #000 0%, rgba(0,0,0,.7) 22%, rgba(0,0,0,.2) 55%, transparent 82%); }
+.haze-aura-layer { position: absolute; inset: 0; mix-blend-mode: screen; animation: haze-aura-in 900ms ease both; }
+.haze-aura-layer.is-leaving { animation: haze-aura-out 900ms ease forwards; }
+:root[data-theme="light"]:not(.companion-surface) .haze-aura-layer,
+:root.companion-surface[data-surface-theme="light"] .haze-aura-layer { mix-blend-mode: normal; }
+@keyframes haze-aura-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes haze-aura-out { from { opacity: 1 } to { opacity: 0 } }
+
+.haze-aura-tone { position: absolute; inset: 0; opacity: var(--alpha); }
+:root[data-theme="light"]:not(.companion-surface) .haze-aura-tone,
+:root.companion-surface[data-surface-theme="light"] .haze-aura-tone { opacity: calc(var(--alpha) * .75); }
+.aura-needs .haze-aura-tone { animation: haze-breathe 2.6s ease-in-out infinite; }
+.aura-error .haze-aura-tone { animation: haze-falter 3.4s linear infinite; }
+.aura-done .haze-aura-tone { animation: haze-finish 2.6s ease-out both; }
+@keyframes haze-breathe { 0%, 100% { opacity: var(--alpha) } 50% { opacity: calc(var(--alpha) * .38) } }
+@keyframes haze-falter { 0%, 58%, 64%, 70%, 100% { opacity: var(--alpha) } 61% { opacity: calc(var(--alpha) * .15) } 67% { opacity: calc(var(--alpha) * .3) } }
+@keyframes haze-finish { 0% { opacity: calc(var(--alpha) * .4) } 15% { opacity: var(--alpha) } 100% { opacity: calc(var(--alpha) * .3) } }
+
+/* A wide, soft wave train rolling in from the right, over a still glow anchored there. */
+.haze-aura-tone i { position: absolute; display: block; }
+.haze-aura-tone i:nth-child(1) { inset: 0 auto 0 0; width: 300%; background: linear-gradient(90deg, transparent 0%, var(--c1) 22%, var(--c2) 46%, var(--c3) 70%, transparent 100%) 0 0 / 33.3334% 100% repeat-x; animation: haze-roll var(--dur) linear infinite; will-change: transform; }
+.haze-aura-tone i:nth-child(2) { inset: 0; background: radial-gradient(90% 150% at 100% 50%, var(--c1), transparent 70%); opacity: .7; }
+.haze-aura-tone i:nth-child(3) { inset: -40% 0; background: linear-gradient(180deg, transparent 20%, color-mix(in srgb, var(--c2) 55%, transparent) 50%, transparent 80%); opacity: .6; animation: haze-drift calc(var(--dur) * 1.7) ease-in-out infinite alternate; }
+@keyframes haze-roll { from { transform: translateX(0) } to { transform: translateX(-33.3334%) } }
+@keyframes haze-drift { from { transform: translateY(-14%) } to { transform: translateY(14%) } }
+.haze-aura-layer.is-still i { animation: none; }
+.haze-aura-layer.is-still i:nth-child(1) { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .haze-aura-layer, .haze-aura-tone, .haze-aura-tone i { animation-duration: 1ms !important; animation-iteration-count: 1 !important; }
+  .haze-aura-tone i:nth-child(1) { display: none; }
+}
+
+/* The look editor in Haze: a mark, a sidebar-row preview with its gradient, and the icon choices. */
+.haze-look-editor .haze-look-hero { min-height: 120px; display: grid; place-items: center; }
+.haze-look-row { position: relative; isolation: isolate; overflow: hidden; display: flex; align-items: center; gap: 11px; width: min(240px, 100%); height: 36px; margin: 4px auto 10px; padding: 0 12px; border-radius: 11px; background: var(--surface-selected); font-size: 13.5px; }
+.haze-look-row > :not(.haze-aura) { position: relative; z-index: 1; }
+.haze-icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px; margin: 6px 0 14px; }
+.haze-icon-grid.logos { grid-template-columns: repeat(3, 56px); }
+.haze-icon-option { height: 48px; padding: 0; place-items: center; }
+.haze-icon-option:disabled { opacity: .35; }

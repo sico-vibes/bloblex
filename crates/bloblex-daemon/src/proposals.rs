@@ -66,7 +66,7 @@ pub fn tool_schemas() -> Vec<Value> {
             "propose_bot" => {
                 props.insert("tags".into(), tag_schema());
                 props.insert("thinking".into(), json!({"type":["string","null"],"description":"Effort id; null uses the model default."}));
-                props.insert("look".into(), json!({"type":["object","null"],"description":"Look as returned by read_blob: shape, seed, traits, bot."}));
+                props.insert("look".into(), json!({"type":["object","null"],"description":"Look as returned by read_blob: shape, seed, traits, bot, icon (logo, logo-tint, logo-mono, px-robot, px-cat, px-ghost, px-alien, px-fox, px-frog, px-owl, px-bunny, px-bear, px-octopus, px-mushroom, px-slime, px-wizard, px-duck, px-rocket, px-bolt). Haze look: the bot's mark. logo, logo-tint and logo-mono show the runtime's logo in its own colours, the bot colour or one colour; px-* are pixel icons."}));
                 props.insert("approvalMode".into(), json!({"type":"string","enum":["ask","auto"]}));
             }
             "assign_task" => {

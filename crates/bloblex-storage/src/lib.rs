@@ -1455,7 +1455,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["haze","bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="appearance.wallpaper" && !v.as_str().is_some_and(|s| ["lake","dusk","bloom","sand","custom"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="appearance.glass" && !v.as_str().is_some_and(|s| ["solid","balanced","clear"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if matches!(k,"appearance.font" | "appearance.monoFont") && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()<=40 && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c==b'-'))){return Err(StorageError::InvalidAgent)}
@@ -6035,16 +6035,18 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     Ok(())
 }
 /// A blob look: one of the silhouette names, an optional seed and up to 48
-/// pinned trait positions in [0, 1], plus an optional art style and painted
-/// body. Kept small so it travels in every snapshot.
+/// pinned trait positions in [0, 1], plus an optional art style, painted
+/// body and Haze mark. Kept small so it travels in every snapshot.
 fn valid_look(look: &Value) -> bool {
     const SHAPES: [&str; 13] = ["circle","pebble","squircle","round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
     const ARTS: [&str; 6] = ["robot","robot-flat","robot-pop","robot-dot","blob","painted"];
     const PAINTS: [&str; 12] = ["classic","cube","star","flower","pear","peanut","ghost","bunny","kitty","ufo","boxbot","tile"];
+    const ICONS: [&str; 19] = ["logo","logo-tint","logo-mono","px-robot","px-cat","px-ghost","px-alien","px-fox","px-frog","px-owl","px-bunny","px-bear","px-octopus","px-mushroom","px-slime","px-wizard","px-duck","px-rocket","px-bolt"];
     let Some(object) = look.as_object() else { return false };
-    if object.keys().any(|key| !["shape","seed","traits","bot","art","paint"].contains(&key.as_str())) { return false; }
+    if object.keys().any(|key| !["shape","seed","traits","bot","art","paint","icon"].contains(&key.as_str())) { return false; }
     if object.get("art").is_some_and(|art| !art.is_null() && !art.as_str().is_some_and(|art| ARTS.contains(&art))) { return false; }
     if object.get("paint").is_some_and(|paint| !paint.is_null() && !paint.as_str().is_some_and(|paint| PAINTS.contains(&paint))) { return false; }
+    if object.get("icon").is_some_and(|icon| !icon.is_null() && !icon.as_str().is_some_and(|icon| ICONS.contains(&icon))) { return false; }
     // Bitbots theme styling: a robot outline and three colours, all optional.
     if let Some(bot) = object.get("bot").filter(|bot| !bot.is_null()) {
         let Some(bot) = bot.as_object() else { return false };
@@ -6382,7 +6384,7 @@ mod tests {
     use super::*;
     #[test]
     fn appearance_values_validate() {
-        for style in ["bitbots", "blobots"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
+        for style in ["haze", "bitbots", "blobots"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
         for wallpaper in ["lake", "dusk", "bloom", "sand", "custom"] { assert!(validate_setting_value("appearance.wallpaper", &json!(wallpaper)).is_ok()); }
         for glass in ["solid", "balanced", "clear"] { assert!(validate_setting_value("appearance.glass", &json!(glass)).is_ok()); }
         for key in ["appearance.font", "appearance.monoFont"] { for font in ["", "space-grotesk", "jersey-10"] { assert!(validate_setting_value(key, &json!(font)).is_ok()); } }
@@ -8661,6 +8663,17 @@ mod fix39_activity_tests {
         assert!(!valid_look(&json!({"shape":"circle","art":"glossy"})));
         assert!(!valid_look(&json!({"shape":"circle","paint":"round"})));
         assert!(!valid_look(&json!({"shape":"circle","art":"robot","extra":true})));
+    }
+
+    #[test]
+    fn valid_look_accepts_only_known_icons() {
+        for icon in ["logo", "logo-tint", "logo-mono", "px-robot", "px-cat", "px-ghost", "px-alien", "px-fox", "px-frog", "px-owl", "px-bunny", "px-bear", "px-octopus", "px-mushroom", "px-slime", "px-wizard", "px-duck", "px-rocket", "px-bolt"] {
+            assert!(valid_look(&json!({"shape":"circle","icon":icon})), "{icon}");
+        }
+        assert!(valid_look(&json!({"shape":"circle","icon":null})));
+        assert!(valid_look(&json!({"shape":"circle","art":"robot-flat","icon":"logo-tint"})));
+        assert!(!valid_look(&json!({"shape":"circle","icon":"px-unknown"})));
+        assert!(!valid_look(&json!({"shape":"circle","icon":7})));
     }
 
     #[test]

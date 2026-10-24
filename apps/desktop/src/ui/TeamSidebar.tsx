@@ -7,6 +7,8 @@ import { rpc } from '../tauri'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
 import { BlobCanvas } from '../blob/BlobCanvas'
+import { useThemeStyle } from '../blob/bitbots'
+import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
 import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
@@ -192,6 +194,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   onOpenSearch: () => void
   actions: TeamSidebarActions
 }) {
+  const haze = useThemeStyle() === 'haze'
   const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const Nouns = useEntityNoun({ plural: true, capital: true })
@@ -311,6 +314,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     const working = sessionIsBusy(session) && !waiting
     const preview = !connected ? 'Offline' : (status.mood === 'offline' || status.mood === 'error' || sessionIsLimited(session) || session?.state === 'retrying') ? status.label : waiting ? 'Waiting for you' : working ? status.label : sidebarModel ? sidebarSubtitle(agent, runtime?.provider, readCachedCatalogModels(agent.runtimeId)) : conversationPreview(session) ?? (agent.description?.trim() || 'Say hi to get started')
     const runtimeIssue = runtimeProblem(runtime)
+    const failed = connected && status.mood === 'error'
     return <button key={agent.id} type="button" role="treeitem" data-agent-id={agent.id} aria-current={selected ? 'true' : undefined} aria-selected={selected} aria-describedby={runtimeIssue ? `runtime-problem-${runtime!.id}-${agent.id}` : undefined}
       aria-label={`${agent.name}${agent.role ? `, ${agent.role}` : ''}${isManager(agent) ? ', Manager' : ''}${approval ? ', needs approval' : unread ? ', unread' : ''}`}
       tabIndex={selected || (!selectedAgentId && rowOrder[0]?.id === agent.id) ? 0 : -1}
@@ -372,16 +376,17 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
           if (next) document.querySelector<HTMLButtonElement>(`.team-row[data-agent-id="${CSS.escape(next.id)}"]`)?.focus()
         }
       }}>
+      <HazeAura status={waiting ? 'needs' : auraStatusFor(status.mood)} color={agentColorHex(agent.color)} selected={selected} manager={isManager(agent)} />
       <span className="team-row-avatar">
-        <BlobCanvas color={agentColorHex(agent.color)} size={50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
+        <BlobCanvas color={agentColorHex(agent.color)} size={haze ? 20 : 50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
         {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><Star size={10} fill="currentColor" strokeWidth={0} /></span>}
         {agent.locked === true && <span className="lock-badge" title="Locked" aria-hidden="true"><Lock size={9} /></span>}
       </span>
       <span className="bot-row-copy">
         <span className="bot-row-line">
-          <span className="team-row-name">{runtimeLogos && <RuntimeMark provider={runtime?.provider} />}<strong>{agent.name}</strong><RuntimeProblemMarker runtime={runtime} inline idSuffix={agent.id} showTooltip={runtimeTooltipAgentId === agent.id} />{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
+          <span className="team-row-name">{runtimeLogos && !haze && <RuntimeMark provider={runtime?.provider} />}<strong>{agent.name}</strong><RuntimeProblemMarker runtime={runtime} inline idSuffix={agent.id} showTooltip={runtimeTooltipAgentId === agent.id} />{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
           {(unread || approval) && <i className={`unread-dot ${approval ? 'approval' : ''}`} aria-hidden="true" />}
-          {session?.updatedAt && <time>{shortTime(session.updatedAt)}</time>}
+          {haze && (waiting || failed) ? <span className={`haze-row-state ${waiting ? 'needs' : 'failed'}`}>{waiting ? 'Needs you' : 'Failed'}</span> : session?.updatedAt && <time>{shortTime(session.updatedAt)}</time>}
         </span>
         <span className="bot-row-line"><span className={`bot-row-preview ${waiting ? 'waiting' : working ? 'active' : ''}`}>{preview}</span></span>
       </span>

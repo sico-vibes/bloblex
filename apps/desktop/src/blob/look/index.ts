@@ -12,6 +12,8 @@ import {
   PAINTED_SHAPES, isBotArt, isPaintedShape, resolvePaint,
   type BotArt, type PaintedShape,
 } from '../art/art'
+import { isHazeIcon, type HazeIcon } from '../haze/icons'
+import { rememberLookRuntime } from '../haze/runtimeRegistry'
 
 export * from './bot'
 
@@ -30,6 +32,8 @@ export interface BlobLook {
   art?: BotArt
   /** The hand-painted body. Omitted, it is derived from the blob shape. */
   paint?: PaintedShape
+  /** The Haze look's mark: the runtime logo or a pixel icon. Omitted, it is the logo. */
+  icon?: HazeIcon
 }
 
 export const SHAPE_LABELS: Record<BlobShape, string> = {
@@ -79,25 +83,31 @@ export function normalizeLook(raw: unknown): BlobLook | null {
   if (bot) look.bot = bot
   if (isBotArt(value.art)) look.art = value.art
   if (isPaintedShape(value.paint)) look.paint = value.paint
+  if (isHazeIcon(value.icon)) look.icon = value.icon
   return look
 }
 
 /** The look an agent wears: its stored look, else a round blob seeded by its id. */
-export function agentLook(agent: { id?: string | null; look?: unknown } | null | undefined): BlobLook {
+export function agentLook(agent: { id?: string | null; look?: unknown; runtimeId?: unknown } | null | undefined): BlobLook {
   const stored = normalizeLook(agent?.look)
-  return {
+  const look: BlobLook = {
     shape: stored?.shape ?? 'circle',
     seed: stored?.seed || agent?.id || 'blob',
     traits: stored?.traits,
     ...(stored?.bot ? { bot: stored.bot } : {}),
     ...(stored?.art ? { art: stored.art } : {}),
     ...(stored?.paint ? { paint: stored.paint } : {}),
+    ...(stored?.icon ? { icon: stored.icon } : {}),
   }
+  rememberLookRuntime(look, agent?.runtimeId)
+  return look
 }
 
 /** The look the editor previews: the draft's look, else the default for this blob id. */
-export function draftLook(draft: { look: BlobLook | null }, agentId?: string | null): BlobLook {
-  return draft.look ? { ...draft.look, seed: draft.look.seed || agentId || 'blob' } : agentLook({ id: agentId })
+export function draftLook(draft: { look: BlobLook | null; runtimeId?: unknown }, agentId?: string | null): BlobLook {
+  const look = draft.look ? { ...draft.look, seed: draft.look.seed || agentId || 'blob' } : agentLook({ id: agentId })
+  rememberLookRuntime(look, draft.runtimeId)
+  return look
 }
 
 export function sameLook(a: BlobLook | null | undefined, b: BlobLook | null | undefined) {
@@ -106,7 +116,7 @@ export function sameLook(a: BlobLook | null | undefined, b: BlobLook | null | un
 
 function lookKey(look: BlobLook) {
   const pinned = Object.entries(look.traits ?? {}).sort(([a], [b]) => a.localeCompare(b))
-  return JSON.stringify([look.shape, look.seed ?? '', pinned, look.bot ?? null, look.art ?? null, look.paint ?? null])
+  return JSON.stringify([look.shape, look.seed ?? '', pinned, look.bot ?? null, look.art ?? null, look.paint ?? null, look.icon ?? null])
 }
 
 const cache = new Map<string, FormLayout>()

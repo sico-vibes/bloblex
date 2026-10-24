@@ -1,11 +1,14 @@
 export type ThemeChoice = 'system' | 'dark' | 'light'
 export type TextSizeChoice = 'small' | 'default' | 'large' | 'larger'
 
-export type ThemeStyle = 'bitbots' | 'blobots'
-export const THEME_STYLES: readonly ThemeStyle[] = ['bitbots', 'blobots']
+export type ThemeStyle = 'haze' | 'bitbots' | 'blobots'
+export const THEME_STYLES: readonly ThemeStyle[] = ['haze', 'bitbots', 'blobots']
+/** The look a new install starts in. */
+export const DEFAULT_THEME_STYLE: ThemeStyle = 'haze'
 export const THEME_LOOKS: ReadonlyArray<{ id: ThemeStyle; label: string; family: 'primary' | 'alternative'; description: string }> = [
-  { id: 'bitbots', label: 'Bitbots', family: 'primary', description: 'Frosted glass over a wallpaper you choose.' },
-  { id: 'blobots', label: 'Blobots', family: 'alternative', description: 'Soft, quiet and monochrome.' },
+  { id: 'haze', label: 'Haze', family: 'primary', description: 'Smoky glass. Bots show a logo or a pixel icon.' },
+  { id: 'bitbots', label: 'Frost', family: 'alternative', description: 'Frosted glass over a wallpaper you choose.' },
+  { id: 'blobots', label: 'Stone', family: 'alternative', description: 'Soft, quiet and monochrome.' },
 ]
 
 export function isThemeStyle(value: unknown): value is ThemeStyle {

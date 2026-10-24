@@ -77,6 +77,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 })
 
 import { App } from './App'
+import { setThemeStyle } from '../blob/bitbots'
 import { hydrateHints } from './uiPrefs'
 import type { Agent, Runtime, Session, Snapshot } from '../types'
 import { playCompanionCue, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
@@ -178,6 +179,8 @@ function configure(snapshotValue = snapshot()) {
 }
 
 beforeEach(() => {
+  // These cover the classic island (Bitbots and Blobots). Haze draws its own shell (App.hazeCompanion.mounted.test.tsx).
+  setThemeStyle('bitbots')
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-02T12:00:00.000Z'))
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)

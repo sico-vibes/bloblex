@@ -240,6 +240,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
         colorHex={previewHex(draft.color, agentColorHex('mint'))}
         name={draft.name.trim() || `New ${noun}`}
         locked={locked}
+        runtimeId={draft.runtimeId}
         onLookChange={(look, color) => onDraftChange({ ...draft, look, color: color ?? draft.color })}
         onColorChange={(color) => onDraftChange({ ...draft, color })}
       />

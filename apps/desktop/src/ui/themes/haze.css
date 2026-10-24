@@ -1,0 +1,258 @@
+/* Haze: smoky glass over a misty backdrop, one cohesive shell (flush panels
+   split by hairlines, no floating cards). Bots show a logo or pixel icon; the
+   status is the soft gradient in their row (blob/haze/). */
+
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) {
+  --haze-glass: rgb(30 31 33 / .58);
+  --haze-desk: #2a2b2c; --haze-d1: #6b6f73; --haze-d2: #8a7766; --haze-d3: #3d4a52; --haze-d4: rgb(201 185 166 / .5);
+  --surface-app: transparent;
+  --surface-sidebar: rgb(16 17 19 / .3);
+  --surface-panel: rgb(34 35 38 / .97);
+  --surface-raised: rgb(255 255 255 / .055);
+  --surface-overlay: rgb(36 37 40 / .96);
+  --surface-input: rgb(0 0 0 / .22);
+  --surface-hover: rgb(255 255 255 / .06);
+  --surface-selected: rgb(255 255 255 / .085);
+  --surface-selected-strong: rgb(255 255 255 / .12);
+  --surface-avatar: rgb(255 255 255 / .07);
+  --text-1: #f3f3f2;
+  --text-2: rgb(243 243 242 / .70);
+  --text-3: rgb(243 243 242 / .50);
+  --line: rgb(255 255 255 / .08);
+  --line-strong: rgb(255 255 255 / .14);
+  --accent: var(--user-accent, #f3f3f2);
+  --blue: var(--user-accent, #6ea8ff);
+  --bubble-user: var(--user-accent-soft, rgb(255 255 255 / .085));
+  --status-working: #ffae42;
+  --status-success: #3ddc97;
+  --status-danger: #ff6b6b;
+  --status-info: #6ea8ff;
+  --shadow-pop: 0 18px 40px -14px rgb(0 0 0 / .5);
+  --font-ui: Inter, "Segoe UI", system-ui, sans-serif;
+  color: var(--text-1);
+  background: var(--haze-desk);
+}
+:root[data-style="haze"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) {
+  color-scheme: light;
+  --haze-glass: rgb(250 249 247 / .58);
+  --haze-desk: #e9e6e1; --haze-d1: #c9c3bb; --haze-d2: #e0c6ad; --haze-d3: #b9c6cc; --haze-d4: rgb(245 239 230 / .6);
+  --surface-sidebar: rgb(255 255 255 / .32);
+  --surface-panel: rgb(250 249 247 / .97);
+  --surface-raised: rgb(255 255 255 / .55);
+  --surface-overlay: rgb(252 251 250 / .97);
+  --surface-input: rgb(255 255 255 / .6);
+  --surface-hover: rgb(20 20 20 / .045);
+  --surface-selected: rgb(20 20 20 / .07);
+  --surface-selected-strong: rgb(20 20 20 / .1);
+  --surface-avatar: rgb(20 20 20 / .06);
+  --text-1: #1b1b1a;
+  --text-2: rgb(27 27 26 / .68);
+  --text-3: rgb(27 27 26 / .50);
+  --text-inverse: #fff;
+  --line: rgb(20 20 20 / .08);
+  --line-strong: rgb(20 20 20 / .14);
+  --accent: var(--user-accent, #1b1b1a);
+  --blue: var(--user-accent, #2f6bd6);
+  --bubble-user: var(--user-accent-soft, rgb(20 20 20 / .07));
+  --status-working: #a86a00;
+  --status-success: #14875f;
+  --status-danger: #d23a52;
+  --status-info: #2f6bd6;
+  --shadow-pop: 0 18px 40px -16px rgb(40 40 40 / .28);
+}
+
+/* The misty backdrop, with the glass tint baked in: smooth gradients need no
+   backdrop blur, so the shell costs nothing to composite. */
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .haze-backdrop {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(var(--haze-glass), var(--haze-glass)),
+    radial-gradient(60vw 60vh at 18% 14%, var(--haze-d1), transparent 72%),
+    radial-gradient(50vw 70vh at 92% 58%, var(--haze-d2), transparent 72%),
+    radial-gradient(70vw 42vh at 42% 108%, var(--haze-d3), transparent 72%),
+    radial-gradient(24vw 28vh at 50% 30%, var(--haze-d4), transparent 72%),
+    var(--haze-desk);
+}
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) body { background: var(--haze-desk); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .app-shell { position: relative; z-index: 1; background: transparent; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .sidebar { background: var(--surface-sidebar); border-right: 1px solid var(--line); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .session-first-state .haze-mark { width: 72px !important; height: 72px !important; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .conversations-panel,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .session-rail,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .conversation-pane,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .context-pane { background: transparent; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .settings-sheet { background: var(--surface-overlay); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .menu-surface,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) [role="menu"],
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) [role="listbox"],
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) [role="tooltip"],
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .tip-portal,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .runtime-mark-tooltip-portal,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .composer-menu,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .slash-menu,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .team-menu,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .quick-switcher { background: var(--surface-overlay); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .primary-button { background: var(--user-accent, var(--text-1)); color: var(--user-accent-ink, var(--text-inverse, #161616)); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .composer-box { background: var(--surface-input); border-color: var(--line); }
+
+/* Sidebar rows: one line, the mark and the name; the status is the gradient. */
+:root[data-style="haze"] .team-row { position: relative; isolation: isolate; overflow: hidden; min-height: 36px; padding-block: 0; padding-left: 10px; gap: 11px; border-radius: 11px; }
+:root[data-style="haze"] .team-row > :not(.haze-aura) { position: relative; z-index: 1; }
+:root[data-style="haze"] .team-row.selected { box-shadow: none; }
+:root[data-style="haze"][data-theme="light"] .team-row.selected { background: var(--surface-selected); box-shadow: none; }
+:root[data-style="haze"] .team-row .bot-row-line + .bot-row-line { display: none; }
+:root[data-style="haze"] .team-row .team-row-name strong { font-weight: 500; font-size: 13.5px; }
+:root[data-style="haze"] .team-row .role-chip { display: none; }
+:root[data-style="haze"] .team-row time { color: var(--text-3); }
+:root[data-style="haze"] .team-row .leader-badge { right: -5px; bottom: -4px; width: 11px; height: 11px; }
+:root[data-style="haze"] .team-row .leader-badge svg { width: 7px; height: 7px; }
+:root[data-style="haze"] .team-row .lock-badge { right: -5px; bottom: -4px; transform: scale(.8); }
+:root[data-style="haze"] .team-row .unread-dot { z-index: 1; }
+.haze-row-state { flex: 0 0 auto; font-size: var(--fs-xs, 12px); white-space: nowrap; }
+.haze-row-state.needs { color: var(--status-working); }
+.haze-row-state.failed { color: var(--status-danger); }
+
+/* The sidebar's companion switch: one compact row, mark, label and toggle aligned. */
+:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card { min-height: 40px; padding: 0 10px 0 12px; gap: 11px; border-radius: 11px; background: var(--surface-raised); border-color: transparent; }
+:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card > .haze-mark { flex: 0 0 auto; width: 18px !important; height: 18px !important; }
+:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card > span:not(.haze-mark) { text-align: left; }
+:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card strong { font-weight: 500; font-size: 13px; }
+
+/* The conversation header carries the selected bot's gradient too. */
+:root[data-style="haze"] .chat-header { position: relative; isolation: isolate; }
+/* Behind the content without repositioning it: the side-conversation pill is centred on the header itself. */
+:root[data-style="haze"] .chat-header > .haze-aura { z-index: -1; border-radius: 0; }
+
+/* ── Companion and dictation windows ─────────────────────────────────────
+   Transparent Tauri windows have no native blur: keep them opaque smoke. */
+:root[data-style="haze"].companion-surface,
+:root[data-style="haze"].dictation-surface {
+  --surface-app: #202124; --surface-sidebar: #242528; --surface-panel: #242528;
+  --surface-raised: #2a2b2f; --surface-overlay: #2c2d31; --surface-input: #2f3034;
+  --surface-hover: #35363b; --surface-selected: #3c3d42; --surface-selected-strong: #46474d;
+  --text-1: #f3f3f2; --text-2: #c9c9c7; --text-3: #a9a9a6; --text-inverse: #202124;
+  --line: #3a3b40; --line-strong: #5a5b61; --accent: var(--user-accent, #f3f3f2);
+  --blue: var(--user-accent, #6ea8ff); --bubble-user: #3a3b40; --status-working: #ffae42;
+  --status-success: #3ddc97; --status-danger: #ff6b6b; --status-info: #6ea8ff;
+  --font-ui: Inter, "Segoe UI", system-ui, sans-serif;
+  --companion-surface-card: var(--surface-raised); --companion-surface-flat: var(--surface-app);
+  --companion-surface-tab: var(--surface-selected); --companion-text-bright: var(--text-1);
+  --companion-text-muted: var(--text-2); --c-font: var(--font-ui);
+  --companion-alpha-04: color-mix(in srgb, var(--text-1) 4%, transparent);
+  --companion-alpha-05: color-mix(in srgb, var(--text-1) 7%, transparent);
+  --companion-alpha-06: color-mix(in srgb, var(--text-1) 8%, transparent);
+  --companion-alpha-07: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-09: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --companion-alpha-10: color-mix(in srgb, var(--text-1) 13%, transparent);
+  --companion-alpha-12: color-mix(in srgb, var(--text-1) 15%, transparent);
+  --companion-alpha-18: color-mix(in srgb, var(--text-1) 22%, transparent);
+  color-scheme: dark; color: var(--text-1);
+}
+:root[data-style="haze"].companion-surface[data-surface-theme="light"],
+:root[data-style="haze"].dictation-surface[data-surface-theme="light"] {
+  --surface-app: #f4f2ee; --surface-sidebar: #eeebe6; --surface-panel: #eeebe6;
+  --surface-raised: #fbfaf8; --surface-overlay: #fff; --surface-input: #e9e6e1;
+  --surface-hover: #e6e3de; --surface-selected: #dedad4; --surface-selected-strong: #d3cfc8;
+  --text-1: #1b1b1a; --text-2: #4d4c49; --text-3: #5c5b57; --text-inverse: #fff;
+  --line: #d2cec7; --line-strong: #b3afa8; --accent: var(--user-accent, #1b1b1a);
+  --bubble-user: #e6e3de; --status-working: #7a4d00; --status-success: #17613f; --status-danger: #a82d43;
+  --companion-text-bright: var(--text-1); --companion-text-muted: var(--text-2);
+  --companion-text-tags: var(--text-2); --companion-text-activity: var(--text-1); --companion-text-settings: var(--text-1);
+  --companion-shimmer-edge: var(--text-1); --companion-shimmer-center: var(--text-1);
+  --companion-status-alert: #7a4d00; --companion-status-error: #a82d43; --companion-status-success: #17613f;
+  --companion-white: var(--text-1); --companion-black: #000;
+  --companion-alpha-04: color-mix(in srgb, var(--text-1) 4%, transparent);
+  --companion-alpha-05: color-mix(in srgb, var(--text-1) 7%, transparent);
+  --companion-alpha-06: color-mix(in srgb, var(--text-1) 8%, transparent);
+  --companion-alpha-07: color-mix(in srgb, var(--text-1) 9%, transparent);
+  --companion-alpha-08: color-mix(in srgb, var(--text-1) 10%, transparent);
+  --companion-alpha-09: color-mix(in srgb, var(--text-1) 12%, transparent);
+  --companion-alpha-10: color-mix(in srgb, var(--text-1) 13%, transparent);
+  --companion-alpha-12: color-mix(in srgb, var(--text-1) 15%, transparent);
+  --companion-alpha-13: color-mix(in srgb, var(--text-1) 17%, transparent);
+  --companion-alpha-15: color-mix(in srgb, var(--text-1) 20%, transparent);
+  --companion-alpha-18: color-mix(in srgb, var(--text-1) 22%, transparent);
+  color-scheme: light; color: var(--text-1);
+}
+:root[data-style="haze"].companion-surface .companion-capsule { background: var(--surface-app); box-shadow: inset 0 0 0 1px var(--line); }
+:root[data-style="haze"].companion-surface .island-card { background: var(--surface-raised); border-color: var(--line); box-shadow: none; }
+:root[data-style="haze"].companion-surface .island-header .tab.on { color: var(--text-1); background: var(--surface-selected); }
+:root[data-style="haze"].companion-surface .btn.primary { color: var(--user-accent-ink, var(--text-inverse)); background: var(--accent); }
+:root[data-style="haze"].companion-surface .focus-glow { display: none; }
+:root[data-style="haze"].companion-surface .island-card.focus,
+:root[data-style="haze"].companion-surface .companion-compact,
+:root[data-style="haze"].companion-surface .peer { position: relative; isolation: isolate; overflow: hidden; }
+/* Behind the content without repositioning it (the focus card's avatar is absolutely placed). */
+:root[data-style="haze"].companion-surface .island-card.focus > .haze-aura,
+:root[data-style="haze"].companion-surface .companion-compact > .haze-aura,
+:root[data-style="haze"].companion-surface .peer > .haze-aura { z-index: -1; }
+:root[data-style="haze"].companion-surface .island-card.wash::before { opacity: .5; }
+/* The Haze stack: teammates as one column of rows, each with its own gradient. */
+:root[data-style="haze"].companion-surface .peer-grid { display: flex; flex-direction: column; gap: 2px; }
+:root[data-style="haze"].companion-surface .peer { justify-content: flex-start; min-height: 30px; padding: 0 10px; border-radius: 10px; background: transparent; }
+:root[data-style="haze"].companion-surface .peer:hover { background: var(--surface-hover); }
+:root[data-style="haze"].companion-surface .peer-state-dot { display: none; }
+:root[data-style="haze"].companion-surface .peer-line { margin-left: auto; color: var(--text-3); font-size: var(--fs-2xs, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+:root[data-style="haze"].companion-surface .mini-grid { display: flex; gap: 3px; width: auto; height: auto; }
+:root[data-style="haze"].dictation-surface .dictation-island,
+:root[data-style="haze"].companion-surface .dictation-island { color: var(--text-1); border-color: var(--line); background: var(--surface-panel); box-shadow: none; backdrop-filter: none; }
+
+/* ── The Haze companion: a small copy of the main window ───────────────────
+   Left, the bot list (rows as in the sidebar, with their gradients); right, the
+   open bot's header and its conversation. Approvals, activity and settings
+   take the same pane. */
+:root[data-style="haze"].companion-surface .companion-capsule.home { padding: 0; border-radius: 18px; }
+.haze-companion { height: 100%; min-height: 0; display: grid; grid-template-columns: 176px minmax(0, 1fr); }
+.hc-roster { min-height: 0; display: flex; flex-direction: column; padding: 8px 6px 6px; background: var(--surface-sidebar); border-right: 1px solid var(--line); }
+.hc-brand { height: 26px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 4px 0 8px; color: var(--text-2); font-size: var(--fs-xs, 12px); font-weight: 600; }
+.hc-bots { min-height: 0; flex: 1 1 auto; display: grid; align-content: start; gap: 1px; margin-top: 4px; overflow-y: auto; scrollbar-width: none; }
+.hc-bot { position: relative; isolation: isolate; overflow: hidden; display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; padding: 0 8px; color: var(--text-1); border: 0; border-radius: 9px; background: transparent; font: inherit; font-size: 12.5px; text-align: left; }
+.hc-bot > .haze-aura { z-index: -1; }
+.hc-bot:hover { background: var(--surface-hover); }
+.hc-bot.on { background: var(--surface-selected); }
+.hc-bot.offline { color: var(--text-3); }
+.hc-bot:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.hc-bot-name { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.hc-bot-meta { flex: 0 0 auto; color: var(--text-3); font-size: 10.5px; }
+.hc-bot-meta.needs { color: var(--status-working); }
+.hc-foot { flex: 0 0 auto; display: flex; gap: 2px; padding-top: 6px; margin-top: 4px; border-top: 1px solid var(--line); }
+.hc-foot button { flex: 1; height: 26px; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; }
+.hc-foot button:hover { color: var(--text-1); background: var(--surface-hover); }
+.hc-foot button.on { color: var(--text-1); background: var(--surface-selected); }
+.hc-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.hc-head { position: relative; isolation: isolate; overflow: hidden; height: 44px; flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); }
+.hc-head > .haze-aura { z-index: -1; border-radius: 0; }
+.hc-title { min-width: 0; flex: 1; display: grid; line-height: 1.25; }
+.hc-title b { overflow: hidden; font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.hc-title small { overflow: hidden; color: var(--text-3); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.hc-head-actions { display: flex; gap: 2px; }
+.hc-head-actions button { width: 26px; height: 26px; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 8px; background: transparent; }
+.hc-head-actions button:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.hc-head-actions button:disabled { opacity: .35; }
+.hc-body { position: relative; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
+.hc-chat { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.hc-chat > .companion-convo-picker { position: static; margin: 8px 14px 0; padding: 0; }
+.hc-chat > .chat-body { padding: 10px 14px 4px; }
+.hc-permission, .hc-activity, .hc-settings { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 14px; scrollbar-width: thin; }
+.hc-permission { display: grid; align-content: start; gap: 8px; }
+.hc-settings .cset-body { grid-template-columns: 1fr; }
+.hc-activity .list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+
+/* The compact bar: the focused bot over its gradient, teammates as small tiles. */
+:root[data-style="haze"].companion-surface .companion-capsule.petit { border-radius: 14px; }
+:root[data-style="haze"].companion-surface .companion-compact { gap: 10px; padding: 0 8px 0 12px; }
+:root[data-style="haze"].companion-surface .compact-bot { width: 30px; height: 30px; border-radius: 9px; background: var(--surface-raised); }
+:root[data-style="haze"].companion-surface .compact-bot .haze-mark { width: 20px !important; height: 20px !important; }
+:root[data-style="haze"].companion-surface .compact-name strong { font-weight: 600; font-size: 13px; }
+:root[data-style="haze"].companion-surface .compact-name .role-chip,
+:root[data-style="haze"].companion-surface .compact-name .companion-role { display: none; }
+:root[data-style="haze"].companion-surface .mini-grid { gap: 4px; }
+:root[data-style="haze"].companion-surface .mini-grid > .haze-mark { width: 22px !important; height: 22px !important; padding: 3px; border-radius: 7px; background: var(--surface-raised); }
+:root[data-style="haze"].companion-surface .companion-collapse { border-radius: 8px; }
+/* Room for the name: no approval chip, the waiting count as a dot, at most three teammates. */
+:root[data-style="haze"].companion-surface .companion-compact .approval-pill { display: none; }
+:root[data-style="haze"].companion-surface .companion-compact .needs-you > span { display: none; }
+:root[data-style="haze"].companion-surface .companion-compact .needs-you { padding: 0 7px; min-width: 0; }
+:root[data-style="haze"].companion-surface .companion-compact .mini-grid > :nth-child(n+4) { display: none; }
+:root[data-style="haze"].companion-surface .compact-status.shimmer { animation: none; background: none; -webkit-text-fill-color: currentColor; color: var(--text-2); }
+:root[data-style="haze"].companion-surface .hc-brand .needs-you { height: 20px; padding: 0 6px; font-size: 10.5px; }

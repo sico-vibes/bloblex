@@ -115,15 +115,16 @@ describe('user accent colours', () => {
     expect(normalizeAccent(undefined)).toBe('')
   })
 
-  it('recognizes only Bitbots and Blobots', () => {
-    expect(THEME_STYLES).toEqual(['bitbots', 'blobots'])
+  it('recognizes only Haze, Bitbots and Blobots', () => {
+    expect(THEME_STYLES).toEqual(['haze', 'bitbots', 'blobots'])
     for (const look of THEME_STYLES) expect(isThemeStyle(look)).toBe(true)
     for (const retired of ['legacy', 'pop', 'dot']) expect(isThemeStyle(retired)).toBe(false)
     expect(isThemeStyle('Blobots')).toBe(false)
     expect(isThemeStyle('')).toBe(false)
     expect(isThemeStyle(undefined)).toBe(false)
     expect(THEME_LOOKS.map((look) => look.id)).toEqual(THEME_STYLES)
-    expect(THEME_LOOKS[0]?.description).toBe('Frosted glass over a wallpaper you choose.')
+    expect(THEME_LOOKS[0]?.description).toBe('Smoky glass. Bots show a logo or a pixel icon.')
+    expect(THEME_LOOKS[1]?.description).toBe('Frosted glass over a wallpaper you choose.')
   })
 
   it('keeps Frost body text above AA on solid glass over Lake and Dusk extremes', () => {

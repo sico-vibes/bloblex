@@ -6,7 +6,7 @@
 import { useSyncExternalStore } from 'react'
 import type { BlobMood } from './characterState'
 import type { RobotHeadState } from '../vendor/robot-heads'
-import { accentTokens, isThemeStyle, normalizeAccent, type ThemeStyle } from '../ui/appearance'
+import { DEFAULT_THEME_STYLE, accentTokens, isThemeStyle, normalizeAccent, type ThemeStyle } from '../ui/appearance'
 
 const STYLE_KEY = 'bitbots.style'
 /** The pre-style key; read once for migration, never written. */
@@ -24,7 +24,7 @@ function readStyle(): ThemeStyle {
     if (legacy === '1') return 'bitbots'
     if (legacy === '0') return 'blobots'
   } catch { /* The cache only avoids a flash. */ }
-  return 'bitbots'
+  return DEFAULT_THEME_STYLE
 }
 
 function readAccent(): string {
@@ -68,7 +68,7 @@ applyDocument()
 export function themeStyle(): ThemeStyle { return style }
 
 export function setThemeStyle(next: ThemeStyle) {
-  style = isThemeStyle(next) ? next : 'bitbots'
+  style = isThemeStyle(next) ? next : DEFAULT_THEME_STYLE
   try { localStorage.setItem(STYLE_KEY, style) } catch { /* The cache only avoids a flash. */ }
   applyDocument()
   for (const listener of listeners) listener()
@@ -116,7 +116,7 @@ function subscribe(listener: () => void) {
 
 /** Re-renders when the style flips. */
 export function useThemeStyle(): ThemeStyle {
-  return useSyncExternalStore(subscribe, themeStyle, () => 'bitbots')
+  return useSyncExternalStore(subscribe, themeStyle, () => DEFAULT_THEME_STYLE)
 }
 
 /** Re-renders when the legacy pixel style flips.

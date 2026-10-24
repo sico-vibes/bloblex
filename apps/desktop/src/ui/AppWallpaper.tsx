@@ -22,6 +22,7 @@ export function AppWallpaper() {
     })
     return () => window.removeEventListener('bitbots-wallpaper-changed', update)
   }, [id])
+  if (style === 'haze') return <div className="app-wallpaper haze-backdrop" aria-hidden="true" />
   if (style !== 'bitbots') return null
   const image = id === 'custom' ? getCustomWallpaperUrl() || lake : WALLPAPERS[id as keyof typeof WALLPAPERS] ?? lake
   return <div className="app-wallpaper" aria-hidden="true" style={{ backgroundImage: `url("${image}")` }} />

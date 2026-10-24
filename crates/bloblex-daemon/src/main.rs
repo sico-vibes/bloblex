@@ -1378,7 +1378,7 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     if k == "memory.sharedAgentWrites" && !value.is_boolean() { return Err(derr("invalid_argument", "memory.sharedAgentWrites requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "skills.enabled" && !value.is_boolean() { return Err(derr("invalid_argument", "skills.enabled requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "conversations.autoTitle" && !value.is_boolean() { return Err(derr("invalid_argument", "conversations.autoTitle requires a JSON boolean", StatusCode::BAD_REQUEST)); }
-    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["bitbots", "blobots"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be bitbots or blobots", StatusCode::BAD_REQUEST)); }
+    if k == "appearance.style" && !value.as_str().is_some_and(|v| ["haze", "bitbots", "blobots"].contains(&v)) { return Err(derr("invalid_argument", "appearance.style must be haze, bitbots or blobots", StatusCode::BAD_REQUEST)); }
     if k == "appearance.wallpaper" && !value.as_str().is_some_and(|v| ["lake", "dusk", "bloom", "sand", "custom"].contains(&v)) { return Err(derr("invalid_argument", "appearance.wallpaper must be lake, dusk, bloom, sand or custom", StatusCode::BAD_REQUEST)); }
     if k == "appearance.glass" && !value.as_str().is_some_and(|v| ["solid", "balanced", "clear"].contains(&v)) { return Err(derr("invalid_argument", "appearance.glass must be solid, balanced or clear", StatusCode::BAD_REQUEST)); }
     if matches!(k, "appearance.font" | "appearance.monoFont") && !value.as_str().is_some_and(|v| v.is_empty() || (v.len() <= 40 && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))) { return Err(derr("invalid_argument", "appearance.font and appearance.monoFont must be empty or lowercase letters, digits and hyphens (maximum 40 characters)", StatusCode::BAD_REQUEST)); }
@@ -8849,7 +8849,7 @@ mod phase2a_tests {
         dispatch(&st, "settings.set", json!({"key":"appearance.style","value":"bitbots"})).await.unwrap();
         assert!(events.try_recv().is_err(), "an unchanged value does not re-broadcast");
 
-        for style in ["bitbots", "blobots"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
+        for style in ["haze", "bitbots", "blobots"] { dispatch(&st, "settings.set", json!({"key":"appearance.style","value":style})).await.unwrap(); }
         for (key, value) in [("appearance.wallpaper", "lake"), ("appearance.wallpaper", "dusk"), ("appearance.wallpaper", "bloom"), ("appearance.wallpaper", "sand"), ("appearance.wallpaper", "custom"), ("appearance.glass", "solid"), ("appearance.glass", "balanced"), ("appearance.glass", "clear"), ("appearance.font", ""), ("appearance.font", "space-grotesk"), ("appearance.monoFont", "jetbrains-mono")] {
             dispatch(&st, "settings.set", json!({"key":key,"value":value})).await.unwrap();
         }
@@ -10743,6 +10743,7 @@ mod phase2a_tests {
         source.db.automation_create(&json!({"agentId":scout_id,"name":"Daily","prompt":"Summarize today.","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"enabled":true})).unwrap();
         dispatch(&source, "settings.set", json!({"key":"appearance.accent","value":"#AABBCC"})).await.unwrap();
         dispatch(&source, "settings.set", json!({"key":"profile.name","value":"Sico"})).await.unwrap();
+        dispatch(&source, "settings.set", json!({"key":"appearance.style","value":"haze"})).await.unwrap();
         dispatch(&source, "settings.set", json!({"key":"hints.seen","value":["one"]})).await.unwrap();
         dispatch(&source, "settings.set", json!({"key":"exec_gate.codex.model","value":false})).await.unwrap();
 
@@ -10804,6 +10805,7 @@ mod phase2a_tests {
 
         let settings = target.db.settings().unwrap();
         assert_eq!(settings["appearance.accent"], json!("#aabbcc"));
+        assert_eq!(settings["appearance.style"], json!("haze"), "a Haze style survives export and import unchanged");
         assert_eq!(settings["profile.name"], json!("Sico"));
         assert!(settings.get("hints.seen").is_none());
 

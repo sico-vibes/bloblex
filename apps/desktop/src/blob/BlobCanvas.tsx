@@ -12,6 +12,7 @@ import { FlatRobot } from './art/FlatRobot'
 import { PopRobot } from './art/PopRobot'
 import { DotRobot } from './art/DotRobot'
 import { PaintedBlob } from './art/PaintedBlob'
+import { HazeMark } from './haze/HazeMark'
 import './art/art.css'
 import type { ThemeStyle } from '../ui/appearance'
 
@@ -348,6 +349,8 @@ function ClassicBlobCanvas({ color, size = 52, mood = 'idle', className = '', la
 export function BlobCanvas(props: BlobCanvasProps) {
   const documentStyle = useThemeStyle() as string
   const style = props.style ? String(props.style) : documentStyle
+  // Haze shows no mascot: a logo or pixel icon. An explicit art (the art picker) still draws it.
+  if (style === 'haze' && !props.art) return <HazeMark {...props} />
   switch (props.art ?? resolveArt(props.look, style)) {
     case 'robot': return <BitbotCanvas {...props} />
     case 'blob': return <ClassicBlobCanvas {...props} />

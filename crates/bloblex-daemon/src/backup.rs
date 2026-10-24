@@ -919,6 +919,18 @@ mod tests {
     }
 
     #[test]
+    fn haze_style_survives_a_document_round_trip() {
+        let document = build_document(json!({"bots": [], "memory": [], "skills": [], "automations": [], "settings": {"appearance.style": "haze"}})).unwrap();
+        assert!(check_document(&document).is_ok());
+        let restored = &document["contents"]["settings"]["appearance.style"];
+        assert_eq!(restored, &json!("haze"));
+        // Import keeps an allowlisted key only when settings.set would accept it.
+        assert!(exportable_setting("appearance.style", restored));
+        let accepted = crate::validate_setting("appearance.style", restored).unwrap();
+        assert_eq!(accepted, json!("haze"));
+    }
+
+    #[test]
     fn damaged_and_newer_documents_are_refused() {
         let contents = json!({"bots": [], "memory": [], "skills": [], "automations": [], "settings": {}});
         let document = build_document(contents).unwrap();

@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "f3f07e7",
-  "documentCount": 312,
+  "revision": "dbcbc7e",
+  "documentCount": 315,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -3907,6 +3907,41 @@
       ]
     },
     {
+      "id": "project/history/haze/backend-brief",
+      "source": "docs/history/haze/backend-brief.md",
+      "title": "Brief: daemon support for the Haze look and per-bot icons (backend lane)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "61a7f0e347b08488eed5b3601c319bdc024b91b67eda1ed75ad6e6016950776e",
+      "headings": [
+        {
+          "id": "1-accept-haze-for-appearancestyle",
+          "text": "1. Accept haze for appearance.style",
+          "level": 2
+        },
+        {
+          "id": "2-accept-the-icon-look-key",
+          "text": "2. Accept the icon look key",
+          "level": 2
+        },
+        {
+          "id": "3-nothing-else",
+          "text": "3. Nothing else",
+          "level": 2
+        },
+        {
+          "id": "gates-run-from-dfx70-report-the-tail-of-each",
+          "text": "Gates (run from D:\\fx70, report the tail of each)",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/history/director-log",
       "source": "docs/history/director-log.md",
       "title": "Director log",
@@ -3977,6 +4012,46 @@
         {
           "id": "4-oct-2026---blob-wardrobe-launchonboarding-and-model-pricing-merged",
           "text": "4 Oct 2026 - Blob wardrobe, launch/onboarding and model pricing merged",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/expansion-v2/docs-refresh-2026-10-22",
+      "source": "docs/history/expansion-v2/docs-refresh-2026-10-22.md",
+      "title": "Documentation refresh (22 October 2026)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "5def014785474ec843f3ae54e7d3d45b78f8ed1c5b515c55daa933c37f014c7c",
+      "headings": [
+        {
+          "id": "context",
+          "text": "Context",
+          "level": 2
+        },
+        {
+          "id": "files-changed",
+          "text": "Files changed",
+          "level": 2
+        },
+        {
+          "id": "facts-checked-against-the-code",
+          "text": "Facts checked against the code",
+          "level": 2
+        },
+        {
+          "id": "removed",
+          "text": "Removed",
+          "level": 2
+        },
+        {
+          "id": "not-verified-and-how-each-is-marked",
+          "text": "Not verified, and how each is marked",
+          "level": 2
+        },
+        {
+          "id": "still-stale-outside-this-pass",
+          "text": "Still stale, outside this pass",
           "level": 2
         }
       ]
@@ -13516,6 +13591,41 @@
         {
           "id": "last-known-processtest-boundary",
           "text": "Last-known process/test boundary",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/haze/backend-report",
+      "source": "docs/history/haze/backend-report.md",
+      "title": "Report — daemon support for the Haze look and per-bot icons",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "eddbb215691584b2622ca5a16286faa54c7352fcfabfd221571266b7a6c54725",
+      "headings": [
+        {
+          "id": "1-haze-accepted-for-appearancestyle",
+          "text": "1. haze accepted for appearance.style",
+          "level": 2
+        },
+        {
+          "id": "2-optional-icon-look-key",
+          "text": "2. Optional icon look key",
+          "level": 2
+        },
+        {
+          "id": "gates-from-dfx70-cargotargetdirdfx70target",
+          "text": "Gates (from D:\\fx70, CARGO_TARGET_DIR=D:\\fx70\\target)",
+          "level": 2
+        },
+        {
+          "id": "decisions-the-brief-did-not-specify",
+          "text": "Decisions the brief did not specify",
+          "level": 2
+        },
+        {
+          "id": "not-verified",
+          "text": "Not verified",
           "level": 2
         }
       ]

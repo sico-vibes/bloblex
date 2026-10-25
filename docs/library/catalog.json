@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "bea1af1",
-  "documentCount": 316,
+  "revision": "b1fc89d",
+  "documentCount": 319,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -12126,6 +12126,116 @@
       ]
     },
     {
+      "id": "project/history/fix-43/brief",
+      "source": "docs/history/fix-43/brief.md",
+      "title": "FIX43 brief: tasks, companion, chat polish, dictation and Whistle",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "4759eb6cae8e083f434c04cb88859d877b36fdb5be7e2f696b697523a0f2fa96",
+      "headings": [
+        {
+          "id": "ground-rules",
+          "text": "Ground rules",
+          "level": 2
+        },
+        {
+          "id": "items-in-this-order",
+          "text": "Items, in this order",
+          "level": 2
+        },
+        {
+          "id": "1-task-dialog-the-project-menu-opens-inside-the-dialog-01-task-project-dropdown-inside-dialogpng-03-new-task-dialogpng",
+          "text": "1. Task dialog: the Project menu opens inside the dialog (01-task-project-dropdown-inside-dialog.png, 03-new-task-dialog.png)",
+          "level": 3
+        },
+        {
+          "id": "2-tasks-page-shows-sqlite-no-such-table-tasks-02-tasks-sqlite-no-such-tablepng",
+          "text": "2. Tasks page shows sqlite: no such table: tasks (02-tasks-sqlite-no-such-table.png)",
+          "level": 3
+        },
+        {
+          "id": "3-tasks-images-full-editing-and-schedules",
+          "text": "3. Tasks: images, full editing and schedules",
+          "level": 3
+        },
+        {
+          "id": "4-chat-message-actions-not-centred-on-the-bubble-04-message-actions-offsetpng",
+          "text": "4. Chat: message actions not centred on the bubble (04-message-actions-offset.png)",
+          "level": 3
+        },
+        {
+          "id": "5-companion-one-layout-for-every-look",
+          "text": "5. Companion: one layout for every look",
+          "level": 3
+        },
+        {
+          "id": "6-companion-resizable-always-on-top-05-companion-crampedpng",
+          "text": "6. Companion: resizable, always on top (05-companion-cramped.png)",
+          "level": 3
+        },
+        {
+          "id": "7-companion-a-bot-without-a-conversation-cannot-be-opened",
+          "text": "7. Companion: a bot without a conversation cannot be opened",
+          "level": 3
+        },
+        {
+          "id": "8-dictation-shows-no-words-while-speaking-06-dictation-no-live-wordspng",
+          "text": "8. Dictation shows no words while speaking (06-dictation-no-live-words.png)",
+          "level": 3
+        },
+        {
+          "id": "9-whistle-a-downloadable-small-dictation-engine",
+          "text": "9. Whistle: a downloadable small dictation engine",
+          "level": 3
+        },
+        {
+          "id": "10-conversation-list-branches-start-below-the-card-07-branch-arrowpng-08-claude-code-branch-treepng",
+          "text": "10. Conversation list: branches start below the card (07-branch-arrow.png, 08-claude-code-branch-tree.png)",
+          "level": 3
+        },
+        {
+          "id": "gates-run-from-dfx71-report-the-tail-of-each",
+          "text": "Gates (run from D:\\fx71, report the tail of each)",
+          "level": 2
+        },
+        {
+          "id": "before-you-finish",
+          "text": "Before you finish",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/fix-43/report",
+      "source": "docs/history/fix-43/report.md",
+      "title": "FIX43 report",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "e9455613b1a5d243be92588f94810e4c7561dd03da438198f888a2b532d3fc34",
+      "headings": [
+        {
+          "id": "items",
+          "text": "Items",
+          "level": 2
+        },
+        {
+          "id": "director-review-25-october-2026",
+          "text": "Director review (25 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "unverified",
+          "text": "Unverified",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/history/fix-05/opencode2-per-model-effort-spec",
       "source": "docs/history/fix-05/opencode2-per-model-effort-spec.md",
       "title": "FIX5: OpenCode 2 per-model effort levels and a validated catalog",
@@ -12379,6 +12489,15 @@
           "level": 2
         }
       ]
+    },
+    {
+      "id": "project/history/fix-43/lane-log",
+      "source": "docs/history/fix-43/lane-log.md",
+      "title": "lane log",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "da12c48e92a84d6476a18f457b849d651e919741d36e088a75291126b7fde873",
+      "headings": []
     },
     {
       "id": "project/history/improvement/phase-1a-spec",

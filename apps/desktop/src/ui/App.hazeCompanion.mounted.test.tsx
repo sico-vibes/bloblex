@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
   companionMonitorOptions: vi.fn(), currentCompanionMonitor: vi.fn(), setCompanionMonitor: vi.fn(), refreshTrayMenu: vi.fn(),
   listenForDaemonEvents: vi.fn(), listenForDaemonConnection: vi.fn(), listenForActiveSession: vi.fn(),
   listenForActiveRuntime: vi.fn(), listenForOpenSettings: vi.fn(), directListen: vi.fn(), emit: vi.fn(),
-  getCurrentWindow: vi.fn(),
+  getCurrentWindow: vi.fn(), companionResizeBegin: vi.fn(), companionResizeStep: vi.fn(), companionResizeEnd: vi.fn(), setCompanionSizePreset: vi.fn(),
 }))
 
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
@@ -33,6 +33,10 @@ vi.mock('../tauri', () => ({
   refreshTrayMenu: h.refreshTrayMenu,
   setCompanionMode: h.setCompanionMode,
   setCompanionVisibility: h.setCompanionVisibility,
+  companionResizeBegin: h.companionResizeBegin,
+  companionResizeStep: h.companionResizeStep,
+  companionResizeEnd: h.companionResizeEnd,
+  setCompanionSizePreset: h.setCompanionSizePreset,
   showMainWindow: h.showMainWindow,
   showMainSettings: h.showMainSettings,
   listenForDaemonEvents: h.listenForDaemonEvents,
@@ -155,6 +159,10 @@ function configure(snapshotValue = snapshot()) {
   h.setActiveSession.mockResolvedValue(undefined)
   h.setActiveRuntime.mockResolvedValue(undefined)
   h.setCompanionMode.mockResolvedValue(undefined)
+  h.companionResizeBegin.mockResolvedValue(undefined)
+  h.companionResizeStep.mockResolvedValue(undefined)
+  h.companionResizeEnd.mockResolvedValue([700, 460])
+  h.setCompanionSizePreset.mockImplementation(async (preset: string) => preset === 'large')
   h.setCompanionVisibility.mockResolvedValue(undefined)
   h.companionMonitorOptions.mockResolvedValue([])
   h.currentCompanionMonitor.mockResolvedValue(null)
@@ -260,14 +268,14 @@ describe('Haze companion', () => {
     await view.settle()
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
     // The shell always uses the taller chat island, never the 160 px overview.
-    expect(h.setCompanionMode).toHaveBeenLastCalledWith('home-chat', undefined, expect.any(Number))
+    expect(h.setCompanionMode).toHaveBeenLastCalledWith('home-chat')
     expect(view.host.querySelector('.island-header')).toBeNull()
-    const rows = [...view.host.querySelectorAll<HTMLButtonElement>('.hc-bot')]
-    expect(rows.map((row) => row.querySelector('.hc-bot-name')?.textContent)).toEqual(['Claude', 'Codex'])
+    const rows = [...view.host.querySelectorAll<HTMLButtonElement>('.cs-bot')]
+    expect(rows.map((row) => row.querySelector('.cs-bot-name')?.textContent)).toEqual(['Claude', 'Codex'])
     expect(rows[0]?.getAttribute('aria-current')).toBe('true')
-    expect(view.host.querySelector('.hc-head .hc-title b')?.textContent).toBe('Claude')
-    expect(view.host.querySelector('.hc-chat .chat-log')?.textContent).toContain('Hello from the test')
-    expect(view.host.querySelector('.hc-chat textarea[aria-label="Message agent"]')).not.toBeNull()
+    expect(view.host.querySelector('.cs-head .cs-title b')?.textContent).toBe('Claude')
+    expect(view.host.querySelector('.cs-chat .chat-log')?.textContent).toContain('Hello from the test')
+    expect(view.host.querySelector('.cs-chat textarea[aria-label="Message agent"]')).not.toBeNull()
     for (const row of rows) expect(row.hasAttribute(DRAG), 'bot row').toBe(false)
     assertIsland(view.host, 'haze home')
   })
@@ -279,15 +287,118 @@ describe('Haze companion', () => {
     await view.settle()
     await press(view.host, 'Activity')
     await view.settle()
-    expect(view.host.querySelector('.hc-activity')).not.toBeNull()
-    expect(view.host.querySelector('.hc-chat')).toBeNull()
+    expect(view.host.querySelector('.cs-activity')).not.toBeNull()
+    expect(view.host.querySelector('.cs-chat')).toBeNull()
     await press(view.host, 'Settings')
     await view.settle()
-    expect(view.host.querySelector('.hc-settings')?.textContent).toContain('Companion sounds')
+    expect(view.host.querySelector('.cs-settings')?.textContent).toContain('Companion sounds')
     assertIsland(view.host, 'haze settings')
     await press(view.host, 'Collapse companion')
     await view.settle()
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('petit')
   })
+
+  it('has resize handles only while expanded, and a drag asks the shell to resize from the cursor', async () => {
+    const view = startApp('?companion=1')
+    await view.settle()
+    expect(view.host.querySelectorAll('.cs-resize')).toHaveLength(0)
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    const handles = [...view.host.querySelectorAll<HTMLElement>('.cs-resize')]
+    expect(handles.map((handle) => handle.className.replace('cs-resize cs-resize-', '')).sort()).toEqual(['e', 'n', 'ne', 'nw', 's', 'se', 'sw', 'w'])
+    for (const handle of handles) expect(handle.hasAttribute(DRAG), 'handle').toBe(false)
+    const corner = view.host.querySelector<HTMLElement>('.cs-resize-se')!
+    const fire = (type: string, buttons: number) => act(() => { corner.dispatchEvent(Object.assign(new Event(type, { bubbles: true, cancelable: true }), { button: 0, buttons, pointerId: 1 })) })
+    fire('pointerdown', 1)
+    expect(h.companionResizeBegin).toHaveBeenCalledWith('se')
+    fire('pointermove', 1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(40); await settleMicrotasks() })
+    expect(h.companionResizeStep).toHaveBeenCalled()
+    fire('pointerup', 0)
+    await act(async () => { await settleMicrotasks() })
+    expect(h.companionResizeEnd).toHaveBeenCalledTimes(1)
+    await press(view.host, 'Collapse companion')
+    await view.settle()
+    expect(view.host.querySelectorAll('.cs-resize')).toHaveLength(0)
+  })
+
+  it('grows to a large size and restores it from the header, and resets the size from Settings', async () => {
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    await press(view.host, 'Make larger')
+    await view.settle()
+    expect(h.setCompanionSizePreset).toHaveBeenLastCalledWith('large')
+    expect([...view.host.querySelectorAll('button')].some((button) => button.getAttribute('aria-label') === 'Restore size')).toBe(true)
+    await press(view.host, 'Restore size')
+    await view.settle()
+    expect(h.setCompanionSizePreset).toHaveBeenLastCalledWith('normal')
+    await press(view.host, 'Settings')
+    await view.settle()
+    await press(view.host, 'Reset companion size')
+    await view.settle()
+    expect(h.setCompanionSizePreset).toHaveBeenLastCalledWith('default')
+  })
 })
 
+describe.each(['bitbots', 'blobots'] as const)('The same companion layout in %s', (look) => {
+  beforeEach(() => { setThemeStyle(look) })
+
+  it('shows the bot list and conversation, with no Haze gradient and no island tabs', async () => {
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    expect(view.host.querySelector('.companion-shell')).not.toBeNull()
+    expect([...view.host.querySelectorAll('.cs-bot .cs-bot-name')].map((name) => name.textContent)).toEqual(['Claude', 'Codex'])
+    expect(view.host.querySelector('.cs-chat textarea[aria-label="Message agent"]')).not.toBeNull()
+    expect(view.host.querySelector('.island-header')).toBeNull()
+    expect(view.host.querySelector('.haze-aura')).toBeNull()
+    // Each bot keeps its own art in the list (the mascot canvas, drawn by the look), not the Haze mark.
+    expect(view.host.querySelectorAll('.cs-bot canvas.blob-canvas')).toHaveLength(2)
+    assertIsland(view.host, `${look} home`)
+  })
+})
+
+// FIX43 item 7: the main window opens a bot with no conversation into a local draft (FIX38 H2); the companion does the same.
+describe.each(['haze', 'bitbots', 'blobots'] as const)('A bot without a conversation in the %s companion', (look) => {
+  beforeEach(() => { setThemeStyle(look) })
+
+  it('shows a ready composer, stores nothing on the click, and the first message creates the conversation', async () => {
+    const created = session({ id: 'session-new', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'New chat', state: 'idle', messages: [] })
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'agent.conversation.create') return { session: created }
+      if (method === 'session.prompt') return { session: { ...created, state: 'working' } }
+      return base(method, params)
+    })
+    const view = startApp('?companion=1')
+    await view.settle()
+    await press(view.host, 'Open companion home')
+    await view.settle()
+    const codexRow = [...view.host.querySelectorAll<HTMLButtonElement>('.cs-bot')].find((row) => row.textContent?.includes('Codex'))!
+    await act(async () => { codexRow.click(); await settleMicrotasks() })
+    await view.settle()
+    // Codex has no conversation: the bot is selected at once, the box is ready, and nothing was stored.
+    expect(view.host.querySelector('.cs-title b')?.textContent).toBe('Codex')
+    const box = view.host.querySelector<HTMLTextAreaElement>('.companion-chat-composer textarea')!
+    expect(box.disabled).toBe(false)
+    expect(box.placeholder).toBe('Ask Codex…')
+    expect(view.host.querySelector('.companion-no-session')).toBeNull()
+    expect(h.rpc).not.toHaveBeenCalledWith('agent.conversation.create', expect.anything())
+    expect(view.host.querySelector('.companion-chat-composer .session-execution-controls')).toBeNull()
+    // The first message creates exactly one conversation, then sends into it.
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(box, 'Start here')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+      await settleMicrotasks()
+    })
+    await press(view.host, 'Send message')
+    await view.settle()
+    expect(h.rpc.mock.calls.filter(([method]) => method === 'agent.conversation.create')).toEqual([['agent.conversation.create', { agentId: 'agent-codex' }]])
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-new', text: 'Start here' })
+    // The draft's own id is never offered to the main window.
+    expect(h.rpc.mock.calls.filter(([, params]) => JSON.stringify(params ?? {}).includes('draft:'))).toEqual([])
+  })
+})

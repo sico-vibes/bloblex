@@ -620,6 +620,10 @@ export function isPermissionReplyAllowed(permission: PermissionRequest, choice: 
 /** Durable board tasks (docs/history/expansion-v2/tasks-contract.md). A task is not a conversation; each attempt is a run. */
 export type TaskState = 'unassigned' | 'queued' | 'running' | 'needs_you' | 'awaiting_review' | 'done' | 'failed' | 'cancelled'
 export type TaskSupervisionPolicy = 'report_only' | 'bounded' | 'manager_completes'
+export interface BoardTaskImage { id: string; name: string; mediaType: string; bytes?: number }
+export type BoardTaskSchedule = { kind: 'once'; at: string; timezone?: string } | { kind: 'cron'; cron: string; timezone: string }
+/** What a scheduled occurrence did: started, queued behind a busy bot, skipped (late, paused, a copy still going) or failed to start. */
+export type TaskScheduleOutcome = 'started' | 'queued' | 'skipped_late' | 'skipped_paused' | 'skipped_overlap' | 'failed_to_start' | 'invalid_schedule'
 export interface BoardTask extends JsonRecord {
   id: string
   title: string
@@ -643,6 +647,16 @@ export interface BoardTask extends JsonRecord {
   assignedAt?: string | null
   startedAt?: string | null
   completedAt?: string | null
+  images?: BoardTaskImage[]
+  /** Null (or absent) means "now": the task runs when it is assigned. */
+  schedule?: BoardTaskSchedule | null
+  scheduleAgentId?: string | null
+  scheduleState?: 'active' | 'completed' | 'missed' | null
+  scheduleNextAt?: string | null
+  scheduleLastAt?: string | null
+  scheduleLastOutcome?: TaskScheduleOutcome | null
+  /** The run started without the owner present (a schedule), so it kept the unattended rails. */
+  unattended?: boolean
 }
 export interface BoardTaskRun extends JsonRecord {
   id: string

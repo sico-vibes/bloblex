@@ -14,20 +14,27 @@ Open the companion from the bottom of the sidebar, the profile menu, or the glob
 
 ### What it shows
 
-The window has a compact form and an expanded form. The compact form shows a face, a name and one status line; the expanded form adds the team, the current approval or question, and a small chat.
+The window has a compact form and an expanded form. The compact form shows a face, a name and one status line. The expanded form is a small copy of the main window, the same in every look: the list of your bots on the left, and the open bot's header and conversation on the right. Each look keeps its own bot art and status marks in the list; only Haze adds its status gradient.
 
-It has four practical states:
+The right-hand side shows one of these:
 
-- **Home:** the face, the current bot and the next thing that needs you.
-- **Chat:** a short conversation with the current bot, using the same conversation as the main window.
-- **Activity:** what the team is doing now, including working bots and recent finishes.
+- **Chat:** the conversation with the open bot, using the same conversation as the main window. A bot with no conversation yet shows a ready message box, and your first message starts its conversation.
+- **Approval or question:** the current approval or question replaces the conversation until you answer it.
+- **Activity:** what the team is doing now, including working bots and recent finishes, and the reported tokens.
+- **Settings:** sounds, focus mode, placement and size, teammates and remote.
 - **File drop:** dropping a file on the companion offers it to the current conversation.
+
+The buttons under the list switch between chat, activity and settings, and mute or unmute the sounds.
 
 The companion is not a second brain. It shows the same state and sends the same commands as the main window, so both windows agree after the next update.
 
 ![The companion in its expanded chat state](../../assets/screens/companion.png)
 
 *The companion with a Manager proposal. Frost uses a solid tint here because the window cannot blur what is behind it. Fixture data.*
+
+### Resize it
+
+Drag any edge or corner of the expanded companion to resize it. It cannot become too small to read (520 by 340 points) or larger than your screen's work area, and it remembers the size across restarts. The **Make larger** button in its header grows it to a big size for working beside a game or another app, and the same button restores it. **Reset** next to Size in the companion settings returns to the default size. The compact bar keeps its fixed size. The companion stays on top of other windows. There is no separate chat-height choice any more.
 
 ### Move, snap and place it
 
@@ -41,7 +48,7 @@ When a bot finishes, the companion shows a short "finished" banner with **Open**
 
 ### Keyboard
 
-With the companion focused, `Ctrl+1` to `Ctrl+4` open the first four team members and `N` jumps to the next bot waiting for you. These shortcuts do nothing while a text field has focus. Escape closes an error line or a menu.
+With the companion focused, `Ctrl+1` to `Ctrl+9` move to the first nine bots in the list and `N` jumps to the next bot waiting for you. These shortcuts do nothing while a text field has focus. Escape closes an error line or a menu.
 
 ### Sounds
 
@@ -64,7 +71,11 @@ The default engine runs on this computer. The speech model is downloaded once an
 | Parakeet TDT v3 | 25 European languages | about 671 MB | The recommended model; punctuation, capitalisation and word timing. |
 | Parakeet TDT v2 | English | about 661 MB | Faster, with similar accuracy. |
 | Zipformer Streaming EN | English | about 90 MB | Lightweight, with live partial text. |
+| Whistle | English, German, French, Spanish, Italian, Dutch, Polish | about 18 MB (17 MB model and a 1.5 MB engine) | Very small and quick to download. Less accurate than Parakeet and punctuation is not documented. Windows only. |
 
+While you speak, the island shows your words as they arrive: every on-device model sends a provisional line about once a second and keeps the words in place at each pause. Cloud dictation sends the whole recording when you stop, so its island says "Words appear when you stop." instead of showing nothing.
+
+Whistle runs through Cactus's own Windows engine, which Bitbots downloads with the model, checks against a fixed fingerprint and runs as a separate local process. Your voice goes to that process as a short temporary file that is deleted at once; it is never sent anywhere.
 Your recording is processed on this computer and is not written to disk by Bitbots. The model and its download progress are managed in Settings › Speech.
 
 ### Cloud dictation (opt-in)

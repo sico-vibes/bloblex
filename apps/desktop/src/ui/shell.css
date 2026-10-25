@@ -302,6 +302,7 @@
 .dictation-island-wave i { width: 3px; min-height: 3px; border-radius: 999px; background: #fff; transition: height 90ms ease-out, opacity 90ms ease-out; }
 .dictation-island-wave:not(.live) i { transition: none; }
 .dictation-island-text { margin: -2px 0 0; padding: 0 2px 13px; overflow: hidden; color: rgba(255, 255, 255, 0.92); font-size: 13px; font-weight: 500; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; animation: island-text 200ms ease-out both; }
+.dictation-island-text.note { color: rgba(255, 255, 255, 0.62); font-weight: 400; }
 .dictation-island-text.error { color: rgba(255, 255, 255, 0.85); font-size: 12.5px; line-height: 1.4; -webkit-line-clamp: 3; }
 /* In the companion it sits above the composer, or over the island when the chat is closed. */
 .dictation-island.on-companion { width: 100%; padding: 0 12px; border-color: var(--companion-alpha-12, rgba(255, 255, 255, 0.12)); border-radius: 14px; background: var(--companion-surface-card, #171717); box-shadow: none; animation-name: island-text; }

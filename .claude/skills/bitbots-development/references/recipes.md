@@ -48,6 +48,14 @@ The owner limited the product to Bitbots and Blobots on 20 October 2026, then ch
 5. Tests: the storage test next to the function, a daemon test in `main.rs` (the `task_*` tests), and the mounted or `taskModel` test for any view change.
 6. Document: the table in `docs/ipc-contract.md` and the library pages `reference/task-board.md` and `guides/tasks.md`.
 
+## Add a downloadable speech model (FIX43, Whistle)
+
+1. Read each file's size and SHA-256 without downloading: `https://huggingface.co/api/models/<repo>?blobs=true` (the `lfs.sha256` of a file, and the repository's `sha`, the revision to pin). Pin every URL to that commit.
+2. `crates/bloblex-speech/src/catalog.rs`: a manifest with its files (the download manager checks size and hash, and resumes), then add it to `build_catalog`. A model that needs a new recogniser also needs a `SpeechModelType` variant (`manifest.rs`) and a branch in `SpeechEngine::load` (`engine.rs`). Add a catalog test that the pins name a commit and a 64-character hash.
+3. A model that is an executable: re-hash it before each load, run it with file paths only (never audio or text on the command line), delete any temporary audio at once, and log nothing it prints (`needle.rs`).
+4. Live words from a model that only decodes finished clips: use `UtteranceTracker` (`utterance.rs`).
+5. UI: the Settings page lists whatever `speech_models` returns, so only the preview list (`PREVIEW_SPEECH_MODELS` in `SettingsSheet.tsx`) and the mounted test need the new row. Add a line to `docs/legal/third-party-notices.md` and the model table in the companion and dictation guide.
+
 ## Add a native (Tauri) command
 
 Register it in the `invoke_handler` in `apps/desktop/src-tauri/src/lib.rs`; use the selection-token pattern for file access (`remember_selected_path` / `take_selected_path`), cap sizes, check file signatures; wrap it in `apps/desktop/src/tauri.ts`; mirror it in `fixtureBridge.ts` and `remoteTauri.ts`; no new plugin or capability without the owner. Check it with `cargo test -p bloblex-desktop` from a short-path worktree.

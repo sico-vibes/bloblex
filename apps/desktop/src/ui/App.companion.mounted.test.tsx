@@ -310,12 +310,12 @@ describe('companion drag and usage labels', () => {
     await press(view.host, 'Open companion home')
     await view.settle()
     expect(view.host.querySelector('.companion-root')?.getAttribute('data-mode')).toBe('home')
-    expect(resolvesToDrag(view.host.querySelector('.island-card.focus .card-bot canvas.blob-canvas')), 'home face').toBe(true)
-    const pills = [...view.host.querySelectorAll('.peer')]
-    expect(pills.length).toBeGreaterThan(0)
-    for (const pill of pills) {
-      expect(pill.hasAttribute(DRAG), 'pill').toBe(false)
-      for (const canvas of pill.querySelectorAll('canvas')) expect(canvas.hasAttribute(DRAG), 'pill face').toBe(false)
+    expect(resolvesToDrag(view.host.querySelector('.cs-head canvas.blob-canvas')), 'home face').toBe(true)
+    const rows = [...view.host.querySelectorAll('.cs-bot')]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(row.hasAttribute(DRAG), 'bot row').toBe(false)
+      for (const canvas of row.querySelectorAll('canvas')) expect(canvas.hasAttribute(DRAG), 'bot row face').toBe(false)
     }
     assertIsland(view.host, 'home')
 
@@ -327,20 +327,20 @@ describe('companion drag and usage labels', () => {
     expect(log?.querySelector('.bubble')?.hasAttribute(DRAG), 'message text').toBe(false)
     expect(view.host.querySelector('.companion-chat-composer')?.hasAttribute(DRAG), 'composer').toBe(false)
     expect(view.host.querySelector('.companion-chat-composer textarea')?.hasAttribute(DRAG), 'composer field').toBe(false)
-    expect(resolvesToDrag(view.host.querySelector('.chat-card .card-bot canvas.blob-canvas')), 'chat face').toBe(true)
+    expect(resolvesToDrag(view.host.querySelector('.cs-head canvas.blob-canvas')), 'chat face').toBe(true)
     assertIsland(view.host, 'home-chat')
 
     await press(view.host, 'Activity')
     await view.settle()
     // C9: the Activity tab is a live summary; the experimental flag is not needed.
-    expect(view.host.querySelector('.companion-activity-view')?.textContent).toContain('Nothing is running.')
-    expect(resolvesToDrag(view.host.querySelector('.companion-activity-view .companion-empty')), 'activity empty line').toBe(true)
+    expect(view.host.querySelector('.cs-activity')?.textContent).toContain('Nothing is running.')
+    expect(resolvesToDrag(view.host.querySelector('.cs-activity .companion-empty')), 'activity empty line').toBe(true)
     expect(view.host.querySelector('.link-btn')?.hasAttribute(DRAG), 'activity link').toBe(false)
     assertIsland(view.host, 'activity')
 
     await press(view.host, 'Settings')
     await view.settle()
-    expect(view.host.querySelector('.companion-settings-view')).not.toBeNull()
+    expect(view.host.querySelector('.cs-settings')).not.toBeNull()
     expect(view.host.querySelector('[role="switch"]')?.hasAttribute(DRAG), 'sounds switch').toBe(false)
     expect(view.host.querySelector('.btn.primary')?.hasAttribute(DRAG), 'settings button').toBe(false)
     assertIsland(view.host, 'settings')
@@ -360,7 +360,7 @@ describe('companion drag and usage labels', () => {
     expect(choices.find((choice) => choice.textContent?.includes('Deny'))?.classList.contains('permission-choice-secondary')).toBe(true)
     expect(choices.map((choice) => choice.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('Enter'), expect.stringContaining('Esc')]))
     expect(resolvesToDrag(approval.host.querySelector('.companion-approval-card strong')), 'permission title').toBe(true)
-    expect(resolvesToDrag(approval.host.querySelector('.card-bot canvas.blob-canvas')), 'permission face').toBe(true)
+    expect(resolvesToDrag(approval.host.querySelector('.cs-head canvas.blob-canvas')), 'permission face').toBe(true)
     const approvalCard = approval.host.querySelector<HTMLElement>('.companion-approval-card')!
     act(() => approvalCard.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
     await approval.settle()
@@ -465,7 +465,9 @@ describe('companion drag and usage labels', () => {
     await companion.settle()
     await press(companion.host, 'Open companion home')
     await companion.settle()
-    const glance = companion.host.querySelector('.glance')
+    await press(companion.host, 'Activity')
+    await companion.settle()
+    const glance = companion.host.querySelector('.cs-glance')
     expect(glance?.textContent?.replace(/\s+/g, ' ')).toContain('All bots: Tokens')
     expect(glance?.textContent).not.toContain('Cost')
     expect(glance?.getAttribute('title')).toContain('Reported tokens across all bots')
@@ -563,10 +565,12 @@ describe('companion settings panel', () => {
 
   it('groups the rows under labelled sections with the actions in a footer', async () => {
     const { view } = await openSettings()
-    const panel = view.host.querySelector('.companion-settings-view')!
-    expect([...panel.querySelectorAll('.cset-section > h3')].map((heading) => heading.textContent)).toEqual(['Sound', 'Chat', 'Placement', 'Teammates on the island', 'Remote'])
+    const panel = view.host.querySelector('.cs-settings')!
+    expect([...panel.querySelectorAll('.cset-section > h3')].map((heading) => heading.textContent)).toEqual(['Sound', 'Placement', 'Teammates on the island', 'Remote'])
     expect(panel.querySelector('[role="switch"][aria-label="Companion sounds"]')).not.toBeNull()
-    expect(panel.querySelector('[role="radiogroup"][aria-label="Chat height"]')).not.toBeNull()
+    // One way to size it: drag the edges, or reset. The old Compact, Comfortable and Tall choice is gone.
+    expect(panel.querySelector('[role="radiogroup"][aria-label="Chat height"]')).toBeNull()
+    expect(panel.querySelector('button[aria-label="Reset companion size"]')).not.toBeNull()
     expect([...panel.querySelectorAll('.cset-footer button')].map((button) => button.textContent)).toEqual(['Open Bitbots settings', 'Hide companion'])
     // The old loose "Choose" hop to the overview is gone: choosing happens in the panel.
     expect([...panel.querySelectorAll('button')].some((button) => button.textContent === 'Choose')).toBe(false)
@@ -619,7 +623,7 @@ describe('companion settings panel', () => {
     const ops = agent({ id: 'agent-ops', name: 'Ops', color: '#7fd1a0', runtimeId: 'runtime-claude', sortOrder: 1 })
     const docs = agent({ id: 'agent-docs', name: 'Docs', color: '#d1a07f', runtimeId: 'runtime-codex', sortOrder: 2 })
     const { view } = await openSettings({}, snapshot({ agents: [claude, codex, ops, docs] }))
-    const panel = view.host.querySelector('.companion-settings-view')!
+    const panel = view.host.querySelector('.cs-settings')!
     expect(radio(panel, 'Picked for you').getAttribute('aria-checked')).toBe('true')
     const chipNames = () => [...panel.querySelectorAll('.cset-chip')].map((chip) => chip.textContent)
     expect(chipNames().sort()).toEqual(['Codex', 'Docs', 'Ops'])
@@ -631,15 +635,15 @@ describe('companion settings panel', () => {
     expect(boxes()).toHaveLength(3)
     expect(boxes().every((box) => box.getAttribute('aria-checked') === 'true')).toBe(true)
 
-    // Unchecking two keeps one on the island, and the overview then shows exactly that teammate.
+    // Unchecking two keeps one pinned, and the bot list then puts that teammate first.
     const named = (name: string) => boxes().find((box) => box.textContent?.startsWith(name))!
     await act(async () => { named('Codex').click(); await settleMicrotasks() })
     await act(async () => { named('Docs').click(); await settleMicrotasks() })
     expect(pinSaves().at(-1)).toEqual(['agent-ops'])
     expect(chipNames()).toEqual(['Ops'])
-    await press(view.host, 'Home')
+    await press(view.host, 'Chat')
     await view.settle()
-    expect([...view.host.querySelectorAll('.peer')].map((peer) => peer.getAttribute('aria-label')?.split(':')[0])).toEqual(['Ops', 'Codex', 'Docs'])
+    expect([...view.host.querySelectorAll('.cs-bot .cs-bot-name')].map((name) => name.textContent)).toEqual(['Ops', 'Claude', 'Codex', 'Docs'])
 
     await press(view.host, 'Settings')
     await view.settle()
@@ -655,14 +659,15 @@ describe('companion first-run drag hint', () => {
     await view.settle()
     await press(view.host, 'Open companion home')
     await view.settle()
-    // The tip sits in the header, beside the tabs and the + button.
-    const hint = view.host.querySelector('.island-header .companion-hint-pill')!
+    // The tip is a slim strip under the header, so the header always has room for the bot's status line.
+    expect(view.host.querySelector('.cs-head .companion-hint-pill')).toBeNull()
+    const hint = view.host.querySelector('.cs-hint .companion-hint-pill')!
     expect(hint.textContent).toContain('Drag me anywhere')
     expect(hint.getAttribute('title')).toBe('Drag me anywhere. Ctrl+Alt+B shows or hides me.')
     await act(async () => { [...hint.querySelectorAll('button')].find((button) => button.textContent === 'Got it')!.click(); await settleMicrotasks() })
     expect(view.host.querySelector('.companion-hint-pill')).toBeNull()
     // A second mount in the same window does not bring it back.
-    await press(view.host, 'Home')
+    await press(view.host, 'Chat')
     await view.settle()
     expect(view.host.querySelector('.companion-hint-pill')).toBeNull()
   })

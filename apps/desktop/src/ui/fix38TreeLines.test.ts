@@ -22,7 +22,6 @@ const rule = (source: string, selector: string) => {
 const GUIDE = '.convo-children > .convo-item::before'
 const ELBOW = '.convo-children > .convo-item > .convo-row::before'
 const LEAF_ELBOW = '.convo-children > .convo-item > .convo-row:not(.branch)::before'
-const BRANCH_LINE = '.convo-row.branch::after'
 
 describe('conversation branch lines', () => {
   it('runs one guide down the parent column, over a row hover or selection', () => {
@@ -45,10 +44,12 @@ describe('conversation branch lines', () => {
     expect(rule(panel, LEAF_ELBOW)).toMatch(/width: calc\(var\(--convo-indent\) \+ 11px\)/)
   })
 
-  it('keeps the guide going below a branch row, down to its children', () => {
-    const branch = rule(panel, BRANCH_LINE)
-    expect(branch).toMatch(/top: 50%; bottom: 0/)
-    expect(branch).toMatch(/left: calc\(var\(--depth, 0\) \* var\(--convo-indent\) \+ 9px - var\(--convo-row-edge\)\)/)
+  // FIX43 item 10: the owner wants the tree to start below the parent card and run down to each child, as in Claude Code's
+  // branch tree, not to hang from the parent's own arrow through the lower half of its card.
+  it('starts the trunk below the parent card: nothing is drawn inside a branch row, and the children start a little under it', () => {
+    expect(rules(panel).some((entry) => entry.selector.includes('.convo-row.branch::after'))).toBe(false)
+    expect(rule(panel, '.convo-children')).toMatch(/margin-top: 3px/)
+    expect(rule(panel, '.convo-children')).toMatch(/--convo-guide-x: calc\(var\(--parent-depth, 0\) \* var\(--convo-indent\) \+ 9px\)/)
   })
 
   it('marks a row with children as a branch', () => {
@@ -64,7 +65,7 @@ describe('conversation branch lines', () => {
     expect(base).toMatch(/--convo-line-style: solid/)
     expect(base).toMatch(/--convo-radius: 6px/)
     // Every line takes its stroke from those variables.
-    for (const body of [rule(panel, GUIDE), rule(panel, ELBOW), rule(panel, BRANCH_LINE)]) {
+    for (const body of [rule(panel, GUIDE), rule(panel, ELBOW)]) {
       expect(body).toMatch(/1px var\(--convo-line-style\) var\(--convo-line\)/)
     }
     // The Bitbots look swaps the stroke and the row edge, never the geometry.

@@ -177,8 +177,50 @@ fn zipformer_streaming_en() -> SpeechModelManifest {
     )
 }
 
+/// Cactus Whistle: a 16.9 MB multilingual model that runs on the Needle engine. The two files come from two pinned
+/// Hugging Face revisions: the model from `Cactus-Compute/whistle` and the engine, `windows-x86_64/needle.exe`, from
+/// `Cactus-Compute/needle3` (Apache-2.0 both). The engine is a prebuilt executable that is run as a subprocess, so its
+/// SHA-256 is checked after the download and again before every launch (`engine.rs`). Pinned 24 October 2026.
+pub const WHISTLE_MODEL_ID: &str = "cactus-whistle-v1";
+pub const WHISTLE_ENGINE_FILE: &str = "needle.exe";
+pub const WHISTLE_MODEL_FILE: &str = "whistle.cact";
+
+fn cactus_whistle() -> SpeechModelManifest {
+    let download_files = vec![
+        SpeechDownloadFile {
+            name: WHISTLE_MODEL_FILE.to_string(),
+            url: "https://huggingface.co/Cactus-Compute/whistle/resolve/741118687e1f008f06d1351a402a731274789790/whistle.cact?download=true".to_string(),
+            size_bytes: 16_919_407,
+            sha256: "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb".to_string(),
+        },
+        SpeechDownloadFile {
+            name: WHISTLE_ENGINE_FILE.to_string(),
+            url: "https://huggingface.co/Cactus-Compute/needle3/resolve/d6c7d6a2e9655505e0f8e23339356dd1705900eb/windows-x86_64/needle.exe?download=true".to_string(),
+            size_bytes: 1_570_816,
+            sha256: "0d4bc1da8c51f5600f5c4f4bb4a92e0abe142fae7b69e695ccab93e6745c883d".to_string(),
+        },
+    ];
+    let size_bytes = download_files.iter().map(|file| file.size_bytes).sum();
+    let files = download_files.iter().map(|file| file.name.clone()).collect();
+    SpeechModelManifest {
+        id: WHISTLE_MODEL_ID.to_string(),
+        label: "Whistle".to_string(),
+        description: "A very small model for English, German, French, Spanish, Italian, Dutch and Polish: 17 MB plus a 1.5 MB engine. Quick to download and light on memory; it is less accurate than Parakeet and may leave out punctuation.".to_string(),
+        model_type: SpeechModelType::Needle,
+        provider: SpeechProvider::Local,
+        language: "multilingual".to_string(),
+        files,
+        download_files,
+        size_bytes,
+        sample_rate: 16_000,
+        streaming: false,
+        modeling_unit: None,
+        recommended: false,
+    }
+}
+
 fn build_catalog() -> Vec<SpeechModelManifest> {
-    vec![parakeet_tdt_v3(), parakeet_tdt_v2(), zipformer_streaming_en()]
+    vec![parakeet_tdt_v3(), parakeet_tdt_v2(), zipformer_streaming_en(), cactus_whistle()]
 }
 
 static CATALOG: OnceLock<Vec<SpeechModelManifest>> = OnceLock::new();
@@ -198,4 +240,42 @@ pub fn default_model() -> &'static SpeechModelManifest {
         .iter()
         .find(|model| model.recommended)
         .unwrap_or_else(|| &catalog()[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{catalog, default_model, get_catalog_model, WHISTLE_ENGINE_FILE, WHISTLE_MODEL_FILE, WHISTLE_MODEL_ID};
+    use crate::manifest::SpeechModelType;
+
+    #[test]
+    fn every_download_is_pinned_to_a_revision_and_a_sha256() {
+        for model in catalog() {
+            for file in &model.download_files {
+                assert_eq!(file.sha256.len(), 64, "{} {}", model.id, file.name);
+                assert!(file.sha256.chars().all(|character| character.is_ascii_hexdigit()), "{} {}", model.id, file.name);
+                let revision = file.url.split("/resolve/").nth(1).and_then(|rest| rest.split('/').next()).unwrap_or("");
+                assert_eq!(revision.len(), 40, "{} {} must name a commit, not a branch: {}", model.id, file.name, file.url);
+                assert!(file.url.starts_with("https://huggingface.co/"), "{}", file.url);
+            }
+            assert_eq!(model.size_bytes, model.download_files.iter().map(|file| file.size_bytes).sum::<u64>());
+        }
+        let ids: std::collections::HashSet<_> = catalog().iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids.len(), catalog().len(), "model ids are unique");
+    }
+
+    #[test]
+    fn whistle_is_the_small_download_and_the_default_stays_parakeet() {
+        let whistle = get_catalog_model(WHISTLE_MODEL_ID).expect("Whistle is in the catalogue");
+        assert_eq!(whistle.model_type, SpeechModelType::Needle);
+        assert!(!whistle.streaming && !whistle.recommended);
+        assert_eq!(whistle.files, vec![WHISTLE_MODEL_FILE.to_string(), WHISTLE_ENGINE_FILE.to_string()]);
+        let model = whistle.download_files.iter().find(|file| file.name == WHISTLE_MODEL_FILE).unwrap();
+        assert!(model.url.contains("Cactus-Compute/whistle/resolve/741118687e1f008f06d1351a402a731274789790/"));
+        assert_eq!((model.size_bytes, model.sha256.as_str()), (16_919_407, "b6e02f048568ac5d01a2042556c658061e699acbc0aa2a1439f52f3d461dffeb"));
+        let engine = whistle.download_files.iter().find(|file| file.name == WHISTLE_ENGINE_FILE).unwrap();
+        assert!(engine.url.contains("Cactus-Compute/needle3/resolve/d6c7d6a2e9655505e0f8e23339356dd1705900eb/windows-x86_64/needle.exe"));
+        assert_eq!((engine.size_bytes, engine.sha256.as_str()), (1_570_816, "0d4bc1da8c51f5600f5c4f4bb4a92e0abe142fae7b69e695ccab93e6745c883d"));
+        assert!(whistle.size_bytes < 20_000_000, "about 17 MB of model plus the 1.5 MB engine");
+        assert_eq!(default_model().id, "parakeet-tdt-0.6b-v3-int8", "the on-device default does not change");
+    }
 }

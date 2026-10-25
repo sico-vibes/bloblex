@@ -1,13 +1,9 @@
-// The companion's team view, after the Grok Bot companion study: one blob in
-// focus with its live steps, and up to four teammates in sight, each reduced
-// to a face and the line it is working on. Same projects, roles, leader and
-// side conversations as the main window.
+// The companion's team pieces: who is working, the pinned-teammates choice, chat items and the activity summary.
+// Same projects, roles, leader and side conversations as the main window.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, Check, ClipboardList, Copy, LayoutGrid, Pin, PinOff, Terminal, X, ArrowLeftRight, BriefcaseBusiness } from 'lucide-react'
+import { ArrowUpRight, Check, ClipboardList, Copy, Pin, PinOff, X, ArrowLeftRight } from 'lucide-react'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
-import { useThemeStyle } from '../blob/bitbots'
-import { HazeAura } from '../blob/haze/HazeAura'
 import { agentLook } from '../blob/look'
 import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { agentColorHex } from './agentColor'
@@ -70,45 +66,6 @@ export function pickPeers(agents: readonly Agent[], sessions: readonly Session[]
 
 function Face({ agent, size, mood = 'idle' }: { agent: Agent; size: number; mood?: 'idle' | 'offline' }) {
   return <BlobCanvas decorative color={agentColorHex(agent.color)} size={size} mini mood={mood} look={agentLook(agent)} label={agent.name} />
-}
-
-/** Up to four teammates in a 2×2 grid: a face and the line it is working on. */
-export function CompanionPeers({ agents, projects, sessions, runtimes, connected, focusedId, pinned, onSelect, onPinnedChange }: {
-  agents: readonly Agent[]
-  projects: readonly Project[]
-  sessions: readonly Session[]
-  runtimes: readonly Runtime[]
-  connected: boolean
-  focusedId: string | null
-  pinned: readonly string[]
-  onSelect: (agent: Agent) => void
-  onPinnedChange: (ids: string[]) => void
-}) {
-  const [picking, setPicking] = useState(false)
-  const nouns = useEntityNoun({ plural: true })
-  const peers = pickPeers(agents, sessions, runtimes, connected, focusedId, pinned)
-  const haze = useThemeStyle() === 'haze'
-  const total = agents.filter((agent) => !agent.archived && agent.id !== focusedId).length
-  if (picking) return <CompanionTeamPicker agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={focusedId} pinned={pinned} onSelect={(agent) => { setPicking(false); onSelect(agent) }} onPinnedChange={onPinnedChange} onClose={() => setPicking(false)} />
-  return <div className="island-card peers-card" data-companion-no-drag="">
-    {peers.length === 0
-      ? <p className="companion-empty">No other {nouns} yet.</p>
-      : <div className={`peer-grid count-${peers.length}`}>
-        {peers.map((agent, index) => {
-          const state = blobState(agent, sessions, runtimes, connected)
-          const line = peerLine(agent, sessions, state)
-          return <button key={agent.id} type="button" className={`peer state-${state}`} style={{ ['--peer' as string]: agentColorHex(agent.color), animationDelay: `${index * 45}ms` }} aria-keyshortcuts={`Control+${index + 1}${state === 'waiting' ? ' N' : ''}`} aria-label={`${agent.name}${agent.leader ? ', team leader' : ''}: ${line}`} title={`${agent.name}: ${line}`} onClick={() => onSelect(agent)}>
-            <span className="peer-face"><Face agent={agent} size={22} mood={state === 'offline' ? 'offline' : 'idle'} />{agent.leader && <i className="peer-leader" aria-hidden="true"><BriefcaseBusiness size={8} strokeWidth={2.6} /></i>}</span>
-            {/* One line per chip so the name has room; what it is doing is in the tooltip and the label. */}
-            <HazeAura status={state === 'waiting' ? 'needs' : state === 'working' ? 'working' : 'idle'} color={agentColorHex(agent.color)} manager={agent.systemRole === 'manager'} quiet />
-            <span className="peer-copy"><b className={state === 'working' && !haze ? 'shimmer' : undefined}>{agent.name}</b></span>
-            {haze && <span className="peer-line">{line}</span>}
-            {state !== 'idle' && state !== 'offline' && <i className={`peer-state-dot ${state}`} aria-hidden="true" />}
-          </button>
-        })}
-      </div>}
-    <button type="button" className="peers-all" aria-label={`All ${nouns} (${total})`} title={`All ${nouns}`} onClick={() => setPicking(true)}><LayoutGrid size={12} /><span>{total}</span></button>
-  </div>
 }
 
 /** Every blob by project: tap to focus it, pin up to four to keep them on the island. */
@@ -212,44 +169,6 @@ export function CompanionTeammatesSetting({ agents, sessions, runtimes, connecte
       })}
     </ul>}
   </div>
-}
-
-/**
- * The focused blob's last steps as a short ticker: done steps dim, the current
- * one bright with its icon. New steps slide in from below.
- */
-export function FocusTicker({ steps, current, shimmering }: { steps: Array<{ id: string; title: string; running: boolean }>; current: string; shimmering: boolean }) {
-  const recent = steps.slice(-2)
-  const lines = [...recent.map((step) => ({ key: step.id, text: step.title, done: !step.running })), { key: `now:${current}`, text: current, done: false }]
-    .filter((line, index, all) => all.findIndex((other) => other.text === line.text) === index)
-    .slice(-3)
-  return <div className="focus-ticker" aria-live="polite">
-    {lines.map((line, index) => {
-      const isCurrent = index === lines.length - 1
-      return <div key={line.key} className={`focus-ticker-row${isCurrent ? ' current' : ''}`}>
-        {isCurrent ? <Terminal size={12} aria-hidden="true" /> : <span className="focus-ticker-dot" aria-hidden="true" />}
-        <span className={isCurrent && shimmering ? 'shimmer' : undefined}>{line.text}</span>
-      </div>
-    })}
-  </div>
-}
-
-/** One line about the focused blob's teammates: who it is waiting on, or who it is helping. */
-export function teamLine(agent: Agent | null, agents: readonly Agent[], sessions: readonly Session[]): { text: string; peer: Agent | null; sessionId: string } | null {
-  if (!agent) return null
-  const sides = sideSessionsFor(sessions, agent.id)
-  for (const side of sides) {
-    const outgoing = side.link?.peerAgentId === agent.id
-    const other = agents.find((item) => item.id === (outgoing ? side.agentId : side.link?.peerAgentId)) ?? null
-    if (!other) continue
-    if (outgoing && sessionIsBusy(side)) return { text: `Waiting on ${other.name}`, peer: other, sessionId: side.id }
-    if (!outgoing && sessionIsBusy(side)) return { text: `Helping ${other.name}`, peer: other, sessionId: side.id }
-  }
-  const latest = sides[0]
-  if (!latest) return null
-  const outgoing = latest.link?.peerAgentId === agent.id
-  const other = agents.find((item) => item.id === (outgoing ? latest.agentId : latest.link?.peerAgentId)) ?? null
-  return other ? { text: outgoing ? `Talked with ${other.name}` : `Helped ${other.name}`, peer: other, sessionId: latest.id } : null
 }
 
 /** Your own words, with @mentions shown as the blob's face and name in its colour. */

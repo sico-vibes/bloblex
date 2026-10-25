@@ -14,7 +14,7 @@ type WaveMode = 'live' | 'loading' | 'transcribing' | 'silent'
 
 const BARS = 11
 
-export function DictationIsland({ phase, level, since, stoppedAt, text, warming = false, errorText = '', variant = 'bubble' }: {
+export function DictationIsland({ phase, level, since, stoppedAt, text, warming = false, errorText = '', variant = 'bubble', engine = null }: {
   phase: IslandPhase
   /** Latest microphone level from the engine (0 to about 0.3). */
   level: number
@@ -28,12 +28,14 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
   warming?: boolean
   errorText?: string
   variant?: 'bubble' | 'companion'
-  /** Accepted for callers that still pass it; the island never names the engine. */
+  /** Used only to say plainly when an engine cannot show words while you speak (ChatGPT sends the whole recording at the end). The island never names the engine. */
   engine?: DictationEngineInfo | null
 }) {
   const mode: WaveMode = phase === 'processing' ? 'transcribing' : phase === 'silent' ? 'silent' : warming ? 'loading' : 'live'
   const shown = phase === 'error' ? friendlyDictationError(errorText) : lastWords(text)
-  const expanded = !!shown && phase !== 'done'
+  // The on-device models show words as you speak. ChatGPT transcription works on the finished recording, so say so instead of showing nothing.
+  const waitsForStop = phase === 'listening' && !shown && !warming && engine?.engine === 'chatgpt'
+  const expanded = (!!shown || waitsForStop) && phase !== 'done'
   return <div className={`dictation-island on-${variant} is-${phase} ${expanded ? 'is-expanded' : ''}`} role="status" aria-live="polite" aria-label={label(phase, warming)}>
     <div className="dictation-island-row">
       <span className="dictation-island-lead">
@@ -46,7 +48,7 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
       </span>
       {phase !== 'error' && phase !== 'done' && <Wave mode={mode} level={level} />}
     </div>
-    {expanded && <p className={`dictation-island-text ${phase === 'error' ? 'error' : ''}`}>{shown}</p>}
+    {expanded && <p className={`dictation-island-text ${phase === 'error' ? 'error' : ''} ${waitsForStop ? 'note' : ''}`}>{waitsForStop ? 'Words appear when you stop.' : shown}</p>}
   </div>
 }
 

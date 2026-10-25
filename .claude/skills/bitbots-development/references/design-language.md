@@ -32,6 +32,13 @@ In Haze the status of a bot is a soft gradient rolling in from the right of its 
 - **User accent wins:** `--user-accent` (from `appearance.accent`) overrides each look's default accent.
 - **Scope everything** to the look: `:root[data-style="<look>"]:not(.companion-surface):not(.dictation-surface)` for the main window, and separate `.companion-surface` / `.dictation-surface` sections for those windows.
 
+## Companion, conversation tree and message buttons (FIX43, 25 October 2026)
+
+- **One companion layout for every look.** Expanded, the companion is the split layout in `Companion` (`ui/App.tsx`, `.companion-shell` in `ui/companion.css`): the bot list on the left, the open bot's header and one pane on the right (chat, approval, activity, settings, drop target, side conversation), approvals and everything else in that pane, the compact bar unchanged. Frost and Stone keep their own bot art and status marks in the list (mascots at 24 px, with the art's own status badge); only Haze adds its gradient (`themes/haze.css`, the rules for `.cs-bot > .haze-aura` and `.cs-head > .haze-aura`). The old island (overview cards, tab header, teammates grid) is gone. Shared layout rules read the companion surface tokens (`--surface-sidebar`, `--surface-selected`, `--line`, `--text-*`), which every look defines.
+- **Resizable, always on top.** The window is frameless and transparent, so eight handles (`CompanionResize.tsx`, `.cs-resize-*`) drive the shell's `companion_resize_*` commands from the real cursor position. Minimum 520 x 340, maximum the work area, the size is remembered (`companion-size.json`), the header's "Make larger" toggles a 960 x 720 size, Settings has "Reset size". The compact bar is fixed at 344 x 62. The old Compact/Comfortable/Tall height setting is retired (the daemon still accepts the `companion.chatSize` key; nothing reads it).
+- **Branch tree.** In the Conversations column the trunk starts below the parent card (a 3 px gap, nothing drawn inside the parent row) and runs down to an elbow into each child, as in Claude Code's branch tree.
+- **Message buttons** (time, copy, reply, react) are centred on the bubble: the row inside `.message-action-shell` has no margin of its own.
+
 ## Tokens
 
 All colours, sizes and radii come from `apps/desktop/src/ui/theme.css` tokens (`--surface-*`, `--text-1..3`, `--line*`, `--status-*`, `--radius-*`, `--shadow-pop`, `--focus-ring`, `--font-ui`, `--font-mono`, `--fs-*`, companion tokens). A look overrides tokens first and adds component rules only where tokens are not enough. Component stylesheets use tokens, not literals.

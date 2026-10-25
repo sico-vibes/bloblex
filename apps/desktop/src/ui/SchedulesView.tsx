@@ -11,8 +11,9 @@ import { agentColorHex } from './agentColor'
 import { ConfirmDialog } from './BlobPage'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { Select } from './Select'
+import { ScheduleWhen } from './ScheduleWhen'
 import {
-  RUN_STATUS_LABEL, WEEKDAYS, defaultDraft, describeNextRun, describeSchedule, draftToSchedule, localTimeZone, runReasonText, scheduleToDraft,
+  RUN_STATUS_LABEL, defaultDraft, describeNextRun, describeSchedule, draftToSchedule, localTimeZone, runReasonText, scheduleToDraft,
   type DaemonSchedule, type ScheduleDraft, type SchedulePreset,
 } from './automationSchedule'
 import './schedules.css'
@@ -59,14 +60,7 @@ const RUNTIME_CHOICES = [
   { value: '14400', label: '4 hours' },
 ]
 
-const PRESET_CHOICES: Array<{ value: SchedulePreset; label: string }> = [
-  { value: 'daily', label: 'Every day' },
-  { value: 'weekdays', label: 'Weekdays' },
-  { value: 'weekly', label: 'Every week' },
-  { value: 'hours', label: 'Every few hours' },
-  { value: 'once', label: 'Once' },
-  { value: 'custom', label: 'Custom (cron)' },
-]
+const PRESET_CHOICES: readonly SchedulePreset[] = ['daily', 'weekdays', 'weekly', 'hours', 'once', 'custom']
 
 /** Starting points: what people typically want a blob to do on its own. */
 interface AutomationTemplate {
@@ -283,21 +277,8 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
   const [maxRuntime, setMaxRuntime] = useState(String(existing?.maxRuntimeSecs ?? 1800))
   const [saving, setSaving] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
-  const [preview, setPreview] = useState<string[] | null>(null)
-  const [previewError, setPreviewError] = useState<string | null>(null)
 
   const schedule = useMemo(() => draftToSchedule(draft), [draft])
-  const scheduleKey = JSON.stringify(schedule)
-  useEffect(() => {
-    setPreview(null)
-    setPreviewError(null)
-    if (!schedule) return
-    let active = true
-    const timer = window.setTimeout(() => {
-      onPreview(schedule).then((rows) => { if (active) setPreview(rows) }).catch((reason) => { if (active) setPreviewError(rpcFailure(reason).message) })
-    }, 300)
-    return () => { active = false; window.clearTimeout(timer) }
-  }, [scheduleKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const valid = name.trim().length > 0 && name.trim().length <= 80 && prompt.trim().length > 0 && prompt.length <= 8000 && !!agentId && !!schedule
   const set = (patch: Partial<ScheduleDraft>) => setDraft((current) => ({ ...current, ...patch }))
@@ -326,18 +307,7 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
         <small className="schedule-zone">It uses the tools your coding agent already has. If it cannot do something, the run says so.</small>
       </label>
       <div className="blob-field"><span>When</span>
-        <div className="schedule-when">
-          <Select ariaLabel="Repeat" variant="field" value={draft.preset} onChange={(value) => set({ preset: value as SchedulePreset })} options={PRESET_CHOICES} />
-          {(draft.preset === 'daily' || draft.preset === 'weekdays' || draft.preset === 'weekly') && <input type="time" aria-label="Time" value={draft.time} onChange={(event) => set({ time: event.target.value })} />}
-          {draft.preset === 'weekly' && <Select ariaLabel="Day" variant="field" value={String(draft.weekday)} onChange={(value) => set({ weekday: Number(value) })} options={WEEKDAYS.map((label, index) => ({ value: String(index), label }))} />}
-          {draft.preset === 'hours' && <Select ariaLabel="Hours between runs" variant="field" value={String(draft.everyHours)} onChange={(value) => set({ everyHours: Number(value) })} options={[1, 2, 3, 4, 6, 8, 12].map((n) => ({ value: String(n), label: n === 1 ? 'Every hour' : `Every ${n} hours` }))} />}
-          {draft.preset === 'once' && <input type="datetime-local" aria-label="Date and time" value={draft.onceAt} onChange={(event) => set({ onceAt: event.target.value })} />}
-          {draft.preset === 'custom' && <input aria-label="Cron expression" value={draft.cron} placeholder="m h dom mon dow" onChange={(event) => set({ cron: event.target.value })} />}
-        </div>
-        {draft.preset !== 'once' && <small className="schedule-zone">Time zone: {draft.timezone}</small>}
-        <small className={`schedule-preview${previewError ? ' bad' : ''}`} role="status">
-          {previewError ?? (schedule ? (preview ? (preview.length ? `Next: ${preview.join(' · ')}` : 'No upcoming runs.') : 'Checking…') : 'Choose a valid time.')}
-        </small>
+        <ScheduleWhen draft={draft} onChange={set} schedule={schedule} onPreview={onPreview} presets={PRESET_CHOICES} />
       </div>
       <fieldset className="schedule-modes">
         <legend>While it runs</legend>

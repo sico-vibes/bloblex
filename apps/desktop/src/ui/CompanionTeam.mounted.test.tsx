@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Project, Runtime, Session } from '../types'
-import { CompanionChatItem, CompanionPeers, CompanionTeamPicker, CompanionTeammatesSetting, pickPeers, teamLine } from './CompanionTeam'
+import { CompanionChatItem, CompanionTeamPicker, CompanionTeammatesSetting, pickPeers } from './CompanionTeam'
 
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: ({ label }: { label?: string }) => <span data-face={label} /> }))
 
@@ -31,18 +31,10 @@ beforeEach(() => { vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.unstubAllGlobals() })
 
 describe('companion team overview', () => {
-  it('keeps up to four teammates in sight, pinned first, each with the line it is working on', () => {
+  it('keeps up to four teammates in sight, pinned first', () => {
     const many = [lead, mate, casual, agent('d', 'Dot'), agent('e', 'Eve'), agent('f', 'Fox')]
     expect(pickPeers(many, sessions, runtimes, true, 'lead', []).map((item) => item.name)).toEqual(['Mate', 'Casual', 'Dot', 'Eve'])
     expect(pickPeers(many, sessions, runtimes, true, 'lead', ['f']).map((item) => item.name)[0]).toBe('Fox')
-    const onSelect = vi.fn()
-    const host = mount(<CompanionPeers agents={many} projects={projects} sessions={sessions} runtimes={runtimes} connected focusedId="lead" pinned={[]} onSelect={onSelect} onPinnedChange={vi.fn()} />)
-    const peers = [...host.querySelectorAll<HTMLButtonElement>('.peer')]
-    expect(peers).toHaveLength(4)
-    expect(peers[0].getAttribute('aria-label')).toBe('Mate: Waiting for you')
-    act(() => peers[0].click())
-    expect(onSelect).toHaveBeenCalledWith(mate)
-    expect(host.querySelector('.peers-all')?.getAttribute('aria-label')).toBe('All bots (5)')
   })
 
   it('lists every blob by project and pins up to four to the island', () => {
@@ -53,12 +45,6 @@ describe('companion team overview', () => {
     expect(onPinnedChange).toHaveBeenCalledWith(['mate', 'casual'])
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Unpin Mate from the island"]')!.click())
     expect(onPinnedChange).toHaveBeenLastCalledWith([])
-  })
-
-  it('says who the focused blob is waiting on or helping', () => {
-    expect(teamLine(lead, [lead, mate], sessions)).toEqual({ text: 'Waiting on Mate', peer: mate, sessionId: 'side' })
-    expect(teamLine(mate, [lead, mate], sessions)?.text).toBe('Helping Lead')
-    expect(teamLine(casual, [lead, mate, casual], sessions)).toBeNull()
   })
 
   it('renders a context reset as a labelled divider and marks lost context', () => {

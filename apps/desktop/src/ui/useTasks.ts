@@ -3,8 +3,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { listenForDaemonEvents, rpc } from '../tauri'
 import { rpcFailure } from '../executionContract'
 import type { BoardTask, BoardTaskRun, TaskDispatchResult } from '../types'
+import type { DaemonSchedule } from './automationSchedule'
 
-export interface TaskInput { title: string; brief: string; doneGoal: string; reportBack: string; projectId: string | null }
+/** One image on a task: a kept one by its stored id, or a new one staged on disk by the desktop shell. */
+export type TaskImageRef = { id: string } | { path: string; name: string }
+export interface TaskInput {
+  title: string; brief: string; doneGoal: string; reportBack: string; projectId: string | null
+  estimateMinutes?: number | null
+  maxRuntimeSecs?: number
+  attachments?: TaskImageRef[]
+  /** `null` is "now"; a schedule needs the bot that runs it. */
+  schedule?: DaemonSchedule | null
+  scheduleAgentId?: string | null
+}
 
 export function useTasks(active: boolean, connected: boolean) {
   const [tasks, setTasks] = useState<BoardTask[]>([])
@@ -49,6 +60,9 @@ export function useTasks(active: boolean, connected: boolean) {
   const merge = (task: BoardTask) => setTasks((current) => current.some((item) => item.id === task.id) ? current.map((item) => item.id === task.id ? task : item) : [task, ...current])
 
   const create = useCallback(async (input: TaskInput) => { const result = await rpc<{ task: BoardTask }>('task.create', { ...input }); merge(result.task); return result.task }, [])
+  const update = useCallback(async (task: BoardTask, input: TaskInput) => { const result = await rpc<{ task: BoardTask }>('task.update', { ...input, taskId: task.id, expectedVersion: task.version }); merge(result.task); return result.task }, [])
+  /** One stored image as a data URL, for its thumbnail. */
+  const image = useCallback(async (taskId: string, imageId: string) => (await rpc<{ dataUrl: string }>('task.image', { taskId, imageId })).dataUrl, [])
   const dispatch = useCallback(async (task: BoardTask, assigneeAgentId: string, idempotencyKey: string) => {
     const result = await rpc<TaskDispatchResult>('task.dispatch', { taskId: task.id, assigneeAgentId, expectedVersion: task.version, idempotencyKey })
     merge(result.task)
@@ -72,5 +86,5 @@ export function useTasks(active: boolean, connected: boolean) {
   }, [load])
   const runs = useCallback(async (taskId: string) => (await rpc<{ runs?: BoardTaskRun[] }>('task.runs', { taskId })).runs ?? [], [])
 
-  return { tasks, loaded, error, reload: load, create, dispatch, act, review, reorder, runs }
+  return { tasks, loaded, error, reload: load, create, update, image, dispatch, act, review, reorder, runs }
 }

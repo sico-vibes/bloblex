@@ -2,6 +2,43 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-25 · Storage · `sqlite: no such table: tasks` on an existing database (FIX43, beta.37)
+- **Symptom:** the installed beta.37 showed `sqlite: no such table: tasks` on the Tasks page; a fresh database worked.
+- **Root cause:** `Storage::migrate` returns early in a branch per schema version (`ledger==12`, `==11`, `==10`, ...), and each branch calls its own list of `ensure_*_schema`. `ensure_tasks_schema` was added only to the last, fresh-database path (`crates/bloblex-storage/src/lib.rs`), so every database an earlier version had created never got the task tables. The daemon tests all use `open_in_memory`, which takes the fresh path, so nothing caught it.
+- **Fix:** `migrate` now wraps `migrate_versions` and calls `ensure_tasks_schema` once for every path. Test `an_existing_database_without_the_task_tables_gains_them_on_open` drops the task tables from a file database, reopens it and lists tasks (it fails without the fix).
+- **Avoid:** a new additive `ensure_*_schema` goes in the shared wrapper, not in one version branch. Test an upgrade with a file database made by the previous shape, not only `open_in_memory`.
+
+## 2026-10-25 · CSS · Message buttons sat above the bubble's middle (FIX43)
+- **Symptom:** the time, copy, reply and reaction buttons beside a message were 7 px above the bubble's vertical centre (half of the 14 px row margin), more with a reaction badge.
+- **Root cause:** `.message-action-shell` centres the buttons on its own box, but the `.message-row` inside it still had `margin-top: 14px` from `.message-row.user` / `.group-start` (`shell.css`) and 18 px from `:has(.message-reaction-badge)` (`experiments.css`). Those selectors tie with `.message-action-shell > .message-row { margin: 0 }`, and the later stylesheet wins.
+- **Fix:** `.message-action-shell > .message-row:is(.user, .group-start, :has(.message-reaction-badge)) { margin: 0 }` (`experiments.css`); the shell owns the spacing. Measured 0 px in Haze, Frost, Stone and the companion; `messageActionsLayout.test.ts` pins the rule.
+- **Avoid:** measure centring with `getBoundingClientRect` on the buttons and the bubble (`?experiments` turns the actions on in the preview); do not trust a screenshot.
+
+## 2026-10-25 · UI · A `Select` inside a dialog grew the dialog (FIX43)
+- **Symptom:** opening Project in the New task dialog drew the list inside the dialog and made it taller.
+- **Root cause:** `.select-menu` is `position: absolute` under the trigger, so inside a scrolling, transformed dialog it extends the scroll area.
+- **Fix:** `ui/Select.tsx` floats the list when its trigger sits inside `[role="dialog"]`: a portal into `document.body`, `position: fixed`, placed from the trigger's rect, flipped upwards when there is no room, re-placed on scroll and resize. Outside-click checks both the root and the floating list. Never use `visibility: hidden` for the first frame: it stops the list taking focus, so Escape would reach the dialog and close it.
+- **Tests:** a Select in a dialog has its list outside the host. `ui/testSelect.ts` finds the list through the trigger's `aria-controls` (an older `trigger.parentElement.querySelector` fails for any Select in a dialog, as `MemoryPage.mounted.test.tsx` did).
+
+## 2026-10-25 · Speech · Dictation showed no words while speaking (FIX43)
+- **Symptom:** the island showed the timer and the waveform but no words; the preview showed words.
+- **Root cause:** the default model (Parakeet) is an offline recognizer. `SpeechEngine::accept` only returned a `Final` when a 30-second chunk filled (`chunker.rs`) or on stop, so the native layer never emitted a `partial`. Only streaming models (Zipformer) produced partials. The preview fixture emits them for every engine.
+- **Fix:** `crates/bloblex-speech/src/utterance.rs` (`UtteranceTracker`) cuts audio into utterances at pauses: a partial about every 1.2 s (the whole utterance so far, spaced out when a decode is slow), a final after 0.9 s of silence, a bound of 20 s. The engine decodes on those steps (`engine.rs`). The island says "Words appear when you stop." for the ChatGPT engine, which sends the whole recording at the end.
+- **Avoid:** an engine that does not stream needs a segmenter to give live text; check what the real engine emits, not what the fixture emits.
+
+## 2026-10-25 · Speech · Cactus's `libneedle.a` cannot be linked on MSVC; Whistle runs as a subprocess (FIX43)
+- **Evidence:** `windows-x86_64/libneedle.a` (revision `d6c7d6a2e9655505e0f8e23339356dd1705900eb`) is one llvm-mingw COFF object (`needle.cpp.obj`) built against libc++ (`std::__1`) and the Itanium unwinder (`__gxx_personality_seh0`, `_Unwind_Resume`, `__cxa_*`), none of which the MSVC toolchain provides. The Python package loads a separate `libneedle.dll` instead.
+- **Decision:** `needle.exe` from the same revision is downloaded with the model (both pinned by revision and SHA-256 in `catalog.rs`), re-hashed before every load, and run per utterance (`needle.rs`). Not verified: the engine's real output format (read leniently as JSON with `text`) and that it runs on the owner's machine; nobody executed the downloaded binary in the FIX43 lane.
+- **Hash facts:** Hugging Face `?blobs=true` gives each LFS file's SHA-256 without a download; it matched a downloaded file.
+
+## 2026-10-25 · Companion · The stick-to-bottom effect needs `mode` (FIX43)
+`ui/App.tsx` follows new messages only while the log is at the bottom. Its reset branch (`chatSessionRef`) first ran when `view` changed, which used to mount the log; with the split layout the log mounts when the companion expands. Add `mode` to the effect's dependencies, or the first delivery after expanding resets the stick flag and the "New messages" pill never shows.
+
+## 2026-10-25 · Process · Tool-call quoting, CRLF files and `vitest --root`
+- Backslashes are halved in the commands the tools receive (`'\\'` arrived as `'\'`), and a long heredoc with apostrophes fails. Write a script file with the Write tool (use `chr(92)` for a backslash) and run it. Most `apps/desktop` and daemon files are CRLF in the working tree, `crates/bloblex-storage/src/lib.rs` is LF (git marks it binary); a Python text write turns LF into CRLF and rewrites the whole file. Read and write bytes and keep each file's endings (a small `sub(path, [(old, new, count)])` helper).
+- Run vitest from `apps/desktop` (`npx vitest run <file>`). `--root apps/desktop` from the repository root fails with "Denied ID ...docs/releases/...?raw" for any test that mounts `App`.
+- `FIX37.updateBadge.mounted.test.tsx` expects `v0.1.0-beta.36` and fails on `main` at `30c7b3d` too (the app is beta.37); the Director decides whether to fix it. `cargo clippy --workspace` also fails in the desktop crate on Rust 1.94 in code nobody touched (`speech.rs:79`, `run_worker`'s 8 arguments, `power.rs:222`, `lib.rs` argument counts); use `--exclude bloblex-desktop` for a clean run.
+
 ## 2026-10-24 · Gates · `cargo fmt --all -- --check` fails on `main` (3,766 diffs at f091ff7)
 - **Symptom:** the fmt gate fails in files no lane touched (`bloblex-wsl`, `bloblex-speech`, `bloblex-process`, `cron.rs`, `tasks.rs`, `team.rs`).
 - **Root cause:** the repository is not rustfmt-formatted; it uses deliberate dense, long lines. A `git archive HEAD` copy of `f091ff7` in a temp directory reports 3,766 `Diff in` blocks, so this is the baseline.

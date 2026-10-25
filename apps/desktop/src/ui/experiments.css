@@ -6,6 +6,8 @@
 .message-action-shell.user { flex-direction: row-reverse; }
 .message-action-shell .message-time { display: none; }
 .message-action-shell > .message-row { width: auto; max-width: calc(100% - 100px); min-width: 0; margin: 0; flex: 0 1 auto; }
+/* The shell owns the spacing above and below. Without these, `.message-row.user` and `:has(.message-reaction-badge)` give the row its own margin, the buttons centre on row plus margin and sit above the bubble's middle. */
+.message-action-shell > .message-row:is(.user, .group-start, :has(.message-reaction-badge)) { margin: 0; }
 .message-action-shell > .message-row .message-content { max-width: 100%; }
 .message-actions { position: relative; min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 1px; opacity: 0; transition: opacity 100ms ease; }
 .message-action-time { position: absolute; left: 100%; margin-left: 6px; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }

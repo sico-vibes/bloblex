@@ -1,5 +1,6 @@
 // Pure helpers for the task board: labels, grouping and the honest "how long" text. Times come only from observed timestamps.
-import type { Agent, BoardTask, TaskState } from '../types'
+import type { Agent, BoardTask, TaskScheduleOutcome, TaskState } from '../types'
+import { describeSchedule } from './automationSchedule'
 
 export const TASK_STATE_LABEL: Record<string, string> = {
   claimed: 'Starting', ambiguous: 'Needs a look', unassigned: 'Draft', queued: 'Queued', running: 'Working', needs_you: 'Needs you', awaiting_review: 'Ready for review', done: 'Done', failed: 'Failed', cancelled: 'Cancelled',
@@ -17,7 +18,30 @@ export function laneTasks(tasks: readonly BoardTask[], agentId: string): BoardTa
     .sort((a, b) => (LANE_ORDER[a.state] ?? 9) - (LANE_ORDER[b.state] ?? 9) || (a.queuePosition ?? 0) - (b.queuePosition ?? 0) || a.createdAt.localeCompare(b.createdAt))
 }
 
-export const draftTasks = (tasks: readonly BoardTask[]) => tasks.filter((task) => task.state === 'unassigned').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+/** A task whose schedule will start it (once) or copy it (repeat): it waits in its own list, not on the unassigned drafts. */
+export const isScheduled = (task: BoardTask) => task.state === 'unassigned' && task.scheduleState === 'active' && !!task.schedule
+export const draftTasks = (tasks: readonly BoardTask[]) => tasks.filter((task) => task.state === 'unassigned' && !isScheduled(task)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+export const scheduledTasks = (tasks: readonly BoardTask[]) => tasks.filter(isScheduled).sort((a, b) => (a.scheduleNextAt ?? '').localeCompare(b.scheduleNextAt ?? ''))
+
+/** One line for a scheduled task: "Every day at 09:00 · Codex". */
+export function scheduleSummary(task: BoardTask, agents: readonly Agent[]): string | null {
+  if (!task.schedule) return null
+  const bot = agents.find((agent) => agent.id === task.scheduleAgentId)?.name
+  return [describeSchedule(task.schedule.kind === 'once' ? { kind: 'once', at: task.schedule.at } : task.schedule), bot].filter(Boolean).join(' · ')
+}
+
+export const SCHEDULE_OUTCOME_LABEL: Record<TaskScheduleOutcome, string> = {
+  started: 'Started', queued: 'Queued behind other work', skipped_late: 'Skipped: more than five minutes late', skipped_paused: 'Skipped: tasks were paused',
+  skipped_overlap: 'Skipped: the last run was still going', failed_to_start: 'Could not start', invalid_schedule: 'The schedule is not valid',
+}
+
+/** Shown under every time or schedule control; the second sentence is what the daemon really does (`SCHEDULE_GRACE_SECS`). */
+export const SCHEDULE_DISCLAIMER = 'Runs only while Bitbots is open and this computer is on and awake. A run that is missed by more than five minutes is skipped, not run late.'
+
+export const TIME_LIMIT_CHOICES = [
+  { value: 900, label: '15 minutes' }, { value: 1800, label: '30 minutes' }, { value: 3600, label: '1 hour' }, { value: 7200, label: '2 hours' },
+  { value: 14400, label: '4 hours' }, { value: 28800, label: '8 hours' }, { value: 86400, label: '24 hours' },
+]
 export const finishedTasks = (tasks: readonly BoardTask[]) => tasks.filter(isFinished).sort((a, b) => (b.completedAt ?? b.updatedAt).localeCompare(a.completedAt ?? a.updatedAt))
 
 export type Availability = { tone: 'free' | 'working' | 'attention'; label: string; queued: number }

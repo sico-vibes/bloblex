@@ -296,7 +296,7 @@ pub async fn tool_write(st: &AppState, session_id: &str, args: &Value) -> Result
     let (agent_id, project_id) = session_scope(st, session_id)?;
     let scope = args["scope"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("blob");
     // Unattended rail: an automation run may only ever write blob scope.
-    let is_automation = st.db.session_detail(session_id).map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
+    let is_automation = st.db.session_detail(session_id).map(|row| crate::is_unattended(&row["link"])).unwrap_or(false);
     if is_automation && scope != "blob" { return Err(format!("Automation runs may only save notes to their own {}.", crate::team::entity_noun(false))); }
     let (scope, scope_id, reviewed) = match scope {
         "blob" => ("blob", Some(agent_id.clone()), true),

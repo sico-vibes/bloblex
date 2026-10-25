@@ -299,7 +299,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         list.extend(crate::proposals::tool_schemas());
         list.extend(crate::knowledge::tool_schemas());
         // The board draft tool: creates only, never assigns or dispatches.
-        list.push(json!({"name":"create_task","description":format!("Create an unassigned task on the user's task board. It is a draft: it has no bot, does not run and cannot be scheduled. The user decides which {noun} gets it by dragging it in Bitbots. Use it when the user asks for work to be tracked on the board; use message_blob for ordinary delegation."),"inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"A short title, 1 to 120 characters."},"brief":{"type":"string","description":"The full brief: goal, context, paths and constraints."},"doneGoal":{"type":"string","description":"What must be true for the task to count as done."},"reportBack":{"type":"string","description":"What the bot should report when it stops."},"projectId":{"type":"string","description":"The project this task belongs to (optional)."},"parentTaskId":{"type":"string","description":"The parent task, when this is a follow-up (optional)."}},"required":["title","brief","doneGoal","reportBack"],"additionalProperties":false}}));
+        list.push(json!({"name":"create_task","description":format!("Create an unassigned task on the user's task board. It is a draft: it has no bot, does not run and cannot be scheduled. The user decides which {noun} gets it by dragging it in Bitbots. Use it when the user asks for work to be tracked on the board; use message_blob for ordinary delegation."),"inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"A short title, 1 to 120 characters."},"brief":{"type":"string","description":"The full brief: goal, context, paths and constraints."},"doneGoal":{"type":"string","description":"What must be true for the task to count as done."},"reportBack":{"type":"string","description":"What the bot should report when it stops."},"projectId":{"type":"string","description":"The project this task belongs to (optional)."},"parentTaskId":{"type":"string","description":"The parent task, when this is a follow-up (optional)."},"images":{"description":"Images the user attached in this conversation that the task needs: a list of their numbers (1 is the first image the user sent here, 2 the next, and so on) or the word all. Optional.","anyOf":[{"type":"array","items":{"type":"integer","minimum":1},"maxItems":8},{"type":"string","enum":["all"]}]}},"required":["title","brief","doneGoal","reportBack"],"additionalProperties":false}}));
         for tool in &mut list {
             if tool["name"] == "message_blob" {
                 tool["description"] = json!("Propose messaging a teammate. Supply the brief, doneGoal and reportBack yourself; the owner only approves the card. For parallel work give a new topic; to continue pass conversation. Nothing is sent before approval.");
@@ -335,12 +335,12 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     // team/scheduling tools nor reach any automation write RPC. Memory tools
     // are allowed, but only while the feature is on and only blob scope.
     let session = st.db.session_detail(session_id).ok();
-    let is_automation = session.as_ref().map(|row| row["link"]["kind"] == "automation").unwrap_or(false);
+    let is_automation = session.as_ref().map(|row| crate::is_unattended(&row["link"])).unwrap_or(false);
     // `ask_user` is offered in a bot's own conversation, whatever the provider
     // (FIX36 D2 removed the OpenCode-only gate). It stays out of automation runs
     // and side conversations, where there is no user to answer.
     let ask_user = session.as_ref().is_some_and(|row| {
-        row["archived"] != true && !matches!(row["link"]["kind"].as_str(), Some("side" | "automation"))
+        row["archived"] != true && !matches!(row["link"]["kind"].as_str(), Some("side" | "automation")) && !crate::is_unattended(&row["link"])
     });
     let memory_enabled = crate::memory::enabled(st);
     if is_automation && method.starts_with("automation.") {

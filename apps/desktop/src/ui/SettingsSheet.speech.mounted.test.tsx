@@ -92,3 +92,44 @@ describe('Speech settings: transcription engine', () => {
     expect(dictationEnginePrefs().engine).toBe('local')
   })
 })
+
+describe('Speech settings: the Whistle model', () => {
+  const catalogue = [
+    { id: 'parakeet-tdt-0.6b-v3-int8', label: 'Parakeet TDT v3', description: 'Highest accuracy.', language: 'multilingual', streaming: false, recommended: true, sizeBytes: 671_000_000 },
+    { id: 'cactus-whistle-v1', label: 'Whistle', description: 'A very small model for seven languages: 17 MB plus a 1.5 MB engine.', language: 'multilingual', streaming: false, recommended: false, sizeBytes: 18_490_223 },
+  ]
+
+  async function openCatalogue(ready: Record<string, boolean>) {
+    mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    mocks.invoke.mockImplementation(async (command: string, args?: { modelId?: string }) => {
+      if (command === 'speech_cloud_status') return { authState: 'ready', authMode: 'chatgpt' }
+      if (command === 'speech_models') return catalogue
+      if (command === 'speech_model_status') return { ready: ready[args?.modelId ?? ''] === true }
+      return { modelId: args?.modelId }
+    })
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Speech" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await tick()
+  }
+  const row = (label: string) => [...host.querySelectorAll<HTMLElement>('.speech-model-row')].find((item) => item.textContent?.includes(label))!
+
+  it('lists Whistle with its small size next to Parakeet, which stays the recommended default', async () => {
+    await openCatalogue({ 'parakeet-tdt-0.6b-v3-int8': true })
+    expect([...host.querySelectorAll('.speech-model-row .settings-row-title strong')].map((node) => node.textContent?.replace('Recommended', ''))).toEqual(['Parakeet TDT v3', 'Whistle'])
+    expect(row('Parakeet').textContent).toContain('Recommended')
+    expect(row('Whistle').textContent).toContain('18 MB')
+    expect(row('Whistle').textContent).not.toContain('Recommended')
+  })
+
+  it('downloads Whistle through the same command as the other models, then offers it for use', async () => {
+    await openCatalogue({ 'parakeet-tdt-0.6b-v3-int8': true })
+    const download = [...row('Whistle').querySelectorAll('button')].find((button) => button.textContent?.includes('Download'))!
+    await act(async () => { download.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await tick()
+    expect(mocks.invoke).toHaveBeenCalledWith('speech_model_download', { modelId: 'cactus-whistle-v1' })
+    const use = [...row('Whistle').querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Use')!
+    expect(use).toBeTruthy()
+    await act(async () => { use.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'speech.model', value: 'cactus-whistle-v1' })
+  })
+})

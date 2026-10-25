@@ -933,6 +933,13 @@
       "params": null
     },
     {
+      "method": "task.image",
+      "class": "never",
+      "minTier": null,
+      "why": "Task images are the owner's files; they are never sent to a remote device.",
+      "params": null
+    },
+    {
       "method": "agent.purge",
       "class": "never",
       "minTier": null,

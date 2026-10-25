@@ -47,6 +47,8 @@ The dictation engine in `crates/bloblex-speech` and `apps/desktop/src-tauri/src/
 
 ### Model weights
 
+- [Cactus Whistle](https://huggingface.co/Cactus-Compute/whistle) and the Cactus Needle engine ([Cactus-Compute/needle3](https://huggingface.co/Cactus-Compute/needle3), source [cactus-compute/needle](https://github.com/cactus-compute/needle)) — Apache-2.0. An optional small dictation model (about 17 MB) and its prebuilt Windows engine `needle.exe`. Both are downloaded on demand from Hugging Face at pinned revisions, checked against pinned SHA-256 hashes, and run as a local subprocess; neither is distributed with Bitbots.
+
 Speech model weights are downloaded at runtime from Hugging Face at pinned revisions and are **not** distributed with Bitbots. Each model carries its own license; verify before commercial use. The default model, NVIDIA Parakeet TDT 0.6B, is distributed under CC-BY-4.0 and requires attribution.
 
 ## Blob looks (blobatar)

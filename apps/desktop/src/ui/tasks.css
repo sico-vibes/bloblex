@@ -89,6 +89,26 @@
 .task-runs li { display: flex; gap: 12px; }
 .task-actions { flex-wrap: wrap; }
 
+/* The task form: the dialog scrolls, its menus float above it (see Select). */
+.task-form { display: grid; gap: 12px; }
+.task-form h2 { margin: 0; }
+.task-field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.task-images { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-images .composer-attachments { margin: 0; }
+.task-add-image { display: inline-flex; align-items: center; gap: 6px; }
+.task-hint, .task-disclaimer { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
+.task-disclaimer { padding: 8px 10px; color: var(--text-2); border-radius: var(--radius-sm); background: var(--surface-hover, var(--line)); }
+.task-form .segmented { justify-self: start; }
+.task-discard { margin-right: auto; }
+.task-image-strip { margin: 0; }
+.task-image-missing { width: 58px; height: 58px; padding: 4px; display: grid; place-items: center; overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-align: center; border: 1px solid var(--line-strong); border-radius: 12px; }
+
+/* Scheduled tasks wait in their own list under the drafts; they cannot be dragged, the schedule starts them. */
+.delegate-scheduled { display: grid; gap: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.delegate-scheduled-card { width: 100%; padding: 8px; display: flex; align-items: flex-start; gap: 6px; color: inherit; text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app); font: inherit; cursor: pointer; }
+.delegate-scheduled-card:hover { border-color: var(--line-strong); }
+.delegate-scheduled-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (max-width: 560px) { .task-field-row { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 880px) { .delegate-board { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .delegate-draft, .delegate-lane, .delegate-finished-toggle svg { transition: none; } }
 

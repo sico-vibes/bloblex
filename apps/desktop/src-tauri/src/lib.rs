@@ -74,6 +74,8 @@ struct AppState {
     event_stream_started: Arc<Mutex<bool>>,
     companion_resize_in_progress: Arc<AtomicBool>,
     companion_resize_generation: Arc<AtomicU64>,
+    companion_drag: Mutex<Option<CompanionDrag>>,
+    companion_maximised: AtomicBool,
     close_to_tray: AtomicBool,
     selected_file_paths: Mutex<HashMap<String, SelectedFilePath>>,
 }
@@ -89,6 +91,8 @@ impl Default for AppState {
             event_stream_started: Arc::new(Mutex::new(false)),
             companion_resize_in_progress: Arc::new(AtomicBool::new(false)),
             companion_resize_generation: Arc::new(AtomicU64::new(0)),
+            companion_drag: Mutex::new(None),
+            companion_maximised: AtomicBool::new(false),
             close_to_tray: AtomicBool::new(true),
             selected_file_paths: Mutex::new(HashMap::new()),
         }
@@ -1542,23 +1546,242 @@ fn companion_visible(app: AppHandle) -> bool {
     app.get_webview_window("companion").and_then(|window| window.is_visible().ok()).unwrap_or(false)
 }
 
+/// Expanded companion sizes, in logical pixels. The window is frameless and transparent, so the page
+/// draws handles on its edges and corners and drives `companion_resize_*`; nothing depends on the
+/// operating system's resize borders. The compact bar keeps its fixed size.
+const COMPANION_MIN_SIZE: (f64, f64) = (520.0, 340.0);
+const COMPANION_DEFAULT_SIZE: (f64, f64) = (640.0, 420.0);
+const COMPANION_LARGE_SIZE: (f64, f64) = (960.0, 720.0);
+
+#[derive(Deserialize, Serialize)]
+struct CompanionSizeFile {
+    width: f64,
+    height: f64,
+}
+
+/// At least the minimum, at most the work area (the area wins on a screen smaller than the minimum).
+fn clamp_companion_size(width: f64, height: f64, max_width: f64, max_height: f64) -> (f64, f64) {
+    let width = if width.is_finite() { width } else { COMPANION_DEFAULT_SIZE.0 };
+    let height = if height.is_finite() { height } else { COMPANION_DEFAULT_SIZE.1 };
+    (
+        width.max(COMPANION_MIN_SIZE.0).min(max_width.max(1.0)),
+        height.max(COMPANION_MIN_SIZE.1).min(max_height.max(1.0)),
+    )
+}
+
+fn parse_companion_size(raw: &[u8]) -> Option<(f64, f64)> {
+    let file: CompanionSizeFile = serde_json::from_slice(raw).ok()?;
+    (file.width.is_finite() && file.height.is_finite() && file.width > 0.0 && file.height > 0.0).then_some((file.width, file.height))
+}
+
+fn saved_companion_size(app: &AppHandle) -> (f64, f64) {
+    app_data_file(app, "companion-size.json")
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|raw| parse_companion_size(&raw))
+        .unwrap_or(COMPANION_DEFAULT_SIZE)
+}
+
+fn save_companion_size(app: &AppHandle, size: Option<(f64, f64)>) {
+    let Some(path) = app_data_file(app, "companion-size.json") else { return };
+    let Some((width, height)) = size else {
+        let _ = fs::remove_file(path);
+        return;
+    };
+    let temp = path.with_extension("json.tmp");
+    if fs::write(&temp, serde_json::to_vec(&CompanionSizeFile { width, height }).unwrap_or_default()).is_ok() {
+        let _ = fs::rename(temp, path);
+    }
+}
+
+/// The work area (physical x, y, width, height) the window mostly sits on.
+fn companion_work_area_of(window: &WebviewWindow) -> Option<(i32, i32, i32, i32)> {
+    let areas = companion_work_areas(window);
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let center = (position.x + size.width as i32 / 2, position.y + size.height as i32 / 2);
+    areas
+        .iter()
+        .find(|(x, y, w, h)| center.0 >= *x && center.0 < *x + *w && center.1 >= *y && center.1 < *y + *h)
+        .or_else(|| areas.first())
+        .copied()
+}
+
+/// Which sides a drag moves: `n`, `s`, `e`, `w` or a corner such as `se`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResizeEdge {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+fn parse_resize_edge(edge: &str) -> Option<ResizeEdge> {
+    let flags = ResizeEdge { left: edge.contains('w'), right: edge.contains('e'), top: edge.contains('n'), bottom: edge.contains('s') };
+    let valid = matches!(edge, "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw");
+    valid.then_some(flags)
+}
+
+/// The rectangle (physical x, y, width, height) after dragging `edge` by `delta`. The opposite side
+/// stays where it was, also when the size hits the minimum or the work area's size.
+fn resized_rect(start: (i32, i32, i32, i32), delta: (i32, i32), edge: ResizeEdge, min: (i32, i32), max: (i32, i32)) -> (i32, i32, i32, i32) {
+    let (x, y, width, height) = start;
+    let fit = |value: i32, low: i32, high: i32| value.max(low).min(high.max(1));
+    let (mut new_x, mut new_width) = (x, width);
+    if edge.right {
+        new_width = fit(width + delta.0, min.0, max.0);
+    }
+    if edge.left {
+        new_width = fit(width - delta.0, min.0, max.0);
+        new_x = x + width - new_width;
+    }
+    let (mut new_y, mut new_height) = (y, height);
+    if edge.bottom {
+        new_height = fit(height + delta.1, min.1, max.1);
+    }
+    if edge.top {
+        new_height = fit(height - delta.1, min.1, max.1);
+        new_y = y + height - new_height;
+    }
+    (new_x, new_y, new_width, new_height)
+}
+
+/// A resize in progress: where the drag started, so every step is measured from the same point.
+struct CompanionDrag {
+    edge: ResizeEdge,
+    cursor: (f64, f64),
+    rect: (i32, i32, i32, i32),
+    min: (i32, i32),
+    area: (i32, i32, i32, i32),
+}
+
+#[tauri::command]
+fn companion_resize_begin(app: AppHandle, state: State<'_, AppState>, edge: String) -> Result<(), String> {
+    let edge = parse_resize_edge(&edge).ok_or_else(|| "Unknown resize edge.".to_string())?;
+    let window = app.get_webview_window("companion").ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let cursor = window.cursor_position().map_err(|error| error.to_string())?;
+    let area = companion_work_area_of(&window).ok_or_else(|| "No display was found.".to_string())?;
+    // A running grow or shrink animation must not fight the drag.
+    state.companion_resize_generation.fetch_add(1, Ordering::SeqCst);
+    state.companion_resize_in_progress.store(true, Ordering::SeqCst);
+    state.companion_maximised.store(false, Ordering::SeqCst);
+    *state.companion_drag.lock().map_err(|_| "The companion is busy.".to_string())? = Some(CompanionDrag {
+        edge,
+        cursor: (cursor.x, cursor.y),
+        rect: (position.x, position.y, size.width as i32, size.height as i32),
+        min: ((COMPANION_MIN_SIZE.0 * scale).round() as i32, (COMPANION_MIN_SIZE.1 * scale).round() as i32),
+        area,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn companion_resize_step(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let drag = state.companion_drag.lock().map_err(|_| "The companion is busy.".to_string())?;
+    let Some(drag) = drag.as_ref() else { return Ok(()) };
+    let window = app.get_webview_window("companion").ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let cursor = window.cursor_position().map_err(|error| error.to_string())?;
+    let delta = ((cursor.x - drag.cursor.0).round() as i32, (cursor.y - drag.cursor.1).round() as i32);
+    let (x, y, width, height) = resized_rect(drag.rect, delta, drag.edge, drag.min, (drag.area.2, drag.area.3));
+    let (x, y) = clamp_physical_position(x, y, width, height, drag.area.0, drag.area.1, drag.area.2, drag.area.3);
+    window.set_size(tauri::PhysicalSize::new(width as u32, height as u32)).map_err(|error| error.to_string())?;
+    window.set_position(PhysicalPosition::new(x, y)).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Ends a drag, remembers the size for the next start and returns it (logical pixels).
+#[tauri::command]
+fn companion_resize_end(app: AppHandle, state: State<'_, AppState>) -> Result<(f64, f64), String> {
+    let window = app.get_webview_window("companion").ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let logical = (size.width as f64 / scale, size.height as f64 / scale);
+    let was_dragging = state.companion_drag.lock().map_err(|_| "The companion is busy.".to_string())?.take().is_some();
+    if was_dragging {
+        save_companion_size(&app, Some(logical));
+        persist_companion_position(&app, &window);
+    }
+    let generation = state.companion_resize_generation.load(Ordering::SeqCst);
+    let generation_counter = Arc::clone(&state.companion_resize_generation);
+    let resize_flag = Arc::clone(&state.companion_resize_in_progress);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(150));
+        if generation_counter.load(Ordering::SeqCst) == generation {
+            resize_flag.store(false, Ordering::SeqCst);
+        }
+    });
+    Ok(logical)
+}
+
+/// `large` grows the expanded companion to a big size for working beside another app, `normal`
+/// returns to the remembered size and `default` forgets it. Returns whether it is now large.
+#[tauri::command]
+fn set_companion_size_preset(app: AppHandle, state: State<'_, AppState>, preset: String) -> Result<bool, String> {
+    let window = app.get_webview_window("companion").ok_or_else(|| "The companion window is unavailable.".to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let area = companion_work_area_of(&window).ok_or_else(|| "No display was found.".to_string())?;
+    let (max_width, max_height) = (area.2 as f64 / scale, area.3 as f64 / scale);
+    let (target, large) = match preset.as_str() {
+        "large" => (COMPANION_LARGE_SIZE, true),
+        "normal" => (saved_companion_size(&app), false),
+        "default" => { save_companion_size(&app, None); (COMPANION_DEFAULT_SIZE, false) }
+        _ => return Err("Unknown companion size.".to_string()),
+    };
+    let (width, height) = clamp_companion_size(target.0, target.1, max_width, max_height);
+    let start_position = window.outer_position().map_err(|error| error.to_string())?;
+    let initial = window.inner_size().map_err(|error| error.to_string())?;
+    let initial_center = (start_position.x + initial.width as i32 / 2, start_position.y + initial.height as i32 / 2);
+    state.companion_resize_generation.fetch_add(1, Ordering::SeqCst);
+    state.companion_resize_in_progress.store(true, Ordering::SeqCst);
+    window.set_size(LogicalSize::new(width, height)).map_err(|error| error.to_string())?;
+    let (new_width, new_height) = ((width * scale).round() as i32, (height * scale).round() as i32);
+    let target_position = PhysicalPosition::new(
+        start_position.x - (new_width - initial.width as i32) / 2,
+        start_position.y - (new_height - initial.height as i32),
+    );
+    let target_position = clamp_companion_position(target_position, new_width, new_height, &companion_work_areas(&window), initial_center);
+    window.set_position(target_position).map_err(|error| error.to_string())?;
+    state.companion_maximised.store(large, Ordering::SeqCst);
+    persist_companion_position(&app, &window);
+    let generation = state.companion_resize_generation.load(Ordering::SeqCst);
+    let generation_counter = Arc::clone(&state.companion_resize_generation);
+    let resize_flag = Arc::clone(&state.companion_resize_in_progress);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(150));
+        if generation_counter.load(Ordering::SeqCst) == generation {
+            resize_flag.store(false, Ordering::SeqCst);
+        }
+    });
+    Ok(large)
+}
+
 #[tauri::command]
 fn set_companion_mode(
     app: AppHandle,
     state: State<'_, AppState>,
     mode: String,
     animate: bool,
-    chat_height: Option<f64>,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("companion")
         .ok_or_else(|| "The companion window is unavailable.".to_string())?;
-    // The chat island's height is a user preference (Compact, Comfortable, Tall).
-    let chat_height = chat_height.filter(|height| height.is_finite()).map(|height| height.clamp(240.0, 560.0)).unwrap_or(264.0);
+    // The expanded companion keeps the size the owner dragged it to (clamped to this display).
+    let expanded = match companion_work_area_of(&window) {
+        Some((_, _, area_width, area_height)) => {
+            let scale = window.scale_factor().map_err(|error| error.to_string())?;
+            let saved = saved_companion_size(&app);
+            clamp_companion_size(saved.0, saved.1, area_width as f64 / scale, area_height as f64 / scale)
+        }
+        None => saved_companion_size(&app),
+    };
     let (desired_width, desired_height) = match mode.as_str() {
-        "home" => (640.0, 160.0),
-        "home-chat" => (640.0, chat_height),
-        "petit" | "hidden" => (344.0, 62.0),
+        "home" | "home-chat" => expanded,
+        "petit" | "hidden" => {
+            state.companion_maximised.store(false, Ordering::SeqCst);
+            (344.0, 62.0)
+        }
         _ => return Err("Unknown companion presentation state.".to_string()),
     };
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
@@ -1780,6 +2003,69 @@ mod companion_launch_tests {
         assert_eq!((saved_x, saved_y), (900, 500));
         let welcome = companion_last_launch_spot(saved_x, saved_y, 344, 62, 640, 160, 0, 0, 1920, 1040);
         assert_eq!(welcome, (752, 402));
+    }
+}
+
+#[cfg(test)]
+mod companion_resize_tests {
+    use super::{clamp_companion_size, parse_companion_size, parse_resize_edge, resized_rect, ResizeEdge, COMPANION_MIN_SIZE};
+
+    fn edge(name: &str) -> ResizeEdge {
+        parse_resize_edge(name).expect("a valid edge")
+    }
+
+    #[test]
+    fn the_size_is_at_least_the_minimum_and_at_most_the_work_area() {
+        assert_eq!(clamp_companion_size(100.0, 100.0, 1900.0, 1000.0), COMPANION_MIN_SIZE);
+        assert_eq!(clamp_companion_size(5000.0, 5000.0, 1900.0, 1000.0), (1900.0, 1000.0));
+        assert_eq!(clamp_companion_size(700.0, 500.0, 1900.0, 1000.0), (700.0, 500.0));
+        // A screen smaller than the minimum wins over the minimum.
+        assert_eq!(clamp_companion_size(640.0, 420.0, 480.0, 300.0), (480.0, 300.0));
+        assert_eq!(clamp_companion_size(f64::NAN, f64::INFINITY, 1900.0, 1000.0), (640.0, 420.0));
+    }
+
+    #[test]
+    fn a_saved_size_must_be_two_positive_numbers() {
+        assert_eq!(parse_companion_size(br#"{"width":700.5,"height":480}"#), Some((700.5, 480.0)));
+        for bad in [&br#"{"width":-1,"height":400}"#[..], br#"{"width":0,"height":400}"#, br#"{"width":"a","height":4}"#, b"not json", b"{}"] {
+            assert_eq!(parse_companion_size(bad), None);
+        }
+    }
+
+    #[test]
+    fn edges_parse_and_anything_else_is_refused() {
+        assert_eq!(edge("e"), ResizeEdge { left: false, right: true, top: false, bottom: false });
+        assert_eq!(edge("nw"), ResizeEdge { left: true, right: false, top: true, bottom: false });
+        for bad in ["", "x", "ee", "ns", "up"] {
+            assert!(parse_resize_edge(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn dragging_the_right_or_bottom_edge_keeps_the_top_left_corner() {
+        let start = (100, 200, 800, 600);
+        assert_eq!(resized_rect(start, (50, 30), edge("se"), (500, 300), (1900, 1000)), (100, 200, 850, 630));
+        assert_eq!(resized_rect(start, (-100, 0), edge("e"), (500, 300), (1900, 1000)), (100, 200, 700, 600));
+    }
+
+    #[test]
+    fn dragging_the_left_or_top_edge_keeps_the_far_side_still() {
+        let start = (100, 200, 800, 600);
+        // Left edge moves 40 left: wider by 40, the right edge (x + width = 900) stays.
+        assert_eq!(resized_rect(start, (-40, 0), edge("w"), (500, 300), (1900, 1000)), (60, 200, 840, 600));
+        assert_eq!(resized_rect(start, (0, -50), edge("n"), (500, 300), (1900, 1000)), (100, 150, 800, 650));
+        let corner = resized_rect(start, (60, 80), edge("nw"), (500, 300), (1900, 1000));
+        assert_eq!((corner.0 + corner.2, corner.1 + corner.3), (900, 800));
+    }
+
+    #[test]
+    fn the_minimum_and_the_work_area_stop_a_drag_without_moving_the_far_side() {
+        let start = (100, 200, 800, 600);
+        let (x, y, width, height) = resized_rect(start, (900, 900), edge("nw"), (500, 300), (1900, 1000));
+        assert_eq!((width, height), (500, 300));
+        assert_eq!((x + width, y + height), (900, 800), "the bottom right corner stays put");
+        let (_, _, width, height) = resized_rect(start, (5000, 5000), edge("se"), (500, 300), (1900, 1000));
+        assert_eq!((width, height), (1900, 1000));
     }
 }
 
@@ -2799,6 +3085,10 @@ pub fn run() {
             toggle_companion,
             companion_visible,
             set_companion_mode,
+            companion_resize_begin,
+            companion_resize_step,
+            companion_resize_end,
+            set_companion_size_preset,
             set_companion_visible,
             set_companion_hotkey,
             companion_hotkey_registered,

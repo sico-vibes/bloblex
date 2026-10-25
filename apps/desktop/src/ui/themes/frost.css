@@ -221,6 +221,8 @@
 :root[data-style="bitbots"].companion-surface .dictation-island-text,
 :root[data-style="bitbots"].dictation-surface .dictation-island-time,
 :root[data-style="bitbots"].dictation-surface .dictation-island-text { color: var(--text-1); }
+:root[data-style="bitbots"].companion-surface .dictation-island-text.note,
+:root[data-style="bitbots"].dictation-surface .dictation-island-text.note,
 :root[data-style="bitbots"].companion-surface .dictation-island-note,
 :root[data-style="bitbots"].dictation-surface .dictation-island-note { color: var(--text-2); }
 :root[data-style="bitbots"].companion-surface .dictation-island-wave i,

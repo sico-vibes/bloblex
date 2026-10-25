@@ -37,6 +37,19 @@ const runs: Record<string, BoardTaskRun[]> = {
   'task-lint': [run('task-lint', 1, 'agent-claude', 'Claude', 'done', 200, 180)],
 }
 const bump = (task: BoardTask, patch: Partial<BoardTask>) => Object.assign(task, patch, { version: task.version + 1, updatedAt: new Date().toISOString() })
+const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+/** The preview keeps no files: a staged path becomes an image record whose thumbnail is a one-pixel picture. */
+function imagesFrom(params: Record<string, unknown>, existing: BoardTask | null): BoardTask['images'] {
+  if (!Array.isArray(params.attachments)) return existing?.images ?? []
+  return (params.attachments as Array<{ id?: string; name?: string }>).map((item, index) => item.id ? (existing?.images ?? []).find((image) => image.id === item.id) : { id: `image-${Date.now().toString(36)}-${index}`, name: item.name ?? 'image.png', mediaType: 'image/png', bytes: 1 }).filter((image): image is NonNullable<typeof image> => !!image)
+}
+/** A schedule's next occurrence: a one-time instant, or tomorrow at the cron's time (the preview is not a scheduler). */
+function scheduleFields(params: Record<string, unknown>): Partial<BoardTask> {
+  const schedule = params.schedule as BoardTask['schedule'] | undefined
+  if (!schedule) return { schedule: null, scheduleAgentId: null, scheduleState: null, scheduleNextAt: null, scheduleLastOutcome: null }
+  const next = schedule.kind === 'once' ? schedule.at : new Date(Date.now() + 86_400_000).toISOString()
+  return { schedule, scheduleAgentId: (params.scheduleAgentId as string | null) ?? null, scheduleState: 'active', scheduleNextAt: next, scheduleLastOutcome: null }
+}
 const keys = new Map<string, Record<string, unknown>>()
 
 export function handleFixtureTaskRpc(method: string, params: Record<string, unknown>, notify: Notify, fail: Fail): unknown {
@@ -47,17 +60,19 @@ export function handleFixtureTaskRpc(method: string, params: Record<string, unkn
   switch (method) {
     case 'task.list': return { tasks: tasks.filter((task) => (!params.state || task.state === params.state) && (!params.assigneeAgentId || task.assigneeAgentId === params.assigneeAgentId)).map((task) => ({ ...task })) }
     case 'task.get': return { task: { ...need() } }
+    case 'task.image': { const image = (need().images ?? []).find((item) => item.id === params.imageId); if (!image) throw fail('not_found', 'That image is not part of this task.'); return { id: image.id, name: image.name, mediaType: image.mediaType, dataUrl: PIXEL } }
     case 'task.runs': return { runs: (runs[String(params.taskId)] ?? []).map((run) => ({ ...run })) }
     case 'task.create': {
       const title = String(params.title ?? '').trim()
       if (!title) throw fail('invalid_argument', 'A task needs a title.')
-      const task: BoardTask = { ...draft(`task-${Date.now().toString(36)}`, title, String(params.brief ?? ''), 0, 0), doneGoal: String(params.doneGoal ?? ''), reportBack: String(params.reportBack ?? ''), projectId: (params.projectId as string | null) ?? null, estimateMinutes: null }
+      const task: BoardTask = { ...draft(`task-${Date.now().toString(36)}`, title, String(params.brief ?? ''), 0, 0), doneGoal: String(params.doneGoal ?? ''), reportBack: String(params.reportBack ?? ''), projectId: (params.projectId as string | null) ?? null, estimateMinutes: (params.estimateMinutes as number | null) ?? null, maxRuntimeSecs: (params.maxRuntimeSecs as number | undefined) ?? 1800, images: imagesFrom(params, null), ...scheduleFields(params) }
       tasks.unshift(task)
       publish(task)
       return { task: { ...task } }
     }
     case 'task.dispatch': {
       const task = fresh(need())
+      if (task.scheduleState === 'active') throw fail('conflict', 'This task is scheduled. Set When to Now to start it yourself.')
       const agentId = String(params.assigneeAgentId ?? '')
       const key = String(params.idempotencyKey ?? '')
       const replay = keys.get(key)
@@ -105,8 +120,9 @@ export function handleFixtureTaskRpc(method: string, params: Record<string, unkn
     case 'task.reorder': return { task: { ...fresh(need()) } }
     case 'task.update': {
       const task = fresh(need())
-      for (const field of ['title', 'brief', 'doneGoal', 'reportBack', 'projectId'] as const) if (field in params) (task as Record<string, unknown>)[field] = params[field]
-      bump(task, {})
+      if (task.state !== 'unassigned') throw fail('conflict', 'Only a draft can be edited.')
+      for (const field of ['title', 'brief', 'doneGoal', 'reportBack', 'projectId', 'estimateMinutes', 'maxRuntimeSecs'] as const) if (field in params) (task as Record<string, unknown>)[field] = params[field]
+      bump(task, { images: imagesFrom(params, task), ...('schedule' in params ? scheduleFields(params) : {}) })
       publish(task)
       return { task: { ...task } }
     }

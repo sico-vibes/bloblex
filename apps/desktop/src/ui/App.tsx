@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, ListChecks, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Home, Info, LoaderCircle, MessageCircle, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, ListChecks, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
-import { COMPANION_CHAT_SIZE_LABELS, COMPANION_CHAT_SIZES, isCompanionChatSize, MAX_COMPANION_PEERS, type CompanionChatSize } from '../blob/companionLayout'
+import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
 import { setAccentColor, setBitbotsEnabled, setThemeStyle, themeStyle, useThemeStyle } from '../blob/bitbots'
 import { PixelClouds } from './PixelClouds'
@@ -16,6 +16,7 @@ import { AnalyticsView } from './AnalyticsView'
 import { SchedulesView, type AutomationInput } from './SchedulesView'
 import { TasksView } from './TasksView'
 import type { DaemonSchedule } from './automationSchedule'
+import { previewSchedule } from './schedulePreview'
 import { usageTokenBuckets } from './usagePresentation'
 import { Tip } from './Tip'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
@@ -27,12 +28,12 @@ import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
-import { botProjectName, CompanionConversationPicker } from './CompanionConversationPicker'
+import { CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
 import { ProposalCard } from './ProposalCard'
 import { ManagerSetupCard } from './ManagerSetupCard'
-import { draftSessionFor, isDraftSession, managerOf } from './teamSelectors'
-import { CompanionChatItem, CompanionPeers, CompanionTeamActivity, CompanionTeammatesSetting, FocusTicker, blobState, sessionSteps, teamLine } from './CompanionTeam'
+import { DRAFT_SESSION_PREFIX, draftSessionFor, isDraftSession, managerOf } from './teamSelectors'
+import { CompanionChatItem, CompanionTeamActivity, CompanionTeammatesSetting, blobState } from './CompanionTeam'
 import { shortTime } from './rosterSelectors'
 import { NeedsYouBadge, PermissionQueueBar, nextWaitingAgent, waitingAgentsOf } from './CompanionAttention'
 import { CompanionActivitySummary, CompanionRemoteRow, useWorkingSince, CompanionSettingCopy } from './CompanionPanels'
@@ -79,6 +80,7 @@ import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations
 import { currentWindow, currentWebviewWindow, invokeNative, isNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
 import { stampCompanionDragRegions } from './companionDrag'
+import { CompanionResizeHandles } from './CompanionResize'
 import { DEFAULT_EXPERIMENTS, EXPERIMENTS, filesUnderReply, waitingBlobCount, type ExperimentName } from './experiments'
 import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSearchResult } from './ExperimentalFeatures'
 import { openSafeLink } from './openSafeLink'
@@ -124,7 +126,7 @@ import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
 import { setRuntimeProviders } from '../blob/haze/runtimeRegistry'
 import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
-import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
+import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionSizePreset, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
 type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
@@ -158,7 +160,6 @@ export function App() {
   const [steerRevision, setSteerRevision] = useState(0)
   const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null)
   /** Companion preferences: chat height and the teammates kept on the island. */
-  const [companionChatSize, setCompanionChatSize] = useState<CompanionChatSize>('medium')
   const [companionPinned, setCompanionPinned] = useState<string[]>([])
   /** Speech: dictation can be switched off entirely, and uses the chosen downloaded model. */
   const [speechEnabled, setSpeechEnabled] = useState(true)
@@ -209,7 +210,6 @@ export function App() {
       setUsageTipDismissals(parsed)
     }
     else if (key === 'experimental.activityDetails') setActivityDetails(value === true)
-    else if (key === 'companion.chatSize') setCompanionChatSize(isCompanionChatSize(value) ? value : 'medium')
     else if (key === 'companion.pinnedBlobs') setCompanionPinned(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string').slice(0, MAX_COMPANION_PEERS) : [])
     else if (key === 'speech.enabled') setSpeechEnabled(value !== false)
     else if (key === 'speech.model') setSpeechModel(typeof value === 'string' && value ? value : DEFAULT_SPEECH_MODEL_ID)
@@ -516,7 +516,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.wallpaper', 'appearance.glass', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.chatSize', 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
+      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.wallpaper', 'appearance.glass', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -578,7 +578,7 @@ export function App() {
   const hasActiveBlobs = activeAgents(agents).length > 0
   // A bot with no conversation opens into a local draft: nothing is stored until
   // the first message, so no daemon session and no row exist before then.
-  const draftEligible = !companion && !!activeSelectedAgent && connection === 'connected' && runtimeUsable(selectedRuntime)
+  const draftEligible = !!activeSelectedAgent && connection === 'connected' && runtimeUsable(selectedRuntime)
   const selectedSession = sideSession ?? (activeSelectedAgent
     ? sessions.find((session) => session.id === selectedSessionId && session.agentId === activeSelectedAgent.id && !isSideSession(session) && !session.archived) ?? mainSessionFor(sessions, activeSelectedAgent.id) ?? (draftEligible ? draftSessionFor(activeSelectedAgent) : null)
     : !hasActiveBlobs && !companion ? null
@@ -748,6 +748,8 @@ export function App() {
   const companionSessionRecord = sessions.find((session) => session.id === companionPermission?.sessionId)
     ?? selectedSession
   const companionSession = companionSessionRecord
+  // A bot with no conversation opens into a local draft here too (FIX38 H2); the draft's id is never sent to the daemon or the main window.
+  const companionRealSessionId = companionSession && !isDraftSession(companionSession) ? companionSession.id : undefined
   const companionAgent = agents.find((agent) => agent.id === companionSession?.agentId && !agent.archived) ?? activeSelectedAgent
   const companionRuntime = runtimes.find((runtime) => runtime.id === companionAgent?.runtimeId) ?? runtimes.find((runtime) => runtime.id === companionSession?.runtimeId) ?? selectedRuntime
   const companionSteerAvailable = useSteerAvailable(companion ? steerRuntimeId(companionSession?.state, companionSession?.runtimeId) : undefined, companion && connection === 'connected', `${companionSession?.state}:${steerRevision}`)
@@ -1978,6 +1980,7 @@ export function App() {
 
   /** Queued prompts for the open conversation; the daemon pushes `queue.changed`, this loads the first view and heals gaps. */
   const loadQueue = useCallback(async (sessionId: string) => {
+    if (sessionId.startsWith(DRAFT_SESSION_PREFIX)) return
     try {
       const result = await rpc<unknown>('session.queue.list', { sessionId })
       const state = normalizeQueueState(result)
@@ -2024,16 +2027,7 @@ export function App() {
     const result = await rpc<{ runs?: AutomationRun[] }>('automation.runs', { id, limit: 20 })
     return Array.isArray(result.runs) ? result.runs : []
   }
-  const previewAutomation = async (schedule: DaemonSchedule): Promise<string[]> => {
-    const result = await rpc<{ occurrences?: Array<string | { local?: string; at?: string }> }>('automation.preview', { schedule, count: 3 })
-    const zone = schedule.kind === 'cron' ? schedule.timezone : undefined
-    const show = (iso: string) => {
-      const at = new Date(iso)
-      if (Number.isNaN(at.getTime())) return iso
-      try { return at.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : {}) }) } catch { return at.toLocaleString() }
-    }
-    return (result.occurrences ?? []).map((entry) => typeof entry === 'string' ? entry : entry.at ?? entry.local ?? '').filter(Boolean).map(show)
-  }
+  const previewAutomation = (schedule: DaemonSchedule): Promise<string[]> => previewSchedule(schedule)
   const setAutomationsPaused = async (paused: boolean) => {
     await rpc('settings.set', { key: 'automations.paused', value: paused })
     setSchedulesPaused(paused)
@@ -2314,7 +2308,15 @@ export function App() {
 
   if (companion) {
     return <>
-      <Companion deliveryNotice={deliveryNotice} busyMode={busyMode} steerAvailable={companionSteerAvailable} onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} chatSize={companionChatSize} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onChatSizeChange={(size) => { setCompanionChatSize(size); void rpc('settings.set', { key: 'companion.chatSize', value: size }).catch(() => undefined) }} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionSession?.id)} onOpenSettings={(page) => void showMainSettings(companionSession?.id, page)} onSendPrompt={(sessionId, text, command, opposite = false, hasContext = false) => {
+      <Companion deliveryNotice={deliveryNotice} busyMode={busyMode} steerAvailable={companionSteerAvailable} onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionRealSessionId)} onOpenSettings={(page) => void showMainSettings(companionRealSessionId, page)} onSendPrompt={async (draftOrSessionId, text, command, opposite = false, hasContext = false) => {
+        // The first message of a draft is what creates the conversation; the daemon titles it from that message.
+        let sessionId = draftOrSessionId
+        if (isDraftSession({ id: draftOrSessionId } as Session)) {
+          const draftAgent = agents.find((item) => draftOrSessionId === `${DRAFT_SESSION_PREFIX}${item.id}`)
+          const created = draftAgent ? await createConversation(draftAgent, { quiet: true }) : null
+          if (!created) throw new Error('Could not start the conversation. Try again.')
+          sessionId = created.id
+        }
         const state = sessions.find((item) => item.id === sessionId)?.state
         const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(state ?? '')
         const delivery = busyDelivery(busyMode, opposite, state, companionSteerAvailable, hasContext || !!command)
@@ -3071,7 +3073,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 const COMPACT_HOLD_TO_DRAG_MS = 220
 const COMPACT_DRAG_SLOP_PX = 4
 
-function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, chatSize = 'medium', pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onChatSizeChange, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; chatSize?: CompanionChatSize; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onChatSizeChange?: (size: CompanionChatSize) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
+function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -3083,9 +3085,9 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const contextQuota = runtime ? quotas.find((item) => item.provider === runtime.provider) ?? null : null
   // The browser preview can open a view directly: /?companion&mode=home&view=chat.
   const previewParams = previewMode ? new URLSearchParams(location.search) : null
-  const [view, setView] = useState<'overview' | 'chat' | 'activity' | 'settings'>(() => {
+  const [view, setView] = useState<'chat' | 'activity' | 'settings'>(() => {
     const requested = previewParams?.get('view')
-    return requested === 'chat' || requested === 'activity' || requested === 'settings' ? requested : 'overview'
+    return requested === 'activity' || requested === 'settings' ? requested : 'chat'
   })
   const [draft, setDraft] = useState('')
   const draftRef = useRef<HTMLTextAreaElement>(null)
@@ -3125,8 +3127,9 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const [dictationClock, setDictationClock] = useState<{ since: number | null; stoppedAt: number | null }>({ since: null, stoppedAt: null })
   const dictationHeard = useRef(false)
   const fileRequest = useRef(0)
-  const viewBeforeConfused = useRef<typeof view>('overview')
-  const viewBeforeDrop = useRef<typeof view>('overview')
+  const [large, setLarge] = useState(false)
+  const viewBeforeConfused = useRef<typeof view>('chat')
+  const viewBeforeDrop = useRef<typeof view>('chat')
   const dropLeaveTimer = useRef<number | null>(null)
   const dragPathRef = useRef<string | null>(null)
   const previousPeekStates = useRef<PeekSessionState[]>([])
@@ -3157,9 +3160,8 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   /** One-time drag hint, shown the first time the companion is expanded. */
   const [dragHintSeen, markDragHintSeen] = useHintSeen('companion.drag')
   if (!fsmRef.current) fsmRef.current = new CompanionFsm()
-  // Chat, activity, settings and inline questions use the taller island; approvals keep the overview size.
-  const tall = mode === 'home' && (hazeLook || permission ? true : (view === 'chat' || view === 'activity' || view === 'settings'))
-  const presentation = mode === 'home' && tall ? 'home-chat' : mode
+  // Expanded, the companion is always the split layout (bots left, conversation right), so it always asks for the one window size.
+  const presentation = mode === 'home' ? 'home-chat' : mode
   useEffect(() => {
     const fsm = fsmRef.current!
     fsm.onTransition = (_from, to) => setMode(to)
@@ -3180,7 +3182,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     }).then((stop) => { if (cancelled) stop(); else unlisten = stop })
     return () => { cancelled = true; unlisten?.(); window.clearTimeout(timer) }
   }, [])
-  useEffect(() => { void setCompanionMode(presentation, undefined, COMPANION_CHAT_SIZES[chatSize]) }, [presentation, chatSize])
+  useEffect(() => { void setCompanionMode(presentation) }, [presentation])
   // Sounds for the island's own moments: it peeks in, opens, closes, and pops on a new reply.
   const previousMode = useRef(mode)
   useEffect(() => {
@@ -3238,22 +3240,22 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
-      if (view !== 'overview') { setView('overview'); return }
+      if (view !== 'chat') { setView('chat'); return }
       if (mode === 'home') fsmRef.current?.forcePetit()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [mode, view])
-  // C5: peer-grid keyboard access, live only while this companion window has
+  // C5: bot-list keyboard access (Ctrl+1 to 9, N for the next waiting bot), live only while this companion window has
   // focus (its own document), and never while the person is typing.
   const waitingCursor = useRef(-1)
   useEffect(() => {
-    const peers = () => [...document.querySelectorAll<HTMLButtonElement>('.peer-grid .peer')]
+    const peers = () => [...document.querySelectorAll<HTMLButtonElement>('.cs-bots .cs-bot')]
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
-      if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && /^[1-4]$/.test(event.key)) {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && /^[1-9]$/.test(event.key)) {
         const peer = peers()[Number(event.key) - 1]
         if (!peer) return
         event.preventDefault()
@@ -3363,7 +3365,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     // keep their place and offer the "New messages" pill.
     if (stickToBottom.current) { log.scrollTop = log.scrollHeight }
     else if (view === 'chat') setShowNewMessages(true)
-  }, [view, session?.id, session?.messages?.length, session?.state])
+  }, [view, mode, session?.id, session?.messages?.length, session?.state])
   // C10: revealing earlier messages keeps the first visible one in place.
   useLayoutEffect(() => {
     const log = chatLogRef.current
@@ -3378,6 +3380,8 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     if (root) stampCompanionDragRegions(root)
   })
   const toggleExpanded = () => { if (mode === 'home') fsmRef.current?.forcePetit(); else fsmRef.current?.click() }
+  const toggleLarge = () => { playCompanionCue('tick'); void setCompanionSizePreset(large ? 'normal' : 'large').then(setLarge).catch(() => undefined) }
+  const resetSize = () => { void setCompanionSizePreset('default').then(setLarge).catch(() => undefined) }
   const openView = (next: typeof view) => { if (next !== view) playCompanionCue('blip'); setView(next); setSideId(null); if (mode !== 'home') fsmRef.current?.forceHome() }
   // The name area is a button (keyboard access, FIX20) that still drags the island:
   // press and move, or press and hold, starts a window drag; a plain click opens home.
@@ -3434,8 +3438,6 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   }, [speechEnabled])
   const selectTeamBlob = (item: Agent) => { if (item.id !== agent?.id) playCompanionCue('blip'); onSelectAgent(item) }
   const replyToPermission = (request: PermissionRequest, choice: string) => { if (/allow|approve|accept|yes/i.test(choice)) playCompanionCue('approve'); return onReply(request, choice) }
-  const focusTeam = teamLine(agent, agents, sessions)
-  const focusSteps = sessionSteps(session)
   const beginConfused = () => { viewBeforeConfused.current = view; setConfused(true); if (mode !== 'home') fsmRef.current?.forceHome() }
   const recoverFromConfused = () => { setConfused(false); setView(viewBeforeConfused.current) }
   const prepareLocalReference = async (path: string) => {
@@ -3678,7 +3680,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const name = agent?.name ?? (runtime ? labelize(runtime.provider) : 'Bitbots')
   const peers = activeAgents(agents).filter((item) => item.id !== agent?.id).slice(0, 4)
   const waitingAgents = waitingAgentsOf(activeAgents(agents), sessions, runtimes, connected)
-  const openNextWaiting = () => { const next = nextWaitingAgent(waitingAgents, agent?.id); if (next) { playCompanionCue('blip'); onSelectAgent(next); setView('overview') } }
+  const openNextWaiting = () => { const next = nextWaitingAgent(waitingAgents, agent?.id); if (next) { playCompanionCue('blip'); onSelectAgent(next); setView('chat') } }
   const peerSummary = `${peers.length} teammate${peers.length === 1 ? '' : 's'}${waitingAgents.length ? ', ' + waitingAgents.length + ' waiting' : ''}`
   const canStart = !!agent && connected && runtimeUsable(runtime)
   // C6: one shared, dismissible error line. It clears itself after 8 seconds
@@ -3702,7 +3704,6 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const companionDelivery = busyDelivery(busyMode, false, session?.state, steerAvailable, !!(droppedFile || slashCommand || leadingCommand(draft, { skills: slashSkills, isManager: agent?.systemRole === 'manager' })))
   const queuesPrompt = sessionBusy && (!!draft.trim() || !!droppedFile)
   const stopsTurn = sessionBusy && !queuesPrompt
-  const wash = displayMood === 'success' ? 'green' : displayMood === 'error' || displayMood === 'rate_limited' ? 'red' : null
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} look={agent ? agentLook(agent) : null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
   const dictating = dictationSurface === 'companion' && dictationPhase !== 'idle'
   const dictationText = `${dictationFinals}${dictationFinals && dictationPartial ? ' ' : ''}${dictationPartial}`
@@ -3759,7 +3760,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
                 <div className="companion-composer-bar">
                 <div className="companion-composer-start">
                   <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>
-                  {agent && session && onSessionUpdated && onError && <SessionExecutionControls session={session} agent={agent} onSessionUpdated={onSessionUpdated} onError={onError} />}
+                  {agent && session && !isDraftSession(session) && onSessionUpdated && onError && <SessionExecutionControls session={session} agent={agent} onSessionUpdated={onSessionUpdated} onError={onError} />}
                 </div>
                 <div className="companion-composer-end">
                 {session && <ContextWindowIndicator used={session.contextUsed} size={session.contextSize} contextModel={session.contextModel} contextEstimated={session.contextEstimated} model={contextModel} isNewConversation={(session.messages ?? []).length === 0} quota={contextQuota} />}
@@ -3775,6 +3776,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
             {onSelectConversation && <CompanionConversationPicker agent={agent} sessions={sessions} projects={projects} current={session} onPick={onSelectConversation} />}
             <CompanionActivitySummary agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} workingSince={workingSince} now={clock} onOpen={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
+            <p className="cs-glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}>All {nouns}: Tokens <b>{tokenGlance}</b></p>
             {activityDetails && (recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>)}
   </>
   const settingsPane = <>
@@ -3795,18 +3797,15 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
                     <button type="button" className={`switch ${focusMode ? 'on' : ''}`} role="switch" aria-checked={focusMode} aria-label="Focus mode" onClick={toggleFocusMode} />
                   </div>
                 </section>
-                <section className="cset-section" aria-labelledby="cset-chat">
-                  <h3 id="cset-chat">Chat</h3>
-                  <div className="cset-row cset-row-stack">
-                    <CompanionSettingCopy label="Height" hint="How tall the chat view is." />
-                    <div className="segmented" role="radiogroup" aria-label="Chat height">{(Object.keys(COMPANION_CHAT_SIZES) as CompanionChatSize[]).map((size) => <button key={size} type="button" role="radio" aria-checked={chatSize === size} className={chatSize === size ? 'on' : undefined} onClick={() => { playCompanionCue('tick'); onChatSizeChange?.(size) }}>{COMPANION_CHAT_SIZE_LABELS[size]}</button>)}</div>
-                  </div>
-                </section>
                 <section className="cset-section" aria-labelledby="cset-place">
                   <h3 id="cset-place">Placement</h3>
                   <div className="cset-row">
                     <CompanionSettingCopy label="Reset position" hint={startPosition === 'last' ? 'Forgets where this display last left the island.' : 'Returns to the bottom centre of this display.'} />
                     <button type="button" className="btn small secondary" aria-label="Reset companion position" onClick={resetPosition}>Reset</button>
+                  </div>
+                  <div className="cset-row">
+                    <CompanionSettingCopy label="Size" hint="Drag an edge or corner of the companion to resize it. The size is remembered." />
+                    <button type="button" className="btn small secondary" aria-label="Reset companion size" onClick={resetSize}>Reset</button>
                   </div>
                 </section>
               </div>
@@ -3824,48 +3823,74 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
             {soundError && <p className="companion-drop-error cset-error" role="alert">{soundError}</p>}
             <div className="cset-footer"><button type="button" className="btn primary" onClick={() => onOpenSettings()}>Open Bitbots settings</button><button type="button" className="btn secondary" onClick={() => void setCompanionVisibility(false)}>Hide companion</button></div>
   </>
-  const hazeView = view === 'overview' ? 'chat' : view
-  const hazeRoster = activeAgents(agents).filter((item) => !item.hidden)
+  // Every bot is listed; the bots chosen under "Teammates on the island" come first, after the Manager.
+  const pinRank = (id: string) => { const at = pinned.indexOf(id); return at < 0 ? pinned.length : at }
+  const roster = activeAgents(agents).filter((item) => !item.hidden)
     .map((item) => ({ item, state: blobState(item, sessions, runtimes, connected), session: mainSessionFor(sessions, item.id) }))
-    .sort((a, b) => (a.item.systemRole === 'manager' ? -1 : 0) - (b.item.systemRole === 'manager' ? -1 : 0) || (a.item.sortOrder ?? 0) - (b.item.sortOrder ?? 0))
-  const hazeShell = <div className="haze-companion">
-    <aside className="hc-roster" aria-label={`All ${nouns}`}>
-      <div className="hc-brand" data-tauri-drag-region><span data-tauri-drag-region>Bitbots</span><NeedsYouBadge count={waitingAgents.length} compact onOpen={openNextWaiting} /></div>
-      <div className="hc-bots" data-companion-no-drag="">{hazeRoster.map(({ item, state, session: rowSession }) => {
+    .sort((a, b) => (a.item.systemRole === 'manager' ? -1 : 0) - (b.item.systemRole === 'manager' ? -1 : 0) || pinRank(a.item.id) - pinRank(b.item.id) || (a.item.sortOrder ?? 0) - (b.item.sortOrder ?? 0))
+  const confusedPane = <div className="island-card wash pink">
+      <span className="card-bot">{focusBlob(62)}</span>
+      <div className="card-stack"><div className="title">Too many hits at once.</div><div className="sub">Give me a sec — back to work in three seconds.</div></div>
+    </div>
+  const dropPane = <div className="island-card drop-card over">
+      <span className="card-bot">{focusBlob(58)}</span>
+      <div className="card-stack"><div className="title">Drop to hand this file to {name}</div><div className="drop-tags">{dragChips ? <><span>{dragChips.name}</span><span>{dragChips.type}</span><span>{dragChips.size}</span></> : <><span>Name</span><span>Type</span><span>Size</span></>}</div><div className="sub">Bitbots checks the path only. It never reads file contents.</div></div>
+    </div>
+  const sidePane = !sideSession ? null : <div className="island-card chat-card companion-chat-view companion-side-view">
+      <div className="companion-side-head" data-companion-no-drag="">
+        <button type="button" className="icon-btn" aria-label="Back to the conversation" title="Back" onClick={() => setSideId(null)}><ChevronLeft size={13} /></button>
+        <SideConversationHeader peer={agents.find((item) => item.id === sideSession.link?.peerAgentId)} peerName={agents.find((item) => item.id === sideSession.link?.peerAgentId)?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={agents.find((item) => item.id === sideSession.agentId)} targetName={agents.find((item) => item.id === sideSession.agentId)?.name ?? 'Teammate'} topic={sideSession.link?.topic ?? sideSession.title ?? null} />
+        <button type="button" className="icon-btn" aria-label="Open in Bitbots" title="Open in Bitbots" onClick={() => onOpenSession?.(sideSession.id)}><ArrowUpRight size={11} /></button>
+      </div>
+      <div className="chat-log companion-side-log" data-companion-no-drag="">
+        {!Array.isArray(sideSession.messages) && <p className="companion-empty" role="status">Loading the conversation…</p>}
+        {(sideSession.messages ?? []).map((message, index) => <CompanionChatItem key={String(message.id ?? index)} message={message} agents={agents} currentSessionId={sideSession.id} onOpenSide={(sessionId) => { if (sessionId) openSide(sessionId) }} onOpenAgent={selectTeamBlob} />)}
+        {Array.isArray(sideSession.messages) && sideSession.messages.length === 0 && <p className="companion-empty">No messages yet.</p>}
+      </div>
+    </div>
+  const shell = <div className="companion-shell">
+    <aside className="cs-roster" aria-label={`All ${nouns}`}>
+      <div className="cs-brand" data-tauri-drag-region><span data-tauri-drag-region>Bitbots</span><NeedsYouBadge count={waitingAgents.length} compact onOpen={openNextWaiting} /></div>
+      <div className="cs-bots" data-companion-no-drag="">{roster.map(({ item, state, session: rowSession }, rowIndex) => {
         const focused = item.id === agent?.id
         const status = state === 'waiting' ? 'needs' : state === 'working' ? 'working' : 'idle'
-        return <button key={item.id} type="button" className={`hc-bot${focused ? ' on' : ''}${state === 'offline' ? ' offline' : ''}`} aria-current={focused || undefined} aria-label={`${item.name}${state === 'waiting' ? ', needs you' : state === 'working' ? ', working' : ''}`} onClick={() => { selectTeamBlob(item); openView('chat') }}>
+        return <button key={item.id} type="button" className={`cs-bot${focused ? ' on' : ''}${state === 'offline' ? ' offline' : ''}${state === 'waiting' ? ' state-waiting' : ''}`} aria-keyshortcuts={[rowIndex < 9 ? `Control+${rowIndex + 1}` : '', state === 'waiting' && roster.findIndex((entry) => entry.state === 'waiting') === rowIndex ? 'N' : ''].filter(Boolean).join(' ') || undefined} aria-current={focused || undefined} aria-label={`${item.name}${state === 'waiting' ? ', needs you' : state === 'working' ? ', working' : ''}`} onClick={() => { selectTeamBlob(item); openView('chat') }}>
           <HazeAura status={focused && permission ? 'needs' : focused ? auraStatusFor(displayMood) : status} color={agentColorHex(item.color)} selected={focused} manager={item.systemRole === 'manager'} />
-          <BlobCanvas decorative color={agentColorHex(item.color)} size={16} mood={state === 'offline' ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} />
-          <span className="hc-bot-name">{item.name}</span>
-          {state === 'waiting' ? <span className="hc-bot-meta needs">Needs you</span> : rowSession?.updatedAt ? <time className="hc-bot-meta">{shortTime(rowSession.updatedAt)}</time> : null}
+          <BlobCanvas decorative color={agentColorHex(item.color)} size={hazeLook ? 16 : 24} mood={state === 'offline' ? 'offline' : hazeLook ? 'idle' : state === 'waiting' ? 'permission' : state === 'working' ? 'working' : 'idle'} look={agentLook(item)} label={item.name} />
+          <span className="cs-bot-name">{item.name}</span>
+          {state === 'waiting' ? <span className="cs-bot-meta needs">Needs you</span> : rowSession?.updatedAt ? <time className="cs-bot-meta">{shortTime(rowSession.updatedAt)}</time> : null}
         </button>
       })}</div>
-      <nav className="hc-foot" aria-label="Companion views" data-companion-no-drag="">
-        <button type="button" className={hazeView === 'chat' ? 'on' : ''} aria-label="Chat" title="Chat" onClick={() => openView('chat')}><MessageCircle size={14} /></button>
-        <button type="button" className={hazeView === 'activity' ? 'on' : ''} aria-label="Activity" title="Activity" onClick={() => openView('activity')}><Activity size={14} /></button>
-        <button type="button" className={hazeView === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
+      <nav className="cs-foot" aria-label="Companion views" data-companion-no-drag="">
+        <button type="button" className={view === 'chat' ? 'on' : ''} aria-label="Chat" title="Chat" onClick={() => openView('chat')}><MessageCircle size={14} /></button>
+        <button type="button" className={view === 'activity' ? 'on' : ''} aria-label="Activity" title="Activity" onClick={() => openView('activity')}><Activity size={14} /></button>
+        <button type="button" className={view === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
         <button type="button" className={soundsEnabled ? 'on' : ''} aria-label={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} aria-pressed={soundsEnabled} title={soundsEnabled ? 'Mute sounds' : 'Enable sounds'} onClick={toggleSounds}>{soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>
       </nav>
     </aside>
-    <section className="hc-main companion-content" aria-label={name}>
-      <header className="hc-head" data-tauri-drag-region>
+    <section className="cs-main companion-content" aria-label={name}>
+      <header className="cs-head" data-tauri-drag-region>
         <HazeAura status={permission ? 'needs' : auraStatusFor(displayMood)} color={color || '#9aa3ad'} selected quiet manager={agent?.systemRole === 'manager'} />
-        {focusBlob(20)}
-        <span className="hc-title" data-tauri-drag-region><b>{name}</b><small>{statusLine}</small></span>
+        {focusBlob(hazeLook ? 20 : 30)}
+        <span className="cs-title" data-tauri-drag-region><b>{name}</b><small>{statusLine}</small></span>
         <ApprovalPill mode={approvalMode} compact />
-        <span className="hc-head-actions" data-companion-no-drag="">
+        <span className="cs-head-actions" data-companion-no-drag="">
           <button type="button" aria-label="New conversation" title="New conversation" disabled={!canStart} onClick={(event) => { openView('chat'); onNewSession(event.currentTarget) }}><Plus size={14} /></button>
           <button type="button" aria-label="Open in Bitbots" title="Open in Bitbots" onClick={onOpenMain}><ArrowUpRight size={14} /></button>
+          <button type="button" className="cs-larger" aria-label={large ? 'Restore size' : 'Make larger'} aria-pressed={large} title={large ? 'Restore size' : 'Make larger'} onClick={toggleLarge}>{large ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
           <button type="button" className="companion-collapse" aria-label="Collapse companion" title="Collapse" disabled={!!permission} onClick={toggleExpanded}><ChevronDown size={14} /></button>
         </span>
       </header>
       <ConnectionBanner state={connected ? 'connected' : 'disconnected'} attempts={reconnectAttempts} failed={reconnectFailed} onRetry={() => onRetryConnection?.()} />
-      <div className={`hc-body hc-${permission ? 'permission' : hazeView}`} aria-hidden={mode !== 'home'} inert={mode !== 'home'}>
-        {permission ? <div className="hc-permission">{permissionStack}</div>
-          : hazeView === 'activity' ? <div className="hc-activity">{activityPane}</div>
-          : hazeView === 'settings' ? <div className="hc-settings">{settingsPane}</div>
-          : <div className="hc-chat companion-chat-view">{conversationPicker}{chatPane}</div>}
+      {!dragHintSeen && <div className="cs-hint" data-companion-no-drag=""><span className="companion-hint-pill" role="note" title="Drag me anywhere. Ctrl+Alt+B shows or hides me."><span>Drag me anywhere</span><button type="button" onClick={markDragHintSeen}>Got it</button></span></div>}
+      <div className={`cs-body cs-${permission ? 'permission' : view}`} aria-hidden={mode !== 'home'} inert={mode !== 'home'}>
+        {permission ? <div className="cs-permission">{permissionStack}</div>
+          : confused ? <div className="cs-state">{confusedPane}</div>
+          : dropActive ? <div className="cs-state">{dropPane}</div>
+          : view === 'activity' ? <div className="cs-activity">{activityPane}</div>
+          : view === 'settings' ? <div className="cs-settings">{settingsPane}</div>
+          : view === 'chat' && sideSession ? <div className="cs-side">{sidePane}</div>
+          : <div className="cs-chat companion-chat-view">{conversationPicker}{chatPane}</div>}
       </div>
     </section>
   </div>
@@ -3882,73 +3907,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" role="img" aria-label={peerSummary} data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} /> })}</div>}
         <button className="companion-collapse" aria-label="Expand companion" onClick={() => fsmRef.current?.click()}><ChevronUp size={14} /></button>
-      </div> : hazeLook ? hazeShell : <>
-        <header className="island-header" data-tauri-drag-region>
-          <nav className="tabs" aria-label="Companion navigation">
-            <button className={`tab ${view === 'overview' ? 'on' : ''}`} aria-label="Home" title="Home" onClick={() => openView('overview')}><Home size={13} /></button>
-            <button className={`tab ${view === 'chat' ? 'on' : ''}`} aria-label="Chat" title="Chat" onClick={() => openView('chat')}><MessageCircle size={13} /></button>
-            <button className={`tab ${view === 'activity' ? 'on' : ''}`} aria-label="Activity" title="Activity" onClick={() => openView('activity')}><Activity size={13} /></button>
-            <button className="tab" aria-label="New conversation" title="New conversation" disabled={!canStart} onClick={(event) => { openView('chat'); onNewSession(event.currentTarget) }}><Plus size={14} /></button>
-          </nav>
-          {!dragHintSeen && <span className="companion-hint-pill" data-companion-no-drag="" role="note" title="Drag me anywhere. Ctrl+Alt+B shows or hides me."><span>Drag me anywhere</span><button type="button" onClick={markDragHintSeen}>Got it</button></span>}
-          <span className="island-drag" data-tauri-drag-region title="Drag companion" aria-hidden="true" />
-          <div className="island-actions">
-            <NeedsYouBadge count={waitingAgents.length} onOpen={openNextWaiting} />
-            <ApprovalPill mode={approvalMode} compact />
-            <button className={view === 'settings' ? 'on' : ''} aria-label="Settings" title="Settings" onClick={() => openView('settings')}><Settings2 size={14} /></button>
-            <button className={soundsEnabled ? 'on' : ''} aria-label={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} aria-pressed={soundsEnabled} title={soundsEnabled ? 'Mute companion sounds' : 'Enable companion sounds'} onClick={toggleSounds}>{soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>
-            <button className="companion-collapse" aria-label="Collapse companion" title="Collapse" disabled={!!permission} onClick={toggleExpanded}><ChevronDown size={14} /></button>
-          </div>
-        </header>
-        <ConnectionBanner state={connected ? 'connected' : 'disconnected'} attempts={reconnectAttempts} failed={reconnectFailed} onRetry={() => onRetryConnection?.()} />
-        {confused && <span className="sr-only" role="status" aria-live="polite">A little dizzy. Returning to normal shortly.</span>}
-        <section className="island-views companion-content" aria-hidden={mode !== 'home'} inert={mode !== 'home'}>
-          {permission ? <div className="island-card wash amber">
-            <span className="card-bot">{focusBlob(56)}</span>
-            <div className="card-stack">
-              {permissionStack}
-            </div>
-          </div> : confused ? <div className="island-card wash pink">
-            <span className="card-bot">{focusBlob(62)}</span>
-            <div className="card-stack"><div className="title">Too many hits at once.</div><div className="sub">Give me a sec — back to work in three seconds.</div></div>
-          </div> : dropActive ? <div className="island-card drop-card over">
-            <span className="card-bot">{focusBlob(58)}</span>
-            <div className="card-stack"><div className="title">Drop to hand this file to {name}</div><div className="drop-tags">{dragChips ? <><span>{dragChips.name}</span><span>{dragChips.type}</span><span>{dragChips.size}</span></> : <><span>Name</span><span>Type</span><span>Size</span></>}</div><div className="sub">Bitbots checks the path only. It never reads file contents.</div></div>
-          </div> : view === 'overview' ? <div className="island-overview">
-            <div key={agent?.id ?? 'none'} className={`island-card focus ${wash ? `wash ${wash}` : ''}${shimmering ? ' is-working' : ''}`} style={color ? { ['--focus-glow' as string]: color } : undefined}>
-              <HazeAura status={auraStatusFor(displayMood)} color={color || '#9aa3ad'} selected manager={agent?.systemRole === 'manager'} />
-              <span className="card-bot"><span className="focus-glow" aria-hidden="true" />{focusBlob(58)}</span>
-              <button className="icon-btn jump" aria-label="Open in Bitbots" title="Open in Bitbots" onClick={onOpenMain}><ArrowUpRight size={9} /></button>
-              <div className="card-stack">
-                <div className="who"><span className="name">{name}</span><RuntimeProblemMarker runtime={runtime} onOpenSettings={onOpenSettings} />{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}{agent?.systemRole === 'manager' && <span className="companion-leader" title="Manager" aria-label="Manager"><BriefcaseBusiness size={9} strokeWidth={2.4} aria-hidden="true" /></span>}{botProjectName(agent, projects) && <span className="companion-project" title="Project">{botProjectName(agent, projects)}</span>}<span className="tool">{session?.title?.trim() ? session.title : runtime ? labelize(runtime.provider) : (connected ? 'No active session' : 'Offline')}</span></div>
-                <FocusTicker steps={focusSteps} current={statusLine} shimmering={shimmering} />
-                {focusTeam ? <button type="button" className="glance team-glance" onClick={() => onOpenSession?.(focusTeam.sessionId)} title="Open the side conversation in Bitbots">{focusTeam.peer && <BlobCanvas decorative color={agentColorHex(focusTeam.peer.color)} size={14} mini look={agentLook(focusTeam.peer)} label={focusTeam.peer.name} />}<span>{focusTeam.text}</span></button>
-                  : <div className="glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}><span>All {nouns}: Tokens <b>{tokenGlance}</b></span></div>}
-              </div>
-            </div>
-            <CompanionPeers agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} connected={connected} focusedId={agent?.id ?? null} pinned={pinned} onSelect={selectTeamBlob} onPinnedChange={(ids) => { playCompanionCue('tick'); onPinnedChange?.(ids) }} />
-          </div> : view === 'chat' && sideSession ? <div className="island-card chat-card companion-chat-view companion-side-view">
-            <div className="companion-side-head" data-companion-no-drag="">
-              <button type="button" className="icon-btn" aria-label="Back to the conversation" title="Back" onClick={() => setSideId(null)}><ChevronLeft size={13} /></button>
-              <SideConversationHeader peer={agents.find((item) => item.id === sideSession.link?.peerAgentId)} peerName={agents.find((item) => item.id === sideSession.link?.peerAgentId)?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={agents.find((item) => item.id === sideSession.agentId)} targetName={agents.find((item) => item.id === sideSession.agentId)?.name ?? 'Teammate'} topic={sideSession.link?.topic ?? sideSession.title ?? null} />
-              <button type="button" className="icon-btn" aria-label="Open in Bitbots" title="Open in Bitbots" onClick={() => onOpenSession?.(sideSession.id)}><ArrowUpRight size={11} /></button>
-            </div>
-            <div className="chat-log companion-side-log" data-companion-no-drag="">
-              {!Array.isArray(sideSession.messages) && <p className="companion-empty" role="status">Loading the conversation…</p>}
-              {(sideSession.messages ?? []).map((message, index) => <CompanionChatItem key={String(message.id ?? index)} message={message} agents={agents} currentSessionId={sideSession.id} onOpenSide={(sessionId) => { if (sessionId) openSide(sessionId) }} onOpenAgent={selectTeamBlob} />)}
-              {Array.isArray(sideSession.messages) && sideSession.messages.length === 0 && <p className="companion-empty">No messages yet.</p>}
-            </div>
-          </div> : view === 'chat' ? <div className="island-card chat-card companion-chat-view">
-            {conversationPicker}
-            <span className="card-bot small">{focusBlob(44)}</span>
-            {chatPane}
-          </div> : view === 'activity' ? <div className="island-card list-card companion-activity-view">
-            {activityPane}
-          </div> : <div className="island-card companion-settings-view">
-            {settingsPane}
-          </div>}
-        </section>
-      </>}
+      </div> : <>{shell}<CompanionResizeHandles onStart={() => setLarge(false)} /></>}
     </div>
   </main>
 }

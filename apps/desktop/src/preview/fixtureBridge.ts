@@ -382,7 +382,6 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().get('monoFont')) localStorage.setItem('bitbots.monoFont', String(flags().get('monoFont')))
     if (flags().has('seen-hints')) fixtureSettings['hints.seen'] = ['companion.drag']
     if (flags().has('tour')) fixtureSettings['onboarding.tour'] = { version: 1, done: false, step: 2 }
-    if (flags().get('chat')) fixtureSettings['companion.chatSize'] = flags().get('chat')
     if (flags().has('focus')) fixtureSettings['companion.focusMode'] = true
     if (flags().has('positions')) fixtureSettings['companion.positions'] = { [String(flags().get('positions') ?? 'display')]: { x: 120, y: 900 } }
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
@@ -571,8 +570,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (method === 'automation.preview') {
       const schedule = params.schedule as { kind?: string; cron?: string; at?: string } | undefined
       if (!schedule || (schedule.kind === 'cron' && String(schedule.cron ?? '').trim().split(/\s+/).length !== 5)) throw rpcError('invalid_argument', 'That schedule is not valid.')
-      const base = Date.now()
-      return { occurrences: schedule.kind === 'once' ? [new Date(String(schedule.at)).toISOString()] : [1, 2, 3].map((n) => new Date(base + n * 86_400_000).toISOString()) } as T
+      const utc = fixtureNextRuns(schedule, Math.min(10, Math.max(1, Number(params.count) || 3)))
+      return { utc, local: utc } as T
     }
     if (method === 'automation.create' || method === 'automation.update') {
       const schedule = params.schedule as Record<string, unknown> | undefined
@@ -1217,10 +1216,60 @@ export async function companionMonitorOptions() { return [] as string[] }
 export async function currentCompanionMonitor() { return null }
 export async function setCompanionMonitor() {}
 export async function refreshTrayMenu() {}
-const companionSizes: Record<string, [number, number]> = { petit: [344, 62], hidden: [344, 62], welcome: [640, 160], home: [640, 160], 'home-chat': [640, 264] }
-export async function setCompanionMode(mode: string, _animate?: boolean, chatHeight?: number) {
-  const [width, baseHeight] = companionSizes[mode] ?? [640, 160]
-  const height = mode === 'home-chat' && chatHeight ? chatHeight : baseHeight
+const companionSizes: Record<string, [number, number]> = { petit: [344, 62], hidden: [344, 62], welcome: [640, 160], home: [640, 420], 'home-chat': [640, 420] }
+/** The preview has no real window: the expanded size lives here, and the resize handles change it. */
+let fixtureCompanionSize: [number, number] = [640, 420]
+let fixtureCompanionMode = 'petit'
+let fixtureCompanionDrag: { edge: string; x: number; y: number; size: [number, number] } | null = null
+let fixturePointer: [number, number] = [0, 0]
+if (typeof window !== 'undefined') for (const type of ['pointerdown', 'pointermove']) window.addEventListener(type, (event) => { fixturePointer = [(event as PointerEvent).screenX, (event as PointerEvent).screenY] }, true)
+function paintFixtureCompanion() {
+  const [width, height] = fixtureCompanionMode === 'petit' || fixtureCompanionMode === 'hidden' ? [344, 62] : fixtureCompanionSize
+  let style = document.getElementById('fixture-companion-size')
+  if (!style) { style = document.createElement('style'); style.id = 'fixture-companion-size'; document.head.append(style) }
+  style.textContent = `:root.companion-surface body { background: radial-gradient(900px 500px at 70% 10%, #3b2f63, #12131a) !important; }
+    .companion-root { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); width: ${width}px !important; height: ${height}px !important; }`
+}
+export type CompanionEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+export async function companionResizeBegin(edge: CompanionEdge) { fixtureCompanionDrag = { edge, x: fixturePointer[0], y: fixturePointer[1], size: [...fixtureCompanionSize] } }
+export async function companionResizeStep() {
+  const drag = fixtureCompanionDrag
+  if (!drag) return
+  // The preview window grows from its bottom centre, so a side moves twice as far as the pointer.
+  const dx = (fixturePointer[0] - drag.x) * (drag.edge.includes('w') ? -2 : drag.edge.includes('e') ? 2 : 0)
+  const dy = (fixturePointer[1] - drag.y) * (drag.edge.includes('n') ? -1 : drag.edge.includes('s') ? 1 : 0)
+  fixtureCompanionSize = [Math.min(window.innerWidth - 20, Math.max(520, drag.size[0] + dx)), Math.min(window.innerHeight - 60, Math.max(340, drag.size[1] + dy))]
+  paintFixtureCompanion()
+}
+export async function companionResizeEnd(): Promise<[number, number] | null> { fixtureCompanionDrag = null; return fixtureCompanionSize }
+export async function setCompanionSizePreset(preset: 'large' | 'normal' | 'default') {
+  fixtureCompanionSize = preset === 'large' ? [Math.min(960, window.innerWidth - 20), Math.min(720, window.innerHeight - 60)] : [640, 420]
+  paintFixtureCompanion()
+  return preset === 'large'
+}
+// Next run times for the cron shapes the editor produces (daily, weekdays, one weekday, every n hours), in local time; a custom line the shapes do not cover falls back to daily at its hour and minute.
+function fixtureNextRuns(schedule: { kind?: string; cron?: string; at?: string }, count: number): string[] {
+  if (schedule.kind === 'once') return [new Date(String(schedule.at)).toISOString()]
+  const [minute = '0', hour = '9', , , dow = '*'] = String(schedule.cron ?? '').trim().split(/\s+/)
+  const every = /^\*\/(\d+)$/.exec(hour)
+  const minutes = /^\d+$/.test(minute) ? Number(minute) : 0
+  const hours = every ? Array.from({ length: Math.ceil(24 / Number(every[1])) }, (_, index) => index * Number(every[1])).filter((value) => value < 24) : [/^\d+$/.test(hour) ? Number(hour) : 9]
+  const days = dow === '*' ? null : dow === '1-5' ? [1, 2, 3, 4, 5] : /^\d$/.test(dow) ? [Number(dow)] : null
+  const now = Date.now()
+  const runs: string[] = []
+  for (let offset = 0; offset < 400 && runs.length < count; offset += 1) {
+    const day = new Date(); day.setDate(day.getDate() + offset)
+    if (days && !days.includes(day.getDay())) continue
+    for (const at of hours) {
+      const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), at, minutes, 0, 0)
+      if (candidate.getTime() > now && runs.length < count) runs.push(candidate.toISOString())
+    }
+  }
+  return runs
+}
+export async function setCompanionMode(mode: string, _animate?: boolean) {
+  fixtureCompanionMode = mode
+  const [width, height] = mode === 'petit' || mode === 'hidden' ? companionSizes.petit : fixtureCompanionSize
   let style = document.getElementById('fixture-companion-size')
   if (!style) { style = document.createElement('style'); style.id = 'fixture-companion-size'; document.head.append(style) }
   style.textContent = `:root.companion-surface body { background: radial-gradient(900px 500px at 70% 10%, #3b2f63, #12131a) !important; }

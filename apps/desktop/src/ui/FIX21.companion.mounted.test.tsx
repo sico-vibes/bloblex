@@ -317,7 +317,7 @@ describe('C9 live activity summary', () => {
     const view = startApp('?companion=1')
     await openHome(view)
     await press(view.host, 'Activity')
-    expect(view.host.querySelector('.companion-activity-view')?.textContent).toContain('Nothing is running.')
+    expect(view.host.querySelector('.cs-activity')?.textContent).toContain('Nothing is running.')
     expect(view.host.querySelector('.companion-activity-row.working')).toBeNull()
   })
 })

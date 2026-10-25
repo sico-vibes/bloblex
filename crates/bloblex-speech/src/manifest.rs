@@ -9,6 +9,8 @@ pub enum SpeechModelType {
     Whisper,
     NemoCtc,
     SenseVoice,
+    /// Cactus Needle-engine models (Whistle), run through the pinned `needle.exe` (see `needle.rs`).
+    Needle,
 }
 
 /// Where inference happens.

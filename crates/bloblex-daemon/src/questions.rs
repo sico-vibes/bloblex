@@ -91,6 +91,7 @@ pub async fn ask_user_tool(st: &AppState, session_id: &str, args: &Value) -> Res
     match session["link"]["kind"].as_str() {
         Some("side") => return Err("ask_user is not available in side conversations.".into()),
         Some("automation") => return Err("ask_user is not available to scheduled runs.".into()),
+        Some("task") if crate::is_unattended(&session["link"]) => return Err("ask_user is not available to scheduled runs.".into()),
         _ => {}
     }
     let (title, questions) = validate_args(args)?;

@@ -16,7 +16,9 @@ export async function openSelect(root: ParentNode, label: string) {
   const trigger = selectTrigger(root, label)
   if (!trigger) throw new Error(`No dropdown labelled ${label}`)
   if (trigger.getAttribute('aria-expanded') !== 'true') await act(async () => { trigger.click() })
-  const list = trigger.parentElement?.querySelector<HTMLElement>('[role="listbox"]')
+  // A Select inside a dialog floats its list in a portal on the page body, so find it by the id the trigger names.
+  const listId = trigger.getAttribute('aria-controls')
+  const list = (listId ? document.getElementById(listId) : null) ?? trigger.parentElement?.querySelector<HTMLElement>('[role="listbox"]')
   if (!list) throw new Error(`Dropdown ${label} did not open`)
   return list
 }

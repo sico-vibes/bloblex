@@ -1,13 +1,14 @@
 // The delegate board: unassigned drafts on the left, one lane per bot on the right. Drag a draft onto a bot to start it or queue it;
 // the Assign menu on each draft is the keyboard route to the same single dispatch action.
 import { useState } from 'react'
-import { ChevronDown, GripVertical } from 'lucide-react'
+import { CalendarClock, ChevronDown, GripVertical } from 'lucide-react'
 import type { Agent, BoardTask, Project } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
 import { Select } from './Select'
-import { TASK_STATE_LABEL, draftTasks, finishedTasks, laneAvailability, laneTasks, assignableAgents } from './taskModel'
+import { TASK_STATE_LABEL, SCHEDULE_OUTCOME_LABEL, draftTasks, finishedTasks, laneAvailability, laneTasks, assignableAgents, scheduleSummary, scheduledTasks } from './taskModel'
+import { describeNextRun } from './automationSchedule'
 import { useEntityNoun } from './vocabulary'
 
 export interface DelegateBoardProps {
@@ -30,12 +31,13 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
   const [showFinished, setShowFinished] = useState(false)
   const bots = assignableAgents(agents).slice().sort((a, b) => a.sortOrder - b.sortOrder)
   const drafts = draftTasks(tasks)
+  const scheduled = scheduledTasks(tasks)
   const finished = finishedTasks(tasks)
   const projectName = (id: string | null) => projects.find((project) => project.id === id)?.name ?? null
   const dragging = dragId ? tasks.find((task) => task.id === dragId && task.state === 'unassigned') ?? null : null
   const assignOptions = bots.map((agent) => ({ value: agent.id, label: agent.name }))
 
-  const meta = (task: BoardTask) => [projectName(task.projectId), task.estimateMinutes ? `about ${task.estimateMinutes} min` : null].filter(Boolean).join(' · ')
+  const meta = (task: BoardTask) => [projectName(task.projectId), task.estimateMinutes ? `about ${task.estimateMinutes} min` : null, task.images?.length ? `${task.images.length} image${task.images.length === 1 ? '' : 's'}` : null, task.scheduleState === 'missed' ? 'Missed its time' : null].filter(Boolean).join(' · ')
 
   return <div className="delegate-board">
     <section className="delegate-backlog" aria-labelledby="delegate-backlog-title">
@@ -54,6 +56,15 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
               onChange={(value) => { const agent = bots.find((item) => item.id === value); if (agent) onAssign(task, agent) }} />
           </article>
         </li>)}</ul>}
+      {scheduled.length > 0 && <div className="delegate-scheduled">
+        <header className="delegate-head"><h2>Scheduled</h2><span className="delegate-count">{scheduled.length}</span></header>
+        <ul className="delegate-list">{scheduled.map((task) => <li key={task.id}>
+          <button type="button" className="delegate-scheduled-card" onClick={() => onOpen(task)}>
+            <CalendarClock size={14} className="delegate-grip" aria-hidden="true" />
+            <span className="delegate-draft-text"><strong>{task.title}</strong><small>{scheduleSummary(task, agents)}</small><small>{task.scheduleNextAt ? `Next run ${describeNextRun(task.scheduleNextAt, nowMs)}` : ''}{task.scheduleLastOutcome ? `${task.scheduleNextAt ? ' · ' : ''}Last: ${SCHEDULE_OUTCOME_LABEL[task.scheduleLastOutcome] ?? task.scheduleLastOutcome}` : ''}</small></span>
+          </button>
+        </li>)}</ul>
+      </div>}
       {finished.length > 0 && <div className="delegate-finished">
         <button type="button" className="delegate-finished-toggle" aria-expanded={showFinished} onClick={() => setShowFinished((open) => !open)}><ChevronDown size={14} aria-hidden="true" className={showFinished ? 'open' : ''} />Finished<span className="delegate-count">{finished.length}</span></button>
         {showFinished && <ul className="delegate-list compact">{finished.map((task) => <li key={task.id}><button type="button" className={`delegate-done tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-done-title">{task.title}</span><small>{TASK_STATE_LABEL[task.state]}</small></button></li>)}</ul>}

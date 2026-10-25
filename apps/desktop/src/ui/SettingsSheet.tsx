@@ -60,6 +60,7 @@ const PREVIEW_SPEECH_MODELS: SpeechModelRow[] = [
   { id: 'parakeet-tdt-0.6b-v3-int8', label: 'Parakeet TDT v3', description: 'Highest accuracy for 25 European languages. Punctuation, capitalization, and word-level timestamps.', language: 'multilingual', streaming: false, recommended: true, sizeBytes: 671_000_000 },
   { id: 'parakeet-tdt-0.6b-v2-int8', label: 'Parakeet TDT v2', description: 'English only. Faster than v3 with similar accuracy. Punctuation and capitalization.', language: 'en', streaming: false, recommended: false, sizeBytes: 661_000_000 },
   { id: 'zipformer-streaming-en-20m', label: 'Zipformer Streaming EN', description: 'English only. Lightweight 20M-param model with low-latency real-time partials.', language: 'en', streaming: true, recommended: false, sizeBytes: 128_000_000 },
+  { id: 'cactus-whistle-v1', label: 'Whistle', description: 'A very small model for English, German, French, Spanish, Italian, Dutch and Polish: 17 MB plus a 1.5 MB engine. Quick to download and light on memory; it is less accurate than Parakeet and may leave out punctuation.', language: 'multilingual', streaming: false, recommended: false, sizeBytes: 18_490_223 },
 ]
 const EMPTY_RUNTIMES: Runtime[] = []
 

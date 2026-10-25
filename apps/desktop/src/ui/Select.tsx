@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { ProviderLogo } from './providerBrand'
 
@@ -18,6 +19,9 @@ export interface SelectOption {
  * styled on Windows. The trigger carries `data-value`; the list is a listbox
  * with arrow-key, Home/End, type-ahead, Enter and Escape support. Long lists
  * can pass `searchable` to get a filter field at the top of the menu.
+ * Inside a dialog the menu floats above it (a portal into the page, placed against
+ * the trigger, flipping upwards when there is no room below), so it never changes
+ * the dialog's size or gets clipped by it.
  */
 export function Select({ value, options, onChange, ariaLabel, disabled = false, variant = 'inline', align = 'right', menuPlacement = 'bottom', triggerLabel, placeholder, describedBy, className = '', searchable = false, searchPlaceholder = 'Search' }: {
   value: string
@@ -43,6 +47,9 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const [floating, setFloating] = useState(false)
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null)
   const typeahead = useRef({ prefix: '', timer: 0 })
   const listId = useId()
   const selected = options.find((option) => option.value === value)
@@ -52,7 +59,8 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
   useEffect(() => {
     if (!open) return
     const close = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (rootRef.current && !rootRef.current.contains(target) && !menuRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('pointerdown', close)
     return () => document.removeEventListener('pointerdown', close)
@@ -69,10 +77,38 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
     if (showSearch) searchRef.current?.focus()
     else listRef.current?.focus()
     listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView?.({ block: 'nearest' })
-  }, [open, active, showSearch])
+  }, [open, active, showSearch, floating])
 
   useEffect(() => () => window.clearTimeout(typeahead.current.timer), [])
 
+  const place = useCallback(() => {
+    const trigger = triggerRef.current
+    const menu = menuRef.current
+    if (!trigger || !menu) return
+    const rect = trigger.getBoundingClientRect()
+    const width = menu.offsetWidth
+    const height = Math.min(menu.scrollHeight, 340)
+    const below = window.innerHeight - rect.bottom - 12
+    const above = rect.top - 12
+    const up = menuPlacement === 'top' ? above >= Math.min(height, 120) || above > below : below < height && above > below
+    const room = Math.min(340, Math.max(96, up ? above : below))
+    const shown = Math.min(height, room)
+    const left = Math.max(8, Math.min(align === 'left' ? rect.left : rect.right - width, window.innerWidth - width - 8))
+    setPos({ left, top: up ? rect.top - 4 - shown : rect.bottom + 4, maxHeight: room })
+  }, [align, menuPlacement])
+
+  useLayoutEffect(() => {
+    if (!open) { setFloating(false); setPos(null); return }
+    setFloating(Boolean(triggerRef.current?.closest('[role="dialog"]')))
+  }, [open])
+  useLayoutEffect(() => {
+    if (!open || !floating) return
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
+  }, [open, floating, place, query, options.length])
+  const floatStyle: CSSProperties | undefined = floating ? { position: 'fixed', right: 'auto', bottom: 'auto', left: pos?.left ?? 0, top: pos?.top ?? 0, maxHeight: pos?.maxHeight, minWidth: triggerRef.current?.offsetWidth, zIndex: 200 } : undefined
   const placement = `${align === 'left' ? 'align-left' : ''} ${menuPlacement === 'top' ? 'open-up' : ''}`.trim()
   const enabledIndexes = visible.filter((index) => !options[index].disabled)
   const openMenu = () => {
@@ -143,7 +179,7 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       <span className={selected?.provider ? 'select-provider-label' : undefined}>{selected?.provider && <ProviderLogo provider={selected.provider} size={16} />}{visibleTriggerLabel}</span>
       <ChevronDown size={14} aria-hidden="true" />
     </button>
-    {open && <SearchShell enabled={showSearch} className={placement}>
+    {open && wrapFloat(floating, <SearchShell enabled={showSearch} className={placement} shellRef={menuRef} style={floatStyle}>
     {showSearch && <label className="select-search">
       <Search size={13} aria-hidden="true" />
       <input
@@ -169,7 +205,8 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
       />
     </label>}
     <div
-      ref={listRef}
+      ref={(node) => { listRef.current = node; if (!showSearch) menuRef.current = node }}
+      style={showSearch ? undefined : floatStyle}
       id={listId}
       className={showSearch ? 'select-list' : `select-menu ${placement}`}
       role="listbox"
@@ -205,13 +242,18 @@ export function Select({ value, options, onChange, ariaLabel, disabled = false, 
         </div>,
       ]})}
     </div>
-    </SearchShell>}
+    </SearchShell>)}
   </div>
 }
 
+/** A floating menu is portalled to the page body; the menu bubbles React events to the Select as before. */
+function wrapFloat(floating: boolean, menu: ReactNode) {
+  return floating ? createPortal(menu, document.body) : menu
+}
+
 /** With search on, the field and the list share one floating surface; otherwise the list is the surface. */
-function SearchShell({ enabled, className, children }: { enabled: boolean; className: string; children: ReactNode }) {
-  return enabled ? <div className={`select-menu select-menu-search ${className}`}>{children}</div> : <>{children}</>
+function SearchShell({ enabled, className, children, shellRef, style }: { enabled: boolean; className: string; children: ReactNode; shellRef: { current: HTMLDivElement | null }; style?: CSSProperties }) {
+  return enabled ? <div ref={(node) => { shellRef.current = node }} style={style} className={`select-menu select-menu-search ${className}`}>{children}</div> : <>{children}</>
 }
 
 function groupOf(options: readonly SelectOption[]) {

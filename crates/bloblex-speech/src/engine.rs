@@ -2,7 +2,8 @@
 //!
 //! Supports the two shapes the catalog uses:
 //! * streaming transducers (Zipformer) for live partials, and
-//! * offline transducers (Parakeet TDT) decoded in bounded chunks.
+//! * offline transducers (Parakeet TDT) decoded per utterance: a partial about every second while someone
+//!   speaks and a final at each pause (`UtteranceTracker`), so live words appear for these models too.
 //!
 //! Endpoint thresholds are sherpa-onnx defaults (2.4s / 1.2s / 20s), matching
 //! the values Orca configures explicitly.
@@ -11,9 +12,11 @@ use std::path::Path;
 
 use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig, OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 
-use crate::chunker::OfflineAudioChunker;
+use crate::utterance::{UtteranceStep, UtteranceTracker};
 use crate::error::{SpeechError, SpeechResult};
 use crate::manifest::{SpeechModelManifest, SpeechModelType};
+use crate::model_manager::sha256_file_blocking;
+use crate::needle::NeedleRunner;
 
 /// One decoded update from the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,12 +30,14 @@ pub enum EngineEvent {
 enum Recognizer {
     Online(OnlineRecognizer),
     Offline(OfflineRecognizer),
+    Needle(NeedleRunner),
 }
 
 pub struct SpeechEngine {
     recognizer: Recognizer,
     online_stream: Option<OnlineStream>,
-    chunker: Option<OfflineAudioChunker>,
+    tracker: Option<UtteranceTracker>,
+    last_partial: String,
     sample_rate: i32,
     streaming: bool,
 }
@@ -48,6 +53,9 @@ fn resolve_file(files: &[String], directory: &Path, needle: &str) -> SpeechResul
 impl SpeechEngine {
     /// Load a recognizer from an already-downloaded model directory.
     pub fn load(manifest: &SpeechModelManifest, directory: &Path) -> SpeechResult<Self> {
+        if manifest.model_type == SpeechModelType::Needle {
+            return Self::load_needle(manifest, directory);
+        }
         let tokens = resolve_file(&manifest.files, directory, "tokens")?;
         let encoder = resolve_file(&manifest.files, directory, "encoder")?;
         let decoder = resolve_file(&manifest.files, directory, "decoder")?;
@@ -95,13 +103,41 @@ impl SpeechEngine {
         Ok(Self {
             recognizer,
             online_stream,
-            chunker: if manifest.streaming {
+            tracker: if manifest.streaming {
                 None
             } else {
-                Some(OfflineAudioChunker::new(manifest.sample_rate))
+                Some(UtteranceTracker::new(manifest.sample_rate))
             },
+            last_partial: String::new(),
             sample_rate: manifest.sample_rate as i32,
             streaming: manifest.streaming,
+        })
+    }
+
+    /// Whistle: check the pinned engine's hash (it is about to be run), then keep a runner that decodes one
+    /// utterance at a time, like the offline recognizers.
+    fn load_needle(manifest: &SpeechModelManifest, directory: &Path) -> SpeechResult<Self> {
+        let pinned = |name: &str| manifest.download_files.iter().find(|file| file.name == name).ok_or_else(|| SpeechError::ModelNotReady(format!("missing '{name}' file")));
+        let engine = pinned(crate::catalog::WHISTLE_ENGINE_FILE)?;
+        let model = pinned(crate::catalog::WHISTLE_MODEL_FILE)?;
+        let engine_path = directory.join(&engine.name);
+        let model_path = directory.join(&model.name);
+        let actual = sha256_file_blocking(&engine_path).map_err(|_| SpeechError::ModelNotReady(engine.name.clone()))?;
+        if !actual.eq_ignore_ascii_case(&engine.sha256) {
+            return Err(SpeechError::Integrity(engine.name.clone()));
+        }
+        if !model_path.is_file() {
+            return Err(SpeechError::ModelNotReady(model.name.clone()));
+        }
+        let scratch = directory.join("tmp");
+        NeedleRunner::sweep_scratch(&scratch);
+        Ok(Self {
+            recognizer: Recognizer::Needle(NeedleRunner::subprocess(engine_path, model_path, scratch)),
+            online_stream: None,
+            tracker: Some(UtteranceTracker::new(manifest.sample_rate)),
+            last_partial: String::new(),
+            sample_rate: manifest.sample_rate as i32,
+            streaming: false,
         })
     }
 
@@ -117,8 +153,9 @@ impl SpeechEngine {
                 self.online_stream = Some(recognizer.create_stream());
             }
         } else {
-            self.chunker = Some(OfflineAudioChunker::new(self.sample_rate as u32));
+            self.tracker = Some(UtteranceTracker::new(self.sample_rate as u32));
         }
+        self.last_partial.clear();
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -130,16 +167,27 @@ impl SpeechEngine {
         if self.streaming {
             self.accept_online(samples)
         } else {
-            let chunks = self
-                .chunker
-                .as_mut()
-                .map(|chunker| chunker.push(samples))
-                .unwrap_or_default();
+            let step = self.tracker.as_mut().and_then(|tracker| tracker.push(samples));
             let mut events = Vec::new();
-            for chunk in chunks {
-                if let Some(text) = self.decode_offline_chunk(&chunk) {
-                    events.push(EngineEvent::Final(text));
+            match step {
+                Some(UtteranceStep::Partial(audio)) => {
+                    let began = std::time::Instant::now();
+                    let text = self.decode_offline_chunk(&audio);
+                    if let Some(tracker) = self.tracker.as_mut() {
+                        tracker.note_decode_cost(began.elapsed().as_secs_f32());
+                    }
+                    if let Some(text) = text.filter(|text| *text != self.last_partial) {
+                        self.last_partial = text.clone();
+                        events.push(EngineEvent::Partial(text));
+                    }
                 }
+                Some(UtteranceStep::Final(audio)) => {
+                    self.last_partial.clear();
+                    if let Some(text) = self.decode_offline_chunk(&audio) {
+                        events.push(EngineEvent::Final(text));
+                    }
+                }
+                None => {}
             }
             events
         }
@@ -166,18 +214,11 @@ impl SpeechEngine {
             }
             events
         } else {
-            let remaining = self
-                .chunker
-                .as_mut()
-                .map(|chunker| chunker.flush())
-                .unwrap_or_default();
-            if remaining.is_empty() {
-                Vec::new()
-            } else {
-                self.decode_offline_chunk(&remaining)
-                    .map(EngineEvent::Final)
-                    .into_iter()
-                    .collect()
+            let remaining = self.tracker.as_mut().and_then(|tracker| tracker.finish());
+            self.last_partial.clear();
+            match remaining {
+                Some(audio) => self.decode_offline_chunk(&audio).map(EngineEvent::Final).into_iter().collect(),
+                None => Vec::new(),
             }
         }
     }
@@ -212,7 +253,11 @@ impl SpeechEngine {
         events
     }
 
-    fn decode_offline_chunk(&self, samples: &[f32]) -> Option<String> {
+    fn decode_offline_chunk(&mut self, samples: &[f32]) -> Option<String> {
+        if let Recognizer::Needle(runner) = &mut self.recognizer {
+            // A failed run is a missed utterance, not a failed dictation; nothing about it is logged.
+            return runner.transcribe(samples, self.sample_rate as u32).ok().flatten();
+        }
         let Recognizer::Offline(recognizer) = &self.recognizer else {
             return None;
         };

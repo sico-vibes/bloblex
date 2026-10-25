@@ -67,7 +67,7 @@ Read the full diff, not only the report. Check claims against the code; a lane's
 ## Releasing (signed beta)
 
 1. All gates green on `main`, including clippy and the desktop crate from a short path.
-2. Bump the version in `package.json`, `package-lock.json` (3 places), `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, `Cargo.toml` and `Cargo.lock` (15 crates); release notes in `docs/releases/<version>.md` (the app shows them, and the script publishes them); commit `release: v<version>` and push.
+2. Bump the version in `package.json`, `package-lock.json` (3 places), `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, `Cargo.toml` and `Cargo.lock` (15 crates); release notes in `docs/releases/<version>.md` (the app shows them, and the script publishes them); re-run the full Vitest suite after the bump, before pushing (version-sensitive tests only fail then); commit `release: v<version>` and push.
 3. Clone `main` to a short path (`git clone --branch main <checkout> D:\bNN`, `git remote set-url origin https://github.com/sico-vibes/bloblex.git`, junction `node_modules`); the script requires a clean `main` checkout.
 4. The updater key must be at `%USERPROFILE%\.bloblex-release\updater.key` and `updater.pass` (never print or commit them; check `updater.key.pub` equals `plugins.updater.pubkey`). If the key is missing, stop and ask the owner; do not generate a new one.
 5. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version <version>` from the clone: builds, signs the updater artifacts, creates the GitHub prerelease with the tag, uploads the installer, `.sig` and `latest.json`, and updates the `channel-beta` manifest.

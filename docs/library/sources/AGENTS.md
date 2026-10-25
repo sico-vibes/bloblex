@@ -2,6 +2,14 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (24 October 2026): Sonnet lane for FIX43
+
+Owner directive for the FIX43 wave (task dialog and schedules, the tasks table error, task images, message actions, the companion in every look and resizing, live dictation words, Whistle, conversation branch lines), until the owner says otherwise.
+
+- **Implementation:** one Claude Sonnet 5.5 agent at high effort does every item, in order, in the worktree `D:x71` (branch `fix43/sonnet`). The Director does not implement; it writes the brief, reviews the diff, runs the gates, merges and commits. The lane never runs `git commit`.
+- **Owner decisions:** Whistle is linked as Cactus's C library, falling back to their prebuilt `needle.exe` (pinned revision and SHA-256, run as a local subprocess) if it will not link; in Frost and Stone the new companion layout keeps each look's own bot art and status dots, and the status gradient stays Haze-only.
+- **Looks** (24 October 2026): Haze is the primary look and the default for new installs; the Bitbots and Blobots looks are shown as Frost and Stone (stored ids unchanged).
+
 # Amendment (22 October 2026): expansion lanes, two looks
 
 Owner directive (21 October 2026, recorded here on 22 October 2026). It amends the FIX40 and Delegation pipeline sections below where they differ.

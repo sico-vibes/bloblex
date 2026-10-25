@@ -940,6 +940,22 @@ fn ensure_tasks_schema(c: &Connection) -> Result<(), StorageError> {
         run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
         created_at TEXT NOT NULL
     );")?;
+    // FIX43: images, schedules and unattended runs. Guarded `ALTER`s, because the tables above
+    // already exist in databases that predate these columns.
+    for (column, ddl) in [
+        ("attachments_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("schedule_json", "TEXT"),
+        ("schedule_agent_id", "TEXT"),
+        ("schedule_next_at", "TEXT"),
+        ("schedule_state", "TEXT"),
+        ("schedule_last_at", "TEXT"),
+        ("schedule_last_outcome", "TEXT"),
+        ("unattended", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name=?1)", [column], |r| r.get(0))?;
+        if !present { c.execute_batch(&format!("ALTER TABLE tasks ADD COLUMN {column} {ddl};"))?; }
+    }
+    c.execute_batch("CREATE INDEX IF NOT EXISTS idx_tasks_schedule ON tasks(schedule_state,schedule_next_at);")?;
     Ok(())
 }
 
@@ -985,6 +1001,13 @@ fn task_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
     .optional()?
     .ok_or(StorageError::AgentNotFound)?;
     let snapshot: Value = serde_json::from_str(&row.11)?;
+    let extra = c.query_row(
+        "SELECT attachments_json,schedule_json,schedule_agent_id,schedule_next_at,schedule_state,schedule_last_at,schedule_last_outcome,unattended FROM tasks WHERE id=?1",
+        [id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?, r.get::<_, i64>(7)?)),
+    )?;
+    let images: Value = serde_json::from_str(&extra.0).unwrap_or_else(|_| json!([]));
+    let schedule: Value = match extra.1 { Some(raw) => serde_json::from_str(&raw).unwrap_or(Value::Null), None => Value::Null };
     Ok(json!({
         "id":row.0,"title":row.1,"brief":row.2,"doneGoal":row.3,"reportBack":row.4,
         "projectId":row.5,"originSessionId":row.6,"parentTaskId":row.7,"rootTaskId":row.8,
@@ -992,7 +1015,43 @@ fn task_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
         "estimateMinutes":row.12,"maxRuntimeSecs":row.13,"state":row.14,"queuePosition":row.15,
         "version":row.16,"createdAt":row.17,"updatedAt":row.18,
         "assignedAt":row.19,"startedAt":row.20,"completedAt":row.21,
+        "images":images,"schedule":schedule,"scheduleAgentId":extra.2,"scheduleNextAt":extra.3,"scheduleState":extra.4,
+        "scheduleLastAt":extra.5,"scheduleLastOutcome":extra.6,"unattended":extra.7 != 0,
     }))
+}
+
+/// Task images: descriptors of files the daemon copied into its own folder. The storage layer only
+/// checks their shape; the daemon owns the files.
+const TASK_IMAGE_LIMIT: usize = 8;
+fn task_images_valid(value: &Value) -> Result<Value, StorageError> {
+    let items = value.as_array().ok_or(StorageError::InvalidAgent)?;
+    if items.len() > TASK_IMAGE_LIMIT { return Err(StorageError::InvalidAgent); }
+    let mut out = Vec::new();
+    for item in items {
+        let id = item["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).ok_or(StorageError::InvalidAgent)?;
+        let file = item["file"].as_str().filter(|file| file.len() <= 80 && !file.contains(['/', '\\', ':']) && !file.starts_with('.') && [".png", ".jpg", ".gif", ".webp"].iter().any(|ext| file.ends_with(ext))).ok_or(StorageError::InvalidAgent)?;
+        let media_type = item["mediaType"].as_str().filter(|kind| ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(kind)).ok_or(StorageError::InvalidAgent)?;
+        let name: String = item["name"].as_str().unwrap_or("image").chars().filter(|c| !c.is_control()).take(120).collect();
+        let bytes = item["bytes"].as_u64().unwrap_or(0);
+        out.push(json!({"id":id,"file":file,"mediaType":media_type,"name":if name.trim().is_empty() {"image".to_owned()} else {name},"bytes":bytes}));
+    }
+    Ok(Value::Array(out))
+}
+
+/// The schedule fields of a create or update: the normalized schedule, its bot and its next
+/// occurrence, or all `None` for "Now". A repeating or once schedule always names the bot that runs it.
+#[derive(Default)]
+struct TaskSchedule { json: Option<String>, agent_id: Option<String>, next_at: Option<String>, state: Option<&'static str> }
+fn task_schedule_parse(tx: &Connection, schedule: &Value, agent: &Value) -> Result<TaskSchedule, StorageError> {
+    if schedule.is_null() { return Ok(TaskSchedule::default()); }
+    let now = Utc::now();
+    let parsed = cron::parse_schedule(schedule, Some(now))?;
+    let agent_id = agent.as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?;
+    let archived: Option<bool> = tx.query_row("SELECT archived FROM agents WHERE id=?1", [agent_id], |r| r.get(0)).optional()?;
+    match archived { None => return Err(StorageError::AgentNotFound), Some(true) => return Err(StorageError::AgentConflict), Some(false) => {} }
+    let next_at = cron::next_run_at(&parsed, now)?.ok_or(StorageError::InvalidAgent)?;
+    let normalized = if parsed.kind == "once" { json!({"kind":"once","at":parsed.once_at,"timezone":parsed.timezone}) } else { json!({"kind":"cron","cron":parsed.cron,"timezone":parsed.timezone}) };
+    Ok(TaskSchedule { json: Some(normalized.to_string()), agent_id: Some(agent_id.to_owned()), next_at: Some(next_at), state: Some("active") })
 }
 
 /// Task runs list order: oldest attempt first.
@@ -1674,7 +1733,16 @@ impl Storage {
         }
         Ok(self)
     }
-    fn migrate(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
+    /// Runs the versioned migrations, then the additive `ensure_*` schemas that every path
+    /// shares. The task ledger is added here once, not per version branch: each branch
+    /// returns early, and the task tables were only created on the fresh-database path, so a
+    /// database from an earlier version failed with `no such table: tasks` (FIX43).
+    fn migrate(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
+        let storage = Self::migrate_versions(conn, path)?;
+        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_tasks_schema(&c)?; }
+        Ok(storage)
+    }
+    fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let has_ledger:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",[],|r|r.get(0))?;
         if has_ledger {
@@ -3292,8 +3360,10 @@ impl Storage {
         };
         let estimate_minutes = match input.get("estimateMinutes") { None | Some(Value::Null) => None, Some(value) => Some(value.as_i64().filter(|minutes| (1..=10_080).contains(minutes)).ok_or(StorageError::InvalidAgent)?) };
         let max_runtime_secs = match input.get("maxRuntimeSecs") { None | Some(Value::Null) => 1800, Some(value) => value.as_i64().filter(|secs| (60..=86_400).contains(secs)).ok_or(StorageError::InvalidAgent)? };
+        let images = match input.get("images") { None | Some(Value::Null) => json!([]), Some(value) => task_images_valid(value)? };
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let schedule = task_schedule_parse(&tx, input.get("schedule").unwrap_or(&Value::Null), input.get("scheduleAgentId").unwrap_or(&Value::Null))?;
         if let Some(project) = project_id.as_deref() {
             if !tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [project], |r| r.get::<_, bool>(0))? { return Err(StorageError::AgentNotFound); }
         }
@@ -3311,6 +3381,10 @@ impl Storage {
         tx.execute(
             "INSERT INTO tasks(id,title,brief,done_goal,report_back,project_id,origin_session_id,parent_task_id,root_task_id,assignee_agent_id,supervision_policy,supervision_snapshot,estimate_minutes,max_runtime_secs,state,queue_position,version,created_at,updated_at,assigned_at,started_at,completed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,'unassigned',NULL,1,?14,?14,NULL,NULL,NULL)",
             params![id, title, brief, done_goal, report_back, project_id, origin_session_id, parent_task_id, root_task_id, supervision_policy, snapshot.to_string(), estimate_minutes, max_runtime_secs, now],
+        )?;
+        tx.execute(
+            "UPDATE tasks SET attachments_json=?2,schedule_json=?3,schedule_agent_id=?4,schedule_next_at=?5,schedule_state=?6 WHERE id=?1",
+            params![id, images.to_string(), schedule.json, schedule.agent_id, schedule.next_at, schedule.state],
         )?;
         let dto = task_read(&tx, &id)?;
         tx.commit()?;
@@ -3367,15 +3441,114 @@ impl Storage {
             Some(Value::String(policy)) if ["report_only", "bounded", "manager_completes"].contains(&policy.as_str()) => policy.clone(),
             _ => return Err(StorageError::InvalidAgent),
         };
+        let estimate_minutes: Option<i64> = match input.get("estimateMinutes") {
+            None => existing["estimateMinutes"].as_i64(),
+            Some(Value::Null) => None,
+            Some(value) => Some(value.as_i64().filter(|minutes| (1..=10_080).contains(minutes)).ok_or(StorageError::InvalidAgent)?),
+        };
+        let max_runtime_secs = match input.get("maxRuntimeSecs") {
+            None | Some(Value::Null) => existing["maxRuntimeSecs"].as_i64().unwrap_or(1800),
+            Some(value) => value.as_i64().filter(|secs| (60..=86_400).contains(secs)).ok_or(StorageError::InvalidAgent)?,
+        };
+        let images = match input.get("images") { None => existing["images"].clone(), Some(value) => task_images_valid(value)? };
         let now = task_stamp();
-        let snapshot = json!({"policy": supervision_policy, "maxRuntimeSecs": existing["maxRuntimeSecs"]});
+        let snapshot = json!({"policy": supervision_policy, "maxRuntimeSecs": max_runtime_secs});
         tx.execute(
-            "UPDATE tasks SET title=?2,brief=?3,done_goal=?4,report_back=?5,project_id=?6,supervision_policy=?7,supervision_snapshot=?8,version=version+1,updated_at=?9 WHERE id=?1 AND version=?10",
-            params![id, title, brief, done_goal, report_back, project_id, supervision_policy, snapshot.to_string(), now, expected],
+            "UPDATE tasks SET title=?2,brief=?3,done_goal=?4,report_back=?5,project_id=?6,supervision_policy=?7,supervision_snapshot=?8,estimate_minutes=?11,max_runtime_secs=?12,attachments_json=?13,version=version+1,updated_at=?9 WHERE id=?1 AND version=?10",
+            params![id, title, brief, done_goal, report_back, project_id, supervision_policy, snapshot.to_string(), now, expected, estimate_minutes, max_runtime_secs, images.to_string()],
+        )?;
+        if input.get("schedule").is_some() {
+            let schedule = task_schedule_parse(&tx, input.get("schedule").unwrap_or(&Value::Null), input.get("scheduleAgentId").unwrap_or(&Value::Null))?;
+            tx.execute(
+                "UPDATE tasks SET schedule_json=?2,schedule_agent_id=?3,schedule_next_at=?4,schedule_state=?5,schedule_last_at=NULL,schedule_last_outcome=NULL WHERE id=?1",
+                params![id, schedule.json, schedule.agent_id, schedule.next_at, schedule.state],
+            )?;
+        }
+        let dto = task_read(&tx, id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Scheduled tasks whose next occurrence is due, oldest first. Only an unassigned task with an
+    /// active schedule is ever returned, so a cancelled or already started task never fires.
+    pub fn task_schedules_due(&self, now: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let ids = {
+            let mut q = c.prepare("SELECT id FROM tasks WHERE schedule_state='active' AND state='unassigned' AND schedule_next_at IS NOT NULL AND schedule_next_at<=?1 ORDER BY schedule_next_at,id LIMIT 20")?;
+            let rows = q.query_map([now], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        ids.iter().map(|id| task_read(&c, id)).collect()
+    }
+
+    /// Record what one occurrence did and where the schedule goes next. `state` is `active` (a repeat
+    /// moves on), `completed` (a one-time task fired) or `missed` (it was skipped); the version moves
+    /// so an open board re-reads the card.
+    pub fn task_schedule_record(&self, id: &str, outcome: &str, next_at: Option<&str>, state: &str) -> Result<Value, StorageError> {
+        if !["active", "completed", "missed"].contains(&state) { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        task_read(&tx, id)?;
+        let now = task_stamp();
+        tx.execute(
+            "UPDATE tasks SET schedule_last_at=?2,schedule_last_outcome=?3,schedule_next_at=?4,schedule_state=?5,version=version+1,updated_at=?2 WHERE id=?1",
+            params![id, now, outcome, next_at, state],
         )?;
         let dto = task_read(&tx, id)?;
         tx.commit()?;
         Ok(dto)
+    }
+
+    /// A run that starts without the owner present keeps the unattended rails (no bypass, no waiting on
+    /// approvals or questions). The flag is set before the run is claimed.
+    pub fn task_mark_unattended(&self, id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        if c.execute("UPDATE tasks SET unattended=1 WHERE id=?1", [id])? == 0 { return Err(StorageError::AgentNotFound); }
+        Ok(())
+    }
+
+    /// One occurrence of a repeating task: a new unassigned task that copies the template's text, images,
+    /// project and limits, hangs under the template, and carries the unattended flag.
+    pub fn task_clone_scheduled(&self, template_id: &str) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let template = task_read(&tx, template_id)?;
+        let id = Uuid::new_v4().to_string();
+        let now = task_stamp();
+        tx.execute(
+            "INSERT INTO tasks(id,title,brief,done_goal,report_back,project_id,origin_session_id,parent_task_id,root_task_id,assignee_agent_id,supervision_policy,supervision_snapshot,estimate_minutes,max_runtime_secs,state,queue_position,version,created_at,updated_at,assigned_at,started_at,completed_at,attachments_json,unattended)
+             SELECT ?2,title,brief,done_goal,report_back,project_id,origin_session_id,id,root_task_id,NULL,supervision_policy,supervision_snapshot,estimate_minutes,max_runtime_secs,'unassigned',NULL,1,?3,?3,NULL,NULL,NULL,attachments_json,1 FROM tasks WHERE id=?1",
+            params![template["id"].as_str().unwrap_or(""), id, now],
+        )?;
+        let dto = task_read(&tx, &id)?;
+        tx.commit()?;
+        Ok(dto)
+    }
+
+    /// Children of a repeating task that are still queued, running or waiting on the owner's approval: a
+    /// new occurrence is skipped while one of them exists.
+    pub fn task_active_children(&self, parent_id: &str) -> Result<i64, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT COUNT(*) FROM tasks WHERE parent_task_id=?1 AND unattended=1 AND state IN ('queued','running','needs_you')", [parent_id], |r| r.get(0))?)
+    }
+
+    /// Whether any task still lists this image file, so a removed image is deleted only when nothing
+    /// else (a repeat's copies share the template's files) points at it.
+    pub fn task_image_in_use(&self, file: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let needle = format!("%\"file\":\"{}\"%", file.replace(['%', '_'], ""));
+        Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM tasks WHERE attachments_json LIKE ?1)", [needle], |r| r.get(0))?)
+    }
+
+    /// Runs the provider is working on, each with its task's runtime cap, for the daemon's time limit.
+    pub fn task_runs_running(&self) -> Result<Vec<(Value, i64)>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let rows = {
+            let mut q = c.prepare("SELECT r.id,t.max_runtime_secs FROM task_runs r JOIN tasks t ON t.id=r.task_id WHERE r.state='running' AND r.started_at IS NOT NULL")?;
+            let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        rows.into_iter().map(|(run_id, cap)| Ok((task_run_read(&c, &run_id)?, cap))).collect()
     }
 
     /// Atomically assign, claim and (when the caller may start at once) record
@@ -9002,5 +9175,102 @@ mod task_ledger_tests {
         assert_eq!(db.task_get(queued_id).unwrap()["state"], "queued", "queued work resumes instead of being abandoned");
         assert_eq!(db.task_run_latest(claimed_id).unwrap().unwrap()["id"], claimed_run["id"], "no duplicate run is created");
         assert!(db.task_recover_after_restart().unwrap().is_empty(), "recovery runs once");
+    }
+
+    /// FIX43: a database an earlier version left has no task tables and a current schema
+    /// ledger; opening it must add them (it used to fail with `no such table: tasks`).
+    #[test]
+    fn an_existing_database_without_the_task_tables_gains_them_on_open() {
+        let path = std::env::temp_dir().join(format!("bloblex-tasks-upgrade-{}.db", Uuid::new_v4()));
+        {
+            let db = Storage::open(&path).unwrap();
+            let c = db.conn.lock().unwrap();
+            c.execute_batch("DROP TABLE task_dispatch_keys; DROP TABLE task_run_events; DROP TABLE task_runs; DROP TABLE tasks;").unwrap();
+            let present: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='tasks'", [], |r| r.get(0)).unwrap();
+            assert_eq!(present, 0, "the shape an older version left");
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            assert!(db.task_list(None, None, None, None).unwrap().is_empty());
+            let created = db.task_create(&json!({"title":"First task"})).unwrap();
+            assert_eq!(db.task_get(created["id"].as_str().unwrap()).unwrap()["title"], "First task");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn image(name: &str) -> Value {
+        json!({"id":Uuid::new_v4().to_string(),"file":format!("{}.png", Uuid::new_v4()),"mediaType":"image/png","name":name,"bytes":42})
+    }
+
+    #[test]
+    fn a_task_keeps_its_images_and_every_editable_field() {
+        let (db, _, _) = ledger();
+        let first = image("one.png");
+        let task = draft(&db, json!({"images":[first.clone()],"estimateMinutes":20,"maxRuntimeSecs":3600}));
+        assert_eq!(task["images"][0]["name"], "one.png");
+        assert_eq!(task["maxRuntimeSecs"], 3600);
+        assert_eq!(task["schedule"], Value::Null);
+        let updated = db.task_update(task["id"].as_str().unwrap(), 1, &json!({"title":"Renamed","images":[],"maxRuntimeSecs":900,"estimateMinutes":null})).unwrap();
+        assert_eq!(updated["images"], json!([]));
+        assert_eq!(updated["maxRuntimeSecs"], 900);
+        assert_eq!(updated["supervisionSnapshot"]["maxRuntimeSecs"], 900);
+        assert_eq!(updated["estimateMinutes"], Value::Null);
+        assert!(!db.task_image_in_use(first["file"].as_str().unwrap()).unwrap());
+        let kept = draft(&db, json!({"images":[first.clone()]}));
+        assert!(db.task_image_in_use(first["file"].as_str().unwrap()).unwrap());
+        assert_eq!(db.task_update(kept["id"].as_str().unwrap(), 1, &json!({"brief":"More"})).unwrap()["images"][0]["id"], first["id"], "an edit without images leaves them alone");
+        for bad in [json!([{"id":"a","file":"../x.png","mediaType":"image/png","name":"n"}]), json!([{"id":"a","file":"a.png","mediaType":"image/svg+xml","name":"n"}]), json!("not a list")] {
+            assert!(matches!(db.task_create(&json!({"title":"Bad","images":bad})), Err(StorageError::InvalidAgent)));
+        }
+        let too_many = Value::Array((0..9).map(|n| image(&format!("{n}.png"))).collect());
+        assert!(matches!(db.task_create(&json!({"title":"Too many","images":too_many})), Err(StorageError::InvalidAgent)));
+    }
+
+    #[test]
+    fn a_schedule_needs_a_bot_and_a_future_time_and_clears_with_now() {
+        let (db, _, agent) = ledger();
+        let at = (Utc::now() + Duration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        assert!(matches!(db.task_create(&json!({"title":"No bot","schedule":{"kind":"once","at":at}})), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.task_create(&json!({"title":"Soon","schedule":{"kind":"once","at":(Utc::now() + Duration::seconds(5)).to_rfc3339()},"scheduleAgentId":agent})), Err(StorageError::InvalidAgent)));
+        assert!(matches!(db.task_create(&json!({"title":"Ghost","schedule":{"kind":"once","at":at},"scheduleAgentId":"missing"})), Err(StorageError::AgentNotFound)));
+        let once = db.task_create(&json!({"title":"Later","schedule":{"kind":"once","at":at},"scheduleAgentId":agent})).unwrap();
+        assert_eq!(once["scheduleState"], "active");
+        assert_eq!(once["scheduleAgentId"], json!(agent));
+        assert_eq!(once["state"], "unassigned");
+        assert!(once["scheduleNextAt"].as_str().is_some());
+        let repeat = db.task_update(once["id"].as_str().unwrap(), 1, &json!({"schedule":{"kind":"cron","cron":"0 9 * * 1-5","timezone":"Europe/London"},"scheduleAgentId":agent})).unwrap();
+        assert_eq!(repeat["schedule"]["kind"], "cron");
+        let now_again = db.task_update(repeat["id"].as_str().unwrap(), 2, &json!({"schedule":null})).unwrap();
+        assert_eq!(now_again["schedule"], Value::Null);
+        assert_eq!(now_again["scheduleState"], Value::Null);
+        assert_eq!(now_again["scheduleNextAt"], Value::Null);
+    }
+
+    #[test]
+    fn due_schedules_clone_for_each_occurrence_and_record_what_happened() {
+        let (db, _, agent) = ledger();
+        let template = draft(&db, json!({"images":[image("shot.png")],"schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"scheduleAgentId":agent}));
+        let id = template["id"].as_str().unwrap();
+        assert!(db.task_schedules_due(&task_stamp()).unwrap().is_empty());
+        let far = (Utc::now() + Duration::days(2)).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let due = db.task_schedules_due(&far).unwrap();
+        assert_eq!(due.len(), 1);
+        let clone = db.task_clone_scheduled(id).unwrap();
+        assert_eq!(clone["parentTaskId"], json!(id));
+        assert_eq!(clone["state"], "unassigned");
+        assert_eq!(clone["unattended"], true);
+        assert_eq!(clone["schedule"], Value::Null);
+        assert_eq!(clone["images"], template["images"]);
+        assert_eq!(clone["title"], template["title"]);
+        db.task_dispatch_claim(clone["id"].as_str().unwrap(), &agent, 1, "occurrence-1", false, None).unwrap();
+        assert_eq!(db.task_active_children(id).unwrap(), 1, "an occurrence that is running blocks the next one");
+        let next = (Utc::now() + Duration::days(1)).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let recorded = db.task_schedule_record(id, "started", Some(&next), "active").unwrap();
+        assert_eq!(recorded["scheduleLastOutcome"], "started");
+        assert_eq!(recorded["version"], 2);
+        let missed = db.task_schedule_record(id, "skipped_late", None, "missed").unwrap();
+        assert_eq!(missed["scheduleState"], "missed");
+        assert!(db.task_schedules_due(&far).unwrap().is_empty(), "a missed schedule does not fire again");
+        assert!(matches!(db.task_schedule_record(id, "x", None, "bogus"), Err(StorageError::InvalidAgent)));
     }
 }

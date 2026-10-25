@@ -225,23 +225,22 @@ describe('C5 companion keyboard access', () => {
     }
   })
 
-  it('focuses the first four teammates with Ctrl+1..4 and the next waiting one with N', async () => {
+  it('focuses the bot rows with Ctrl+1..9 and the next waiting one with N', async () => {
     const opsSession = session({ id: 'session-ops', runtimeId: 'runtime-claude', agentId: 'agent-ops', title: 'Deploy', state: 'waiting_permission' })
     configure(snapshot({ agents: [claude, codex, ops], sessions: [claudeSession, opsSession] }))
     const view = startApp('?companion=1')
     await openHome(view)
-    const peers = [...view.host.querySelectorAll<HTMLButtonElement>('.peer')]
-    expect(peers).toHaveLength(2)
-    expect(peers[0]?.getAttribute('aria-keyshortcuts')).toBe('Control+1 N')
-    expect(peers[1]?.getAttribute('aria-keyshortcuts')).toBe('Control+2')
+    const rows = [...view.host.querySelectorAll<HTMLButtonElement>('.cs-bots .cs-bot')]
+    expect(rows).toHaveLength(3)
+    expect(rows.map((row) => row.getAttribute('aria-keyshortcuts'))).toEqual(['Control+1', 'Control+2', 'Control+3 N'])
 
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', ctrlKey: true, bubbles: true, cancelable: true })) })
-    expect(document.activeElement).toBe(peers[1])
+    expect(document.activeElement).toBe(rows[1])
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', ctrlKey: true, bubbles: true, cancelable: true })) })
-    expect(document.activeElement).toBe(peers[0])
+    expect(document.activeElement).toBe(rows[0])
 
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', bubbles: true, cancelable: true })) })
-    expect(document.activeElement).toBe(peers[0])
+    expect(document.activeElement).toBe(rows[2])
 
     // While the person is typing, the shortcut keys do nothing.
     const box = document.createElement('textarea')

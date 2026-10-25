@@ -822,7 +822,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
-        "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" => tasks::rpc(st, method, &p).await,
+        "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" | "task.image" => tasks::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "skills.list" | "skills.get" | "skills.forAgent" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
@@ -1485,6 +1485,9 @@ fn claude_workflows_enabled(settings: &Value) -> bool { settings["claude.enableW
 /// FIX39 item 18 (owner decision of 18 October 2026): the global limit on turns
 /// running at once — the setting "Bots working at once", default 4, range 1–16.
 /// There is no per-bot cap any more: one bot may run many conversations.
+/// A session whose run starts without the owner present: an automation, or a task that a schedule started.
+/// It keeps the unattended rails (never bypass, unclassified permissions denied, questions dismissed).
+pub(crate) fn is_unattended(link: &Value) -> bool { link["kind"] == "automation" || (link["kind"] == "task" && link["unattended"] == true) }
 pub(crate) fn global_concurrency_limit(st: &AppState) -> i64 {
     st.db.settings().ok().and_then(|settings| settings["concurrency.botsAtOnce"].as_i64()).unwrap_or(4).clamp(1, 16)
 }
@@ -1512,7 +1515,7 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
     // Unattended rail: an automation session is always plan or auto, regardless
     // of the blob, its lock or the global default. This also holds across
     // restarts and `session.model.update` because both rebuild options here.
-    if session["link"]["kind"] == "automation" {
+    if is_unattended(&session["link"]) {
         // `plan` is plan mode over an auto permission policy; the provider is
         // never asked to bypass. Unclassified permission requests are denied.
         options.approval_mode = ApprovalMode::Auto;
@@ -2073,7 +2076,7 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
     let (mut exec_options,mut model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
     // Automation sessions must never inherit bypass/ask from the blob or a
     // global default. Pin the clamped mode into the lock and the launch options.
-    if p["link"]["kind"] == "automation" {
+    if is_unattended(&p["link"]) {
         let plan = p["link"]["approvalMode"].as_str() == Some("plan");
         if let Some(map) = model_lock.as_object_mut() { map.insert("approvalMode".to_owned(), json!(if plan { "plan" } else { "auto" })); }
         exec_options.approval_mode = ApprovalMode::Auto;
@@ -2702,7 +2705,7 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
         if let Some(map) = lock.as_object_mut() { map.remove("serviceTier"); }
         options.service_tier = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.service_tier;
     }
-    if row["link"]["kind"] == "automation" {
+    if is_unattended(&row["link"]) {
         // An automation session's permission mode is fixed by the automation;
         // it can never be raised to bypass or lowered to ask from here.
         let plan = row["link"]["approvalMode"].as_str() == Some("plan");
@@ -2760,7 +2763,7 @@ async fn set_session_permissions(st: &AppState, p: Value) -> Result<Value, Dispa
         _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, bypass or null", StatusCode::BAD_REQUEST)),
     };
     // An automation session's permission mode is fixed by the schedule.
-    if row["link"]["kind"] == "automation" {
+    if is_unattended(&row["link"]) {
         return Err(derr("conflict", "A scheduled run's permission mode is fixed by the schedule.", StatusCode::CONFLICT));
     }
     // FIX39 item 13: a locked bot's conversation cannot change permission.
@@ -3545,7 +3548,7 @@ async fn finish_turn_failed(
 /// is relayed; the side conversation keeps its visible recovery notice.
 fn after_provider_failure(st: &AppState, sid: &str, turn: &str, detail: Option<String>) {
     let recovering = st.db.turn_data(turn).unwrap_or(Value::Null)["recoveryHandled"] == true;
-    let automation = st.db.session_detail(sid).ok().is_some_and(|row| row["link"]["kind"] == "automation");
+    let automation = st.db.session_detail(sid).ok().is_some_and(|row| is_unattended(&row["link"]));
     if recovering && !automation {
         let state = st.clone();
         let sid = sid.to_owned();
@@ -3865,7 +3868,7 @@ async fn forward_events_with_timeouts(
                 let turn_id=turn.clone();
                 let (kind,normalized)=normalized_permission(&provider,&raw);
                 let base_summary=bloblex_agent_core::permission_summary(&kind,&normalized,&PathBuf::from(session["projectPath"].as_str().unwrap_or("")));
-                let is_automation = session["link"]["kind"]=="automation";
+                let is_automation = is_unattended(&session["link"]);
                 let (summary,decision)=if is_team_tool_permission(&raw) { (base_summary,Some(("policy:team".to_owned(),"TEAM".to_owned()))) }
                 else if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
                 else if mode=="auto" || is_automation {
@@ -4123,7 +4126,7 @@ async fn forward_events_with_timeouts(
             AgentEvent::QuestionRequested { provider_request_id, title, questions } => {
                 // Unattended rail: an automation run cannot wait on a question.
                 // Dismiss it so the turn can finish.
-                let is_automation = st.db.session_detail(&sid).map(|row| row["link"]["kind"]=="automation").unwrap_or(false);
+                let is_automation = st.db.session_detail(&sid).map(|row| is_unattended(&row["link"])).unwrap_or(false);
                 if is_automation {
                     let active = st.sessions.lock().await.get(&sid).cloned();
                     if let Some(active)=active {
@@ -12362,6 +12365,154 @@ mod task_board_tests {
         assert_eq!(dispatch(&st,"task.create",json!({"title":""})).await.unwrap_err().1.code,"invalid_argument");
         assert_eq!(dispatch(&st,"task.get",json!({"taskId":"missing"})).await.unwrap_err().1.code,"not_found");
         assert_eq!(dispatch(&st,"task.runs",json!({"taskId":"missing"})).await.unwrap_err().1.code,"not_found");
+    }
+
+    /// A data folder for the daemon and a staged PNG, as the desktop shell writes one before a task is saved.
+    fn task_image_setup(st:&AppState)->(PathBuf,PathBuf){
+        let dir=std::env::temp_dir().join(format!("bloblex-task-images-{}",Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        *st.team.data_dir.lock().unwrap()=Some(dir.clone());
+        let staged=dir.join("staged.png");
+        std::fs::write(&staged,[0x89,b'P',b'N',b'G',0x0D,0x0A,0x1A,0x0A,0,0,0,0]).unwrap();
+        (dir,staged)
+    }
+
+    #[tokio::test]
+    async fn task_images_are_copied_checked_served_and_removed_with_the_last_task_that_lists_them(){
+        let(st,_)=task_state();
+        let(dir,staged)=task_image_setup(&st);
+        let bad=dir.join("notes.png");
+        std::fs::write(&bad,b"not an image").unwrap();
+        assert_eq!(dispatch(&st,"task.create",json!({"title":"Bad","attachments":[{"path":bad,"name":"notes.png"}]})).await.unwrap_err().1.code,"invalid_argument");
+        assert_eq!(dispatch(&st,"task.create",json!({"title":"Relative","attachments":[{"path":"staged.png"}]})).await.unwrap_err().1.code,"invalid_argument");
+        let task=dispatch(&st,"task.create",json!({"title":"With a picture","images":[{"id":"x","file":"x.png"}],"attachments":[{"path":staged,"name":"Screen.png"}]})).await.unwrap()["task"].clone();
+        let image=task["images"][0].clone();
+        assert_eq!(task["images"].as_array().unwrap().len(),1,"a client cannot write the stored list");
+        assert_eq!(image["name"],"Screen.png");
+        let file=dir.join("task-images").join(image["file"].as_str().unwrap());
+        assert!(file.exists(),"the image is copied into the daemon folder");
+        std::fs::remove_file(&staged).unwrap();
+        let served=dispatch(&st,"task.image",json!({"taskId":task["id"],"imageId":image["id"]})).await.unwrap();
+        assert!(served["dataUrl"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(dispatch(&st,"task.image",json!({"taskId":task["id"],"imageId":"nope"})).await.unwrap_err().1.code,"not_found");
+        // Keeping the image by id leaves it; dropping it removes the file.
+        let kept=dispatch(&st,"task.update",json!({"taskId":task["id"],"expectedVersion":1,"title":"Renamed","attachments":[{"id":image["id"]}]})).await.unwrap()["task"].clone();
+        assert!(file.exists());
+        assert_eq!(dispatch(&st,"task.update",json!({"taskId":task["id"],"expectedVersion":kept["version"],"attachments":[{"id":"someone-elses"}]})).await.unwrap_err().1.code,"invalid_argument");
+        let cleared=dispatch(&st,"task.update",json!({"taskId":task["id"],"expectedVersion":kept["version"],"attachments":[]})).await.unwrap()["task"].clone();
+        assert!(cleared["images"].as_array().unwrap().is_empty());
+        assert!(!file.exists(),"nothing lists the file any more");
+        let _=std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_dispatched_task_hands_its_images_to_the_prompt_and_the_manager_picks_them_by_number(){
+        let(st,_)=task_state();
+        let(dir,staged)=task_image_setup(&st);
+        let(manager,_)=st.db.agent_create(&json!({"name":"Manager","runtimeId":"rt-test","systemRole":"manager","role":"Manager"})).unwrap();
+        let manager_id=manager["id"].as_str().unwrap().to_owned();
+        st.db.create_session_for_agent("mgr-images","rt-test","codex",".","Manager",Some(&manager_id)).unwrap();
+        st.db.create_turn("mgr-turn","mgr-images").unwrap();
+        st.db.append_message_with_data("mgr-images","mgr-turn","user","See these",&json!({"attachments":[{"name":"first.png","mediaType":"image/png","path":staged},{"name":"second.png","mediaType":"image/png","path":staged}]})).unwrap();
+        let call=|arguments:Value|{let st=&st;async move{team::mcp_rpc(st,"mgr-images","mcp.tools.call",&json!({"name":"create_task","arguments":arguments})).await.unwrap()}};
+        let too_far=call(json!({"title":"Bad pick","brief":"b","doneGoal":"d","reportBack":"r","images":[3]})).await;
+        assert!(too_far["content"][0]["text"].as_str().unwrap().contains("Image 3 is not in this conversation"),"{too_far}");
+        let made=call(json!({"title":"Fix from screenshots","brief":"b","doneGoal":"d","reportBack":"r","images":[2],"attachments":[{"path":"C:/Windows/notepad.exe"}]})).await;
+        assert!(made["content"][0]["text"].as_str().unwrap().contains("with 1 image(s)"),"{made}");
+        let drafts=dispatch(&st,"task.list",json!({})).await.unwrap()["tasks"].as_array().cloned().unwrap();
+        assert_eq!(drafts.len(),1,"a bad pick files nothing");
+        assert_eq!(drafts[0]["images"][0]["name"],"second.png");
+        let all=call(json!({"title":"All of them","brief":"b","doneGoal":"d","reportBack":"r","images":"all"})).await;
+        assert!(all["content"][0]["text"].as_str().unwrap().contains("with 2 image(s)"),"{all}");
+        let task=dispatch(&st,"task.list",json!({})).await.unwrap()["tasks"].as_array().cloned().unwrap().into_iter().find(|task|task["title"]=="All of them").unwrap();
+        let prompts=tasks::prompt_images_for_test(&st,&task);
+        assert_eq!(prompts.len(),2);
+        assert!(prompts.iter().all(|item|item["path"].as_str().unwrap().contains("task-images")));
+        let bot=task_bot(&st).await;
+        let started=dispatch(&st,"task.dispatch",json!({"taskId":task["id"],"assigneeAgentId":bot,"expectedVersion":task["version"],"idempotencyKey":"images-1"})).await.unwrap();
+        assert_eq!(started["disposition"],"started");
+        let _=std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_task_waits_for_its_time_and_a_manual_start_is_refused(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        let at=(chrono::Utc::now()+chrono::Duration::hours(2)).to_rfc3339();
+        let task=dispatch(&st,"task.create",json!({"title":"Tonight","schedule":{"kind":"once","at":at},"scheduleAgentId":bot})).await.unwrap()["task"].clone();
+        assert_eq!(task["scheduleState"],"active");
+        let refused=dispatch(&st,"task.dispatch",json!({"taskId":task["id"],"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"manual-1"})).await.unwrap_err();
+        assert_eq!(refused.1.code,"conflict");
+        tasks::sweep(&st).await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":task["id"]})).await.unwrap()["task"]["state"],"unassigned","nothing is due yet");
+        let preview=dispatch(&st,"automation.preview",json!({"schedule":{"kind":"cron","cron":"0 9 * * 1-5","timezone":"UTC"},"count":3})).await.unwrap();
+        assert_eq!(preview["utc"].as_array().unwrap().len(),3);
+    }
+
+    #[tokio::test]
+    async fn a_due_one_time_task_starts_unattended_and_a_late_or_paused_one_is_skipped(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        st.db.agent_update(&bot,&json!({"approvalMode":"bypass"})).unwrap();
+        let make=|title:&str|{let at=(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339();let st=&st;let bot=bot.clone();let title=title.to_owned();async move{dispatch(st,"task.create",json!({"title":title,"schedule":{"kind":"once","at":at},"scheduleAgentId":bot})).await.unwrap()["task"].clone()}};
+        let due_at=|task:&Value|chrono::DateTime::parse_from_rfc3339(task["scheduleNextAt"].as_str().unwrap()).unwrap().with_timezone(&chrono::Utc);
+        // On time: starts, keeps the unattended rails, never bypass even for a bypass bot.
+        let on_time=make("On time").await;
+        tasks::fire_schedule(&st,&on_time,due_at(&on_time)+chrono::Duration::seconds(20),false).await;
+        let started=dispatch(&st,"task.get",json!({"taskId":on_time["id"]})).await.unwrap()["task"].clone();
+        assert_eq!(started["state"],"running");
+        assert_eq!(started["unattended"],true);
+        assert_eq!(started["scheduleState"],"completed");
+        assert_eq!(started["scheduleLastOutcome"],"started");
+        let run=dispatch(&st,"task.runs",json!({"taskId":on_time["id"]})).await.unwrap()["runs"][0].clone();
+        let session=st.db.session_detail(run["sessionId"].as_str().unwrap()).unwrap();
+        assert!(is_unattended(&session["link"]),"{}",session["link"]);
+        assert_eq!(exec_options_for_session(&st,&session).unwrap().approval_mode,ApprovalMode::Auto);
+        // Too late: skipped, still an unassigned draft marked missed, and it does not fire again.
+        let late=make("Too late").await;
+        tasks::fire_schedule(&st,&late,due_at(&late)+chrono::Duration::minutes(10),false).await;
+        let missed=dispatch(&st,"task.get",json!({"taskId":late["id"]})).await.unwrap()["task"].clone();
+        assert_eq!((missed["state"].as_str(),missed["scheduleState"].as_str(),missed["scheduleLastOutcome"].as_str()),(Some("unassigned"),Some("missed"),Some("skipped_late")));
+        // The board is paused: skipped too.
+        let paused=make("Paused").await;
+        tasks::fire_schedule(&st,&paused,due_at(&paused)+chrono::Duration::seconds(5),true).await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":paused["id"]})).await.unwrap()["task"]["scheduleLastOutcome"],"skipped_paused");
+    }
+
+    #[tokio::test]
+    async fn a_repeating_task_starts_a_copy_for_each_occurrence_and_skips_one_that_would_overlap(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        let template=dispatch(&st,"task.create",json!({"title":"Every minute","brief":"Check the build","schedule":{"kind":"cron","cron":"* * * * *","timezone":"UTC"},"scheduleAgentId":bot})).await.unwrap()["task"].clone();
+        let id=template["id"].as_str().unwrap().to_owned();
+        let at=|task:&Value|chrono::DateTime::parse_from_rfc3339(task["scheduleNextAt"].as_str().unwrap()).unwrap().with_timezone(&chrono::Utc);
+        tasks::fire_schedule(&st,&template,at(&template)+chrono::Duration::seconds(3),false).await;
+        let after=dispatch(&st,"task.get",json!({"taskId":id})).await.unwrap()["task"].clone();
+        assert_eq!(after["state"],"unassigned","the template stays a draft");
+        assert_eq!(after["scheduleState"],"active");
+        assert!(at(&after)>at(&template),"the next occurrence moved on");
+        let children=dispatch(&st,"task.list",json!({"parentTaskId":id})).await.unwrap()["tasks"].as_array().cloned().unwrap();
+        assert_eq!(children.len(),1);
+        assert_eq!((children[0]["state"].as_str(),children[0]["unattended"].as_bool(),children[0]["brief"].as_str()),(Some("running"),Some(true),Some("Check the build")));
+        // The first copy is still running: the next occurrence is skipped, not stacked.
+        tasks::fire_schedule(&st,&after,at(&after)+chrono::Duration::seconds(3),false).await;
+        let skipped=dispatch(&st,"task.get",json!({"taskId":id})).await.unwrap()["task"].clone();
+        assert_eq!(skipped["scheduleLastOutcome"],"skipped_overlap");
+        assert_eq!(dispatch(&st,"task.list",json!({"parentTaskId":id})).await.unwrap()["tasks"].as_array().unwrap().len(),1);
+    }
+
+    #[tokio::test]
+    async fn a_task_that_runs_past_its_time_limit_is_closed_as_timed_out(){
+        let(st,_)=task_state();
+        let bot=task_bot(&st).await;
+        let task=dispatch(&st,"task.create",json!({"title":"Short leash","maxRuntimeSecs":60})).await.unwrap()["task"].clone();
+        dispatch(&st,"task.dispatch",json!({"taskId":task["id"],"assigneeAgentId":bot,"expectedVersion":1,"idempotencyKey":"limit-1"})).await.unwrap();
+        tasks::watchdog_at(&st,chrono::Utc::now()+chrono::Duration::seconds(30)).await;
+        assert_eq!(dispatch(&st,"task.get",json!({"taskId":task["id"]})).await.unwrap()["task"]["state"],"running","inside the limit");
+        tasks::watchdog_at(&st,chrono::Utc::now()+chrono::Duration::seconds(120)).await;
+        let closed=dispatch(&st,"task.get",json!({"taskId":task["id"]})).await.unwrap()["task"].clone();
+        assert_eq!(closed["state"],"failed");
+        assert_eq!(dispatch(&st,"task.runs",json!({"taskId":task["id"]})).await.unwrap()["runs"][0]["errorCode"],"timeout");
     }
 }
 }

@@ -257,8 +257,25 @@ export async function refreshTrayMenu(): Promise<void> {
   if (inDesktop) await invoke('refresh_tray_menu')
 }
 
-export async function setCompanionMode(mode: 'hidden' | 'petit' | 'home' | 'home-chat' | 'welcome', animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches, chatHeight?: number): Promise<void> {
-  if (inDesktop) await invoke('set_companion_mode', { mode, animate, chatHeight: chatHeight ?? null })
+export async function setCompanionMode(mode: 'hidden' | 'petit' | 'home' | 'home-chat' | 'welcome', animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches): Promise<void> {
+  if (inDesktop) await invoke('set_companion_mode', { mode, animate })
+}
+
+/** The companion window is frameless, so the page draws its own resize handles and the shell resizes it from the real cursor position. */
+export type CompanionEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+export async function companionResizeBegin(edge: CompanionEdge): Promise<void> {
+  if (inDesktop) await invoke('companion_resize_begin', { edge })
+}
+export async function companionResizeStep(): Promise<void> {
+  if (inDesktop) await invoke('companion_resize_step')
+}
+/** Ends a drag; the shell remembers the size. Returns it in logical pixels, or null outside the desktop app. */
+export async function companionResizeEnd(): Promise<[number, number] | null> {
+  return inDesktop ? invoke<[number, number]>('companion_resize_end') : null
+}
+/** `large` grows the expanded companion, `normal` returns to the remembered size, `default` forgets it. Resolves to whether it is now large. */
+export async function setCompanionSizePreset(preset: 'large' | 'normal' | 'default'): Promise<boolean> {
+  return inDesktop ? invoke<boolean>('set_companion_size_preset', { preset }) : preset === 'large'
 }
 
 export async function quitBloblex(): Promise<void> {

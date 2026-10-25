@@ -19,13 +19,25 @@ A task with no bot is a **draft**. Drafts wait in the Unassigned list. The Manag
 ## Steps
 
 1. Open **Tasks** with the Tasks button in the sidebar header. The board opens with the Board view.
-2. Choose **New task**. Enter a title (required, up to 120 characters), a brief, a done goal, a report-back line and, if you want, a project. Choose **Add task**. The dialog holds the brief to 8,000 characters; the daemon accepts up to 12,000.
-3. Give the draft to a bot in one of two ways: drag the draft onto the bot's lane, or open the draft's **Assign to** menu and choose the bot. Either action assigns the task and starts it, or queues it if the bot is busy or a limit is reached.
+2. Choose **New task**. Enter a title (required, up to 120 characters), what needs doing (up to 12,000 characters), a done goal and a report-back line. Add images if the bot needs to see something: choose them, paste them or drop them in, up to 8, 10 MB each; they go to the bot with the task. Pick a project and a bot if you already know them, how long a run may last (30 minutes unless you change it) and, if you like, your own estimate. Choose **Add task**, or **Add and start** when you chose a bot and left **When** on **Now**.
+3. Give a draft to a bot in one of two ways: drag the draft onto the bot's lane, or open the draft's **Assign to** menu and choose the bot. Either action assigns the task and starts it, or queues it if the bot is busy or a limit is reached. Open a draft any time before that to change any of its fields, its images or when it runs.
+
+### When a task runs
+
+The **When** control has three choices. **Now** means the task runs when it is given to a bot. **Once** runs it at a date and time you pick, on the bot you choose. **Repeat** runs it on a schedule (every day, on weekdays, every week, every few hours, or your own cron line) on the bot you choose, and starts a fresh copy of the task for each occurrence, shown under the original in the Tree. The dialog lists the next few run times. Scheduled tasks wait in their own **Scheduled** list under the drafts and cannot be dragged; the schedule starts them.
+
+A scheduled run is unattended: it keeps the same safety limits as an automation. It never runs with full access, anything it would have to ask you about is declined, it cannot ask you questions, it stops at its time limit, it respects the task limit and the global pause, and it is skipped while the previous copy of a repeating task is still going.
+
+Runs only while Bitbots is open and this computer is on and awake. A run that is missed by more than five minutes is skipped, not run late. The task shows what the last occurrence did (started, queued, skipped and why).
+
+### Images and the Manager
+
+When you give the Manager images in a conversation and ask it to make tasks, it can attach those images to the drafts it files, by their order in the conversation. The images are copied into Bitbots' own folder with the task and are removed when no task uses them any more. Remote devices cannot see them.
 4. Watch the lane. A bot's lane lists work that needs you first, then work ready for review, then work in progress, then the queue in order.
 5. To stop a running task, open it and choose **Stop**. Stop asks the run's conversation to cancel.
 6. To review a task that is ready for review, open it and choose **Mark done** or **Not done**. Mark done closes the task as Done. Not done marks it Failed. The board records your decision as evidence.
 7. To try a failed task again, open it and choose **Try again with** and a bot.
-8. To remove work before it starts, choose **Discard** on a draft (the task is cancelled), or **Unassign** on a queued task (it returns to Draft).
+8. To remove work before it starts, choose **Discard task** in a draft's dialog (the task is cancelled), or **Unassign** on a queued task (it returns to Draft).
 
 ## States in plain words
 
@@ -66,5 +78,5 @@ These are the behaviours the code and its tests describe. They were not re-run i
 ## Limits and what is not built
 
 - Only report-only work is supported. Choosing a supervision policy other than report-only is refused with `unsupported`.
-- The Manager review loop, schedules on tasks, GitHub source links, a remote task list, the terminal dock, the chat background, Cursor and Grok bots, connectors, computer control and the phone relay are not built. The plan is in [expansion-plan-v2](../../../plans/expansion-plan-v2.md).
+- The Manager review loop, GitHub source links, a remote task list, the terminal dock, the chat background, Cursor and Grok bots, connectors, computer control and the phone relay are not built. The plan is in [expansion-plan-v2](../../../plans/expansion-plan-v2.md).
 - The board has no control for the concurrency limit or the global pause. The daemon enforces both.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardTask } from '../types'
-import { dispatchMessage, draftTasks, elapsedLabel, laneAvailability, laneTasks, remainingMinutes } from './taskModel'
+import { SCHEDULE_DISCLAIMER, dispatchMessage, draftTasks, elapsedLabel, laneAvailability, laneTasks, remainingMinutes, scheduleSummary, scheduledTasks } from './taskModel'
+import type { Agent } from '../types'
 
 const NOW = Date.parse('2026-10-21T12:00:00Z')
 const task = (id: string, state: BoardTask['state'], extra: Partial<BoardTask> = {}): BoardTask => ({
@@ -41,5 +42,16 @@ describe('task model', () => {
     expect(elapsedLabel('2026-10-21T11:00:00Z', null, NOW)).toBe('1 h')
     expect(elapsedLabel(null, null, NOW)).toBeNull()
     expect(elapsedLabel('2026-10-21T12:00:30Z', null, NOW)).toBeNull()
+  })
+
+  it('keeps scheduled tasks out of the drafts and describes their schedule', () => {
+    const repeat = task('r', 'unassigned', { assigneeAgentId: null, schedule: { kind: 'cron', cron: '0 9 * * 1-5', timezone: 'UTC' }, scheduleAgentId: 'a1', scheduleState: 'active', scheduleNextAt: '2026-10-22T09:00:00Z' })
+    const missed = task('m', 'unassigned', { assigneeAgentId: null, schedule: { kind: 'once', at: '2026-10-20T09:00:00Z' }, scheduleAgentId: 'a1', scheduleState: 'missed' })
+    const plain = task('p', 'unassigned', { assigneeAgentId: null })
+    expect(draftTasks([repeat, missed, plain]).map((item) => item.id).sort()).toEqual(['m', 'p'])
+    expect(scheduledTasks([repeat, missed, plain]).map((item) => item.id)).toEqual(['r'])
+    expect(scheduleSummary(repeat, [{ id: 'a1', name: 'Codex' } as Agent])).toBe('Weekdays at 09:00 · Codex')
+    expect(scheduleSummary(plain, [])).toBeNull()
+    expect(SCHEDULE_DISCLAIMER).toContain('skipped, not run late')
   })
 })

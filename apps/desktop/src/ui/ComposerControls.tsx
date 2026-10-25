@@ -154,7 +154,7 @@ export function AttachmentTray({ attachments, onRemove }: { attachments: Compose
   if (!attachments.length) return null
   return <ul className="composer-attachments" aria-label="Attached images">
     {attachments.map((item) => <li key={item.id} className={`composer-attachment ${item.status}`} title={item.error ?? item.name}>
-      <img src={item.previewUrl} alt={item.name} />
+      {item.previewUrl ? <img src={item.previewUrl} alt={item.name} /> : <span className="composer-attachment-blank" aria-hidden="true" />}
       {item.status === 'staging' && <span className="composer-attachment-state" aria-label="Preparing image"><LoaderCircle size={14} className="spinning" aria-hidden="true" /></span>}
       {item.status === 'error' && <span className="composer-attachment-state error" role="img" aria-label={item.error ?? 'Image could not be attached'}><X size={14} aria-hidden="true" /></span>}
       <button type="button" className="composer-attachment-remove" aria-label={`Remove ${item.name}`} onClick={() => onRemove(item.id)}><X size={11} aria-hidden="true" /></button>

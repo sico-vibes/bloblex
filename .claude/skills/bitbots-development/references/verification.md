@@ -19,6 +19,7 @@ $env:TAURI_CONFIG='{"bundle":{"externalBin":[]}}'   # skip staged sidecars for a
 cargo test -p bloblex-desktop --lib
 ```
 
+- Run vitest from `apps/desktop` (`cd apps/desktop; npx vitest run <file>`); from the root, `--root apps/desktop` fails for tests that mount `App` ("Denied ID ...docs/releases"). `FIX37.updateBadge` fails on `main` at `30c7b3d` (expects beta.36), and `cargo clippy --workspace` fails inside `bloblex-desktop` on Rust 1.94 in untouched code; use `--exclude bloblex-desktop` for a clean clippy run.
 - Run the Vitest suite on a quiet machine. When lanes or cargo builds run at the same time, mounted tests time out in large numbers (57 and 100 false failures were seen); re-run the failing files alone, or use `npx vitest run --maxWorkers=4`, before believing a failure.
 - When filtering output in PowerShell, `Select-String` is case-insensitive: a pattern for `FAILED` also matches test names containing "failed" and can push the summary line out of view. Use `-CaseSensitive`.
 - The desktop crate cannot build from a path containing an apostrophe (the main checkout `D:\Basem's\...`): the Windows resource compiler mangles the icon path. Use a worktree or clone at `D:\fxNN`.

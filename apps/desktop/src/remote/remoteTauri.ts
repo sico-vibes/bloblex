@@ -179,7 +179,12 @@ export async function showMainSettings(sessionId?: string | null, page?: Setting
 export async function setCompanionVisibility(visible: boolean): Promise<void> { void visible }
 export async function setCloseToTray(enabled: boolean): Promise<void> { void enabled }
 export async function refreshTrayMenu(): Promise<void> { /* no tray on a device */ }
-export async function setCompanionMode(mode: 'hidden' | 'petit' | 'home' | 'home-chat' | 'welcome', animate = true, chatHeight?: number): Promise<void> { void mode; void animate; void chatHeight }
+export async function setCompanionMode(mode: 'hidden' | 'petit' | 'home' | 'home-chat' | 'welcome', animate = true): Promise<void> { void mode; void animate }
+export type CompanionEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+export async function companionResizeBegin(edge: CompanionEdge): Promise<void> { void edge }
+export async function companionResizeStep(): Promise<void> { /* a device has no companion window */ }
+export async function companionResizeEnd(): Promise<[number, number] | null> { return null }
+export async function setCompanionSizePreset(preset: 'large' | 'normal' | 'default'): Promise<boolean> { return preset === 'large' }
 export async function quitBloblex(): Promise<void> { /* a device cannot quit the host */ }
 export async function startDaemonEventStream(): Promise<void> { /* the socket opens with the first listener */ }
 export async function ensureDaemon(): Promise<void> { /* the host runs the daemon */ }

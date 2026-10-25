@@ -116,7 +116,8 @@ describe('MemoryPage', () => {
     const blobOptions = await (async () => {
       const trigger = dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Bot"]')!
       await act(async () => { trigger.click() })
-      return [...trigger.parentElement!.querySelectorAll('[role="option"]')].map((option) => option.textContent)
+      // The dropdown floats in a portal inside a dialog; the trigger names its list.
+      return [...document.getElementById(trigger.getAttribute('aria-controls')!)!.querySelectorAll('[role="option"]')].map((option) => option.textContent)
     })()
     expect(blobOptions).toEqual(['Codex'])
     await act(async () => { dialog.querySelector<HTMLElement>('.select-trigger[aria-label^="Bot"]')!.click() })

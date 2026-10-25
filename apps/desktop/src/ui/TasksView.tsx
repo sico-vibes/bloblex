@@ -8,7 +8,9 @@ import { rpcFailure } from '../executionContract'
 import { DelegateBoard } from './DelegateBoard'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { Select } from './Select'
-import { TASK_STATE_LABEL, assignableAgents, dispatchMessage, elapsedLabel, newIdempotencyKey } from './taskModel'
+import { TaskForm } from './TaskForm'
+import { TaskImageStrip } from './TaskImageStrip'
+import { SCHEDULE_OUTCOME_LABEL, TASK_STATE_LABEL, assignableAgents, dispatchMessage, elapsedLabel, newIdempotencyKey, scheduleSummary } from './taskModel'
 import { useTasks, type TaskInput } from './useTasks'
 import './tasks.css'
 
@@ -74,47 +76,44 @@ export function TasksView({ agents, projects, runtimes, connected, onBack, onOpe
         {!board.loaded && !board.error ? <p className="tasks-loading">Loading tasks…</p> : view === 'tree' ? <TaskTree tasks={board.tasks} agents={agents} nowMs={nowMs} onOpen={(task) => setOpenId(task.id)} /> : view === 'timeline' ? <TaskTimeline tasks={board.tasks} runsByTask={runsByTask} agents={agents} nowMs={nowMs} onOpen={(task) => setOpenId(task.id)} /> : <DelegateBoard tasks={board.tasks} agents={agents} projects={projects} nowMs={nowMs} connected={connected} busy={busy} runtimeName={runtimeName} onAssign={(task, agent) => void assign(task, agent)} onOpen={(task) => setOpenId(task.id)} />}
       </div>
     </div>
-    {creating && <NewTaskDialog projects={projects} onClose={() => setCreating(false)} onCreate={async (input) => { await board.create(input); setCreating(false) }} />}
-    {openTask && <TaskDialog task={openTask} agents={agents} projects={projects} nowMs={nowMs} onClose={() => setOpenId(null)} board={board} onOpenSession={onOpenSession} onAssign={assign} />}
+    {creating && <TaskFormDialog task={null} agents={agents} projects={projects} connected={connected} loadImage={board.image} onClose={() => setCreating(false)} onSave={async (input, start) => { const created = await board.create(input); setCreating(false); if (start) await assign(created, start) }} />}
+    {openTask && <TaskDialog task={openTask} agents={agents} projects={projects} connected={connected} nowMs={nowMs} onClose={() => setOpenId(null)} board={board} onOpenSession={onOpenSession} onAssign={assign} />}
   </div>
 }
 
-function NewTaskDialog({ projects, onClose, onCreate }: { projects: readonly Project[]; onClose: () => void; onCreate: (input: TaskInput) => Promise<void> }) {
+/** The create and edit dialog around the shared form. `save` returns once the task is stored (and started, when asked). */
+function TaskFormDialog({ task, agents, projects, connected, loadImage, onClose, onSave, onDiscard }: {
+  task: BoardTask | null; agents: readonly Agent[]; projects: readonly Project[]; connected: boolean
+  loadImage: (taskId: string, imageId: string) => Promise<string>
+  onClose: () => void; onSave: (input: TaskInput, start: Agent | null) => Promise<void>; onDiscard?: () => Promise<void>
+}) {
   const entered = useDialogEntered()
   const { ref, close } = useDialogAccessibility(onClose)
-  const [title, setTitle] = useState('')
-  const [brief, setBrief] = useState('')
-  const [doneGoal, setDoneGoal] = useState('')
-  const [reportBack, setReportBack] = useState('')
-  const [projectId, setProjectId] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [failure, setFailure] = useState<string | null>(null)
-  const valid = title.trim().length > 0 && title.trim().length <= 120 && brief.length <= 8000
-  const submit = async () => {
-    if (!valid || saving) return
-    setSaving(true); setFailure(null)
-    try { await onCreate({ title: title.trim(), brief: brief.trim(), doneGoal: doneGoal.trim(), reportBack: reportBack.trim(), projectId: projectId || null }) }
-    catch (reason) { setFailure(rpcFailure(reason).message); setSaving(false) }
-  }
+  const headingId = task ? 'task-edit-title' : 'task-new-title'
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
-    <section ref={ref} className="blob-dialog task-dialog" role="dialog" aria-modal="true" aria-labelledby="task-new-title" tabIndex={-1}>
-      <h2 id="task-new-title">New task</h2>
-      <label className="blob-field"><span>Title</span><input data-dialog-initial-focus value={title} maxLength={120} placeholder="Write the release notes" onChange={(event) => setTitle(event.target.value)} /></label>
-      <label className="blob-field"><span>What needs doing</span><textarea rows={4} value={brief} placeholder="Summarise what changed since the last release for the changelog." onChange={(event) => setBrief(event.target.value)} /></label>
-      <label className="blob-field"><span>Done when</span><input value={doneGoal} maxLength={400} placeholder="A draft is in docs/releases" onChange={(event) => setDoneGoal(event.target.value)} /></label>
-      <label className="blob-field"><span>Report back</span><input value={reportBack} maxLength={400} placeholder="A short summary and the files changed" onChange={(event) => setReportBack(event.target.value)} /></label>
-      <div className="blob-field"><span>Project</span><Select ariaLabel="Project" variant="field" value={projectId} placeholder="No project" onChange={setProjectId} options={[{ value: '', label: 'No project' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></div>
-      {failure && <p className="tasks-problem" role="alert">{failure}</p>}
-      <div className="blob-dialog-actions">
-        <button type="button" className="secondary-button" onClick={close}>Cancel</button>
-        <button type="button" className="primary-button" disabled={!valid || saving} onClick={() => void submit()}>{saving ? 'Saving…' : 'Add task'}</button>
-      </div>
+    <section ref={ref} className="blob-dialog task-dialog" role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1}>
+      <TaskForm task={task} agents={agents} projects={projects} connected={connected} heading={task ? 'Edit task' : 'New task'} headingId={headingId} submitLabel={task ? 'Save' : 'Add task'} startLabel={task ? 'Save and start' : 'Add and start'}
+        loadImage={loadImage} onCancel={close} onSubmit={onSave} onDiscard={onDiscard} />
     </section>
   </div>
 }
 
-function TaskDialog({ task, agents, projects, nowMs, board, onClose, onOpenSession, onAssign }: {
-  task: BoardTask; agents: readonly Agent[]; projects: readonly Project[]; nowMs: number
+type TaskDialogProps = {
+  task: BoardTask; agents: readonly Agent[]; projects: readonly Project[]; connected: boolean; nowMs: number
+  board: ReturnType<typeof useTasks>; onClose: () => void; onOpenSession: (sessionId: string) => void; onAssign: (task: BoardTask, agent: Agent) => Promise<void>
+}
+
+/** A draft opens in the editor (it is the only state the daemon lets the owner edit); anything else opens its details. */
+function TaskDialog(props: TaskDialogProps) {
+  const { task, agents, projects, connected, board, onClose, onAssign } = props
+  if (task.state !== 'unassigned') return <TaskDetailDialog {...props} />
+  return <TaskFormDialog task={task} agents={agents} projects={projects} connected={connected} loadImage={board.image} onClose={onClose}
+    onSave={async (input, start) => { const saved = await board.update(task, input); onClose(); if (start) await onAssign(saved, start) }}
+    onDiscard={async () => { await board.act('task.cancel', task); onClose() }} />
+}
+
+function TaskDetailDialog({ task, agents, projects, nowMs, board, onClose, onOpenSession, onAssign }: {
+  task: BoardTask; agents: readonly Agent[]; projects: readonly Project[]; connected: boolean; nowMs: number
   board: ReturnType<typeof useTasks>; onClose: () => void; onOpenSession: (sessionId: string) => void; onAssign: (task: BoardTask, agent: Agent) => Promise<void>
 }) {
   const entered = useDialogEntered()
@@ -139,18 +138,22 @@ function TaskDialog({ task, agents, projects, nowMs, board, onClose, onOpenSessi
         {task.startedAt && <><dt>Started</dt><dd>{when(task.startedAt)}</dd></>}
         {took && <><dt>{task.completedAt ? 'Took' : 'Running for'}</dt><dd>{took}</dd></>}
         {task.estimateMinutes ? <><dt>Estimate</dt><dd>about {task.estimateMinutes} min</dd></> : null}
+        {task.maxRuntimeSecs ? <><dt>Time limit</dt><dd>{Math.round(task.maxRuntimeSecs / 60)} min</dd></> : null}
+        {task.unattended && <><dt>Started by</dt><dd>A schedule</dd></>}
+        {task.schedule && <><dt>Schedule</dt><dd>{scheduleSummary(task, agents)}{task.scheduleLastOutcome ? ` · ${SCHEDULE_OUTCOME_LABEL[task.scheduleLastOutcome] ?? task.scheduleLastOutcome}` : ''}</dd></>}
       </dl>
       {task.brief && <section className="task-text"><h3>What needs doing</h3><p>{task.brief}</p></section>}
       {task.doneGoal && <section className="task-text"><h3>Done when</h3><p>{task.doneGoal}</p></section>}
       {task.reportBack && <section className="task-text"><h3>Report back</h3><p>{task.reportBack}</p></section>}
+      {!!task.images?.length && <section className="task-text"><h3>Images</h3><TaskImageStrip taskId={task.id} images={task.images} load={board.image} /></section>}
       {state === 'awaiting_review' && <p className="task-note">The bot finished its turn. Check the result, then mark the task done or not done. Finishing a turn does not count as done.</p>}
       {runs.length > 1 && <ul className="task-runs" aria-label="Attempts">{runs.slice().sort((a, b) => b.attempt - a.attempt).map((item) => <li key={item.id}><span>Attempt {item.attempt}</span><span>{item.assigneeAgentName ?? 'Bot'}</span><span>{TASK_STATE_LABEL[item.state as keyof typeof TASK_STATE_LABEL] ?? item.state}</span></li>)}</ul>}
       {failure && <p className="tasks-problem" role="alert">{failure}</p>}
       <div className="blob-dialog-actions task-actions">
         <button type="button" className="secondary-button" onClick={close}>Close</button>
         {latest?.sessionId && <button type="button" className="secondary-button" onClick={() => onOpenSession(latest.sessionId as string)}>Open conversation</button>}
-        {(state === 'unassigned' || state === 'failed' || state === 'awaiting_review') && <>{state === 'unassigned' && <button type="button" className="secondary-button" disabled={working} onClick={() => void run(async () => { await board.act('task.cancel', task); onClose() })}>Discard</button>}
-          <Select ariaLabel={state === 'unassigned' ? 'Assign task' : 'Try again with'} variant="field" value="" placeholder={state === 'unassigned' ? 'Assign to…' : 'Try again with…'} menuPlacement="top" options={assignableAgents(agents).map((agent) => ({ value: agent.id, label: agent.name }))} onChange={(value) => { const agent = agents.find((item) => item.id === value); if (agent) void run(async () => { await onAssign(task, agent); onClose() }) }} /></>}
+        {(state === 'failed' || state === 'awaiting_review') && <>
+          <Select ariaLabel="Try again with" variant="field" value="" placeholder="Try again with…" menuPlacement="top" options={assignableAgents(agents).map((agent) => ({ value: agent.id, label: agent.name }))} onChange={(value) => { const agent = agents.find((item) => item.id === value); if (agent) void run(async () => { await onAssign(task, agent); onClose() }) }} /></>}
         {state === 'queued' && <><button type="button" className="secondary-button" disabled={working} onClick={() => void run(() => board.act('task.unassign', task))}>Unassign</button><button type="button" className="secondary-button" disabled={working} onClick={() => void run(async () => { await board.act('task.cancel', task); onClose() })}>Cancel task</button></>}
         {(state === 'running' || state === 'needs_you') && <button type="button" className="secondary-button" disabled={working} onClick={() => void run(() => board.act('task.stop', task))}>Stop</button>}
         {(state === 'awaiting_review' || state === 'needs_you') && <><button type="button" className="secondary-button" disabled={working} onClick={() => void run(async () => { await board.review(task, latest?.id ?? null, 'not_done', 'Marked not done by you.'); onClose() })}>Not done</button><button type="button" className="primary-button" disabled={working} onClick={() => void run(async () => { await board.review(task, latest?.id ?? null, 'done', 'Marked done by you.'); onClose() })}>Mark done</button></>}

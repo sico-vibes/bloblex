@@ -1,7 +1,7 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "d04f6a1",
+  "revision": "bea1af1",
   "documentCount": 316,
   "assets": [
     {
@@ -586,7 +586,7 @@
       "title": "Companion and dictation",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "bbc1410149a925d5504bb1eab91e675469585f7791ea12dee6d1c93512e67824",
+      "sha256": "8a4c96cbe14ccb654ea9851ffd86b07b5868927c0d2a28df78a61d2caf57576d",
       "headings": [
         {
           "id": "before-you-start",
@@ -601,6 +601,11 @@
         {
           "id": "what-it-shows",
           "text": "What it shows",
+          "level": 3
+        },
+        {
+          "id": "resize-it",
+          "text": "Resize it",
           "level": 3
         },
         {
@@ -1771,7 +1776,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "8a02820e9112c9c53f92c890b8028c1e6ce72c235ddd59b25bf36e3c4b64ae5b",
+      "sha256": "18b73858f7550ce4a4d6a390347435cf00c48caf6a2e253b28771387a70b3cff",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1801,7 +1806,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "0428828e921efda790ae8b0b5b8015b8d8afd88a8c0d3492d358f8bfe97dc8c7",
+      "sha256": "e2afe8799eb66a49c607972cea57a2d8efbb08617893124ac84a0a78ae200311",
       "headings": [
         {
           "id": "update-commands",
@@ -2514,7 +2519,7 @@
       "title": "Task board",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "30e186cf33cf789da9dbb0aa738001acf639f540b39dc02d768adc26f22dc8ce",
+      "sha256": "5d311e4e96323062d4e3c7e812fecbf3cbefb7e59343a3e89b5e93c72eed5046",
       "headings": [
         {
           "id": "purpose",
@@ -2584,7 +2589,7 @@
       "title": "Tasks",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "bc99dc8c640e8bca2c79905bbc5b2a2d6817c4192eb5af8b70af0a0866b72c61",
+      "sha256": "5a585c6d754d3c24aef93e10fd5810b9255f022b25a92c3f8d0e50bf9056d164",
       "headings": [
         {
           "id": "before-you-start",
@@ -2600,6 +2605,16 @@
           "id": "steps",
           "text": "Steps",
           "level": 2
+        },
+        {
+          "id": "when-a-task-runs",
+          "text": "When a task runs",
+          "level": 3
+        },
+        {
+          "id": "images-and-the-manager",
+          "text": "Images and the Manager",
+          "level": 3
         },
         {
           "id": "states-in-plain-words",
@@ -3433,7 +3448,7 @@
       "title": "Third-party notices",
       "section": "Legal",
       "status": "Legal notice",
-      "sha256": "ce01a3fbfb310fb665118749d38fe9b2229f7d3f0a8f96c0cf5459e8276803b6",
+      "sha256": "1fdd7abf31c16b921e2ae276ab8948afa51364abb5de94d6ca0f75989bfc66f9",
       "headings": [
         {
           "id": "bundled-fonts",

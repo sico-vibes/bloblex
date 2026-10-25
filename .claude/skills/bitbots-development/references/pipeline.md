@@ -2,6 +2,10 @@
 
 Last reviewed: 2026-10-22. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
 
+## FIX43 (owner, 24 October 2026)
+
+For the FIX43 wave the owner assigned all implementation to one Claude Sonnet 5.5 agent at high effort (a sub-agent with `model: sonnet`, `effort: high`), working in order in `D:x71`; the Director only briefs, reviews, gates, merges and commits. Brief: `D:x71rief.md` (to be kept in `docs/history/fix-43/` when the wave lands). A worktree's own browser preview is a `.claude/launch.json` entry pointing Vite at the worktree on its own port (`fx71-preview`, 5175).
+
 ## Current arrangement (owner, 21 and 22 October 2026)
 
 The owner resumed the product expansion on 21 October 2026 with three lanes, recorded in the 22 October amendment of `AGENTS.md`. It applies until the owner says otherwise.

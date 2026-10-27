@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 const files = {
   theme: readFileSync(join(process.cwd(), 'src/ui/theme.css'), 'utf8'),
-  frost: readFileSync(join(process.cwd(), 'src/ui/themes/frost.css'), 'utf8'),
+  haze: readFileSync(join(process.cwd(), 'src/ui/themes/haze.css'), 'utf8'),
   companion: readFileSync(join(process.cwd(), 'src/ui/companion.css'), 'utf8'),
   shell: readFileSync(join(process.cwd(), 'src/ui/shell.css'), 'utf8'),
 }
@@ -28,7 +28,7 @@ function tokens() {
   const style = getComputedStyle(document.documentElement)
   return Object.fromEntries(['--surface-app', '--surface-panel', '--surface-raised', '--text-1', '--text-2', '--text-3', '--line', '--accent', '--font-ui', '--companion-text-settings', '--companion-text-activity'].map((key) => [key, style.getPropertyValue(key).trim()]))
 }
-function setLook(look: 'bitbots' | 'blobots', theme = 'dark', surface: 'companion' | 'dictation' = 'companion') {
+function setLook(look: 'haze' | 'blobots', theme = 'dark', surface: 'companion' | 'dictation' = 'companion') {
   const root = document.documentElement
   root.className = `${surface}-surface`
   root.dataset.style = look
@@ -37,38 +37,11 @@ function setLook(look: 'bitbots' | 'blobots', theme = 'dark', surface: 'companio
 }
 
 describe('mounted look tokens on companion and dictation surfaces', () => {
-  it('applies dark and light look tokens, while preserving the Blobots palette', () => {
+  // Frost (bitbots) and its companion tokens were retired on 27 October 2026.
+  it('preserves the Stone palette on the companion surface', () => {
     inject(files.theme)
-    const baseline = (() => { setLook('blobots', 'light'); return tokens() })()
-    const expected = {
-      bitbots: { dark: ['#20232b', '#c9ccda'], light: ['#f5f6fa', '#4b4d58'] },
-    } as const
-    for (const look of ['bitbots'] as const) {
-      inject(files.frost)
-      for (const surface of ['companion', 'dictation'] as const) {
-        setLook(look, 'dark', surface)
-        const dark = tokens()
-        expect([dark['--surface-app'], dark['--text-2']], `${look} ${surface} dark`).toEqual(expected[look].dark)
-        setLook(look, 'light', surface)
-        const light = tokens()
-        expect([light['--surface-app'], light['--text-2']], `${look} ${surface} light`).toEqual(expected[look].light)
-        expect(light['--companion-text-settings'], `${look} light settings text`).toBe(light['--text-1'])
-        expect(light['--companion-text-activity'], `${look} light activity text`).toBe(light['--text-1'])
-      }
-    }
     setLook('blobots', 'light')
-    expect(tokens()).toEqual(baseline)
-    expect(baseline).toMatchObject({ '--surface-app': '#0e0e0e', '--text-1': '#f4f4f4', '--text-2': '#a6a6a6' })
-  })
-
-  it('keeps main-window Frost tokens out of the companion surface', () => {
-    inject(files.theme)
-    inject(files.frost)
-    setLook('bitbots')
-    expect(files.frost).toContain('--surface-app: transparent')
-    expect(tokens()['--surface-app']).toBe('#20232b')
-    expect(tokens()['--surface-app']).not.toBe('transparent')
-    expect(files.frost).toContain(':root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface)')
+    expect(tokens()).toMatchObject({ '--surface-app': '#0e0e0e', '--text-1': '#f4f4f4', '--text-2': '#a6a6a6' })
   })
 
   it('does not change the compact capsule or dictation island dimensions', () => {
@@ -84,17 +57,10 @@ describe('mounted look tokens on companion and dictation surfaces', () => {
     host.append(capsule, island)
     document.body.append(host)
     const before = [getComputedStyle(capsule).height, getComputedStyle(island).height]
-    for (const look of ['frost'] as const) inject(files[look])
-    for (const look of ['bitbots'] as const) {
+    inject(files.haze)
+    for (const look of ['haze', 'blobots'] as const) {
       setLook(look)
       expect([getComputedStyle(capsule).height, getComputedStyle(island).height]).toEqual(before)
-    }
-  })
-
-  it('keeps its new light layer limited to explicit look and overlay selectors', () => {
-    for (const look of ['frost'] as const) {
-      expect(files[look]).toContain('.companion-surface[data-surface-theme="light"]')
-      expect(files[look]).toContain('.dictation-surface[data-surface-theme="light"]')
     }
   })
 })

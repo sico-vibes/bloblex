@@ -10,7 +10,7 @@ vi.mock('../vendor/robot-heads', () => ({
 }))
 
 import { BlobCanvas } from './BlobCanvas'
-import { setBitbotsEnabled } from './bitbots'
+import { setThemeStyle } from './bitbots'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -19,7 +19,7 @@ let host: HTMLDivElement | null = null
 afterEach(() => {
   if (root) act(() => root!.unmount())
   host?.remove(); root = null; host = null
-  setBitbotsEnabled(false)
+  setThemeStyle('blobots')
 })
 
 function robotFor(node: React.ReactNode) {

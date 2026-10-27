@@ -83,7 +83,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 })
 
 import { App } from './App'
-import { setBitbotsEnabled } from '../blob/bitbots'
+import { setThemeStyle } from '../blob/bitbots'
 import { friendlyErrorText } from './errorCopy'
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 
@@ -242,7 +242,7 @@ beforeEach(() => {
   h.sessionError = null
   for (const mock of Object.values(h)) if (typeof mock === 'function' && 'mockReset' in mock) (mock as ReturnType<typeof vi.fn>).mockReset()
   // The blob look editor is the classic (Blobots) one here; Bitbots is tested elsewhere.
-  setBitbotsEnabled(false)
+  setThemeStyle('blobots')
   configure()
 })
 
@@ -315,7 +315,7 @@ describe('blob roster and editor', () => {
     configure(snapshot({ runtimes: [codexRuntime], agents: [], sessions: [] }))
     const view = startApp()
     await view.settle()
-    await click(view.host.querySelector('.look-orb-choice[data-look="bitbots"]'))
+    await click(view.host.querySelector('.look-orb-choice[data-look="blobots"]'))
     await click(buttonNamed(view.host, 'Continue'))
     await click(buttonNamed(view.host, 'Skip'))
     expect(view.host.querySelector('[data-provider="codex"]')).not.toBeNull()

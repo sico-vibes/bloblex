@@ -159,7 +159,8 @@ describe('blob looks', () => {
     expect(normalizeLook({ shape: 'circle', art: 'painted', paint: 'ufo' })).toEqual({ shape: 'circle', art: 'painted', paint: 'ufo' })
     expect(normalizeLook({ shape: 'circle', art: 'glossy' })).toEqual({ shape: 'circle' })
     expect(normalizeLook({ shape: 'circle', paint: 'cat' })).toEqual({ shape: 'circle' })
-    expect(agentLook({ id: 'a', look: { shape: 'pebble', art: 'robot-pop', paint: 'kitty' } })).toMatchObject({ shape: 'pebble', seed: 'a', art: 'robot-pop', paint: 'kitty' })
+    // A stored retired robot (2D, flat, dot) becomes the 3D robot.
+    expect(agentLook({ id: 'a', look: { shape: 'pebble', art: 'robot-pop', paint: 'kitty' } })).toMatchObject({ shape: 'pebble', seed: 'a', art: 'robot', paint: 'kitty' })
     expect(draftLook({ look: { shape: 'cloud', seed: 'mine', art: 'blob' } }, 'agent-2')).toEqual({ shape: 'cloud', seed: 'mine', art: 'blob' })
   })
 

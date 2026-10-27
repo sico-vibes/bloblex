@@ -51,22 +51,20 @@ afterEach(() => { if (root) act(() => root.unmount()); host?.remove(); vi.unstub
 
 describe('General settings mounted controls', () => {
 
-  it('offers three looks, Bitbots-only options and font settings', async () => {
+  it('offers the two looks and font settings', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect([...host.querySelectorAll('.look-orb-choice .look-orb-tooltip')].map((button) => button.textContent)).toEqual(['Haze','Frost','Stone'])
-    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['haze', 'bitbots', 'blobots'])
+    expect([...host.querySelectorAll('.look-orb-choice .look-orb-tooltip')].map((button) => button.textContent)).toEqual(['Haze','Stone'])
+    expect([...host.querySelectorAll<SVGElement>('.appearance-page .look-orb')].map((orb) => orb.dataset.look)).toEqual(['haze', 'blobots'])
     expect(host.querySelector('.appearance-page .look-window')).toBeNull()
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Stone'))?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'blobots' })
-    expect(host.textContent).toContain('This look has no extra options yet.')
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.look-orb-choice')].find((button) => button.textContent?.includes('Frost'))?.click(); await Promise.resolve() })
-    expect(host.textContent).toContain('Wallpaper')
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-page .density-control button')].find((button) => button.textContent === 'Balanced')?.click(); await Promise.resolve() })
-    expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.glass', value: 'balanced' })
+    // Wallpaper and glass belonged to Frost, retired on 27 October 2026.
+    expect(host.textContent).not.toContain('Wallpaper')
+    expect(host.textContent).not.toContain('Look options')
     const font = [...host.querySelectorAll<HTMLButtonElement>('.font-options button')].find((button) => button.textContent === 'Geist')
     await act(async () => { font?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.font', value: 'geist' })
@@ -198,7 +196,7 @@ describe('General settings mounted controls', () => {
   it('offers the global "Bots working at once" limit and saves it', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'concurrency.botsAtOnce': 4 } } : {})
-    setThemeStyle('bitbots')
+    setThemeStyle('haze')
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -224,7 +222,7 @@ describe('General settings mounted controls', () => {
   it('follows the look in its copy without a restart', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
-    setThemeStyle('bitbots')
+    setThemeStyle('haze')
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
     await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -233,7 +231,7 @@ describe('General settings mounted controls', () => {
     act(() => setThemeStyle('blobots'))
     expect(host.querySelector('[aria-label="Notify when a bot finishes or needs approval"]')).not.toBeNull()
     expect(host.querySelector('[aria-label="Notify when a blob finishes or needs approval"]')).toBeNull()
-    act(() => setThemeStyle('bitbots'))
+    act(() => setThemeStyle('haze'))
   })
 
   it('persists the companion launch preference and starts from the window visibility', async () => {

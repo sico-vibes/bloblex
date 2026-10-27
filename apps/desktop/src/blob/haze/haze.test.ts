@@ -1,30 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { HAZE_ICONS, PIXEL_ART, PIXEL_ICONS, isHazeIcon } from './icons'
+import { HAZE_ICONS, isHazeIcon } from './icons'
 import { auraStatusFor } from './HazeAura'
 import { resolveHazeIcon } from './HazeMark'
 import { agentLook, normalizeLook } from '../look'
 import { CHARACTER_ASSETS, HAZE_CHARACTERS } from './characters'
 
 describe('Haze icons', () => {
-  it('draws every pixel icon on a 12×12 grid with the known palette', () => {
-    for (const icon of PIXEL_ICONS) {
-      const rows = PIXEL_ART[icon]
-      expect(rows, icon).toHaveLength(12)
-      for (const row of rows) {
-        expect(row, icon).toHaveLength(12)
-        expect(row, icon).toMatch(/^[.BDLKW]+$/)
-      }
-    }
-  })
-
   it('matches the daemon allowlist (valid_look ICONS)', () => {
-    expect(HAZE_ICONS).toEqual(['logo', 'logo-tint', 'logo-mono', ...PIXEL_ICONS, ...HAZE_CHARACTERS.map(({ id }) => id)])
+    // Pixel icons were retired on 27 October 2026: only the logos and the characters remain.
+    expect(HAZE_ICONS).toEqual(['logo', 'logo-tint', 'logo-mono', ...HAZE_CHARACTERS.map(({ id }) => id)])
     const storageSource = readFileSync(new URL('../../../../../crates/bloblex-storage/src/lib.rs', import.meta.url), 'utf8')
     const rustIcons = storageSource.match(/const ICONS: \[&str; \d+\] = \[([\s\S]*?)\];/)?.[1]?.match(/"([^"]+)"/g)?.map((entry) => entry.slice(1, -1))
     expect(rustIcons).toEqual(HAZE_ICONS)
-    expect(isHazeIcon('px-cat')).toBe(true)
-    expect(isHazeIcon('px-unknown')).toBe(false)
+    expect(isHazeIcon('px-cat')).toBe(false)
+    expect(isHazeIcon('char-kratos')).toBe(true)
   })
 
   it('bundles the approved 29 original and animated portraits, excluding Lara and Samus', () => {
@@ -38,17 +28,16 @@ describe('Haze icons', () => {
   })
 
   it('keeps the icon through normalisation and agentLook, and drops unknown ones', () => {
-    expect(normalizeLook({ shape: 'circle', icon: 'px-owl' })?.icon).toBe('px-owl')
+    expect(normalizeLook({ shape: 'circle', icon: 'px-owl' })?.icon).toBe('logo-tint')
     expect(normalizeLook({ shape: 'circle', icon: 'char-kratos' })?.icon).toBe('char-kratos')
     expect(normalizeLook({ shape: 'circle', icon: 'nope' })?.icon).toBeUndefined()
     expect(agentLook({ id: 'a', look: { shape: 'circle', icon: 'logo-tint' } }).icon).toBe('logo-tint')
   })
 
-  it('uses the logo by default, and a pixel robot when the runtime is unknown', () => {
-    expect(resolveHazeIcon(null, 'claude')).toBe('logo')
-    expect(resolveHazeIcon({ icon: 'logo-mono' }, 'opencode-go')).toBe('logo-mono')
-    expect(resolveHazeIcon({ icon: 'logo' }, null)).toBe('px-robot')
-    expect(resolveHazeIcon({ icon: 'px-frog' }, null)).toBe('px-frog')
+  it('uses the logo by default, and the logo in the bot colour for a retired pixel icon', () => {
+    expect(resolveHazeIcon(null)).toBe('logo')
+    expect(resolveHazeIcon({ icon: 'logo-mono' })).toBe('logo-mono')
+    expect(resolveHazeIcon({ icon: 'px-frog' })).toBe('logo-tint')
   })
 })
 

@@ -34,23 +34,24 @@ function input(value: string, label: string) {
 afterEach(() => { if (root) act(() => root?.unmount()); host?.remove(); root = null; host = null; mocks.rpc.mockReset() })
 
 describe('FirstRunOnboarding', () => {
-  it('offers Haze, Bitbots and Blobots orbs and waits for a choice', async () => {
+  // Frost was retired on 27 October 2026: onboarding offers Haze and Stone.
+  it('offers Haze and Stone orbs and waits for a choice', async () => {
     const { host: mounted } = mount({ runtimes: [runtime] })
     const cards = [...mounted.querySelectorAll<HTMLElement>('.look-orb-choice')]
-    expect(cards.map((card) => card.dataset.look)).toEqual(['haze', 'bitbots', 'blobots'])
-    expect([...mounted.querySelectorAll<SVGElement>('.look-orb-choice .look-orb')].map((orb) => orb.dataset.look)).toEqual(['haze', 'bitbots', 'blobots'])
+    expect(cards.map((card) => card.dataset.look)).toEqual(['haze', 'blobots'])
+    expect([...mounted.querySelectorAll<SVGElement>('.look-orb-choice .look-orb')].map((orb) => orb.dataset.look)).toEqual(['haze', 'blobots'])
     expect(mounted.querySelector('.look-orb-choice .blob-canvas-frame')).toBeNull()
-    expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual(['Haze', 'Frost', 'Stone'])
+    expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual(['Haze', 'Stone'])
     expect(mounted.querySelector('.look-card-copy, .look-tag')).toBeNull()
     expect(button('Continue').disabled).toBe(true)
     expect(mounted.querySelector('.look-preview')?.getAttribute('data-open')).toBe('false')
-    await act(async () => { cards[2].click(); await Promise.resolve() })
+    await act(async () => { cards[1].click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.style', value: 'blobots' })
     expect(mounted.querySelector('.look-preview')?.getAttribute('data-open')).toBe('true')
     expect(document.documentElement.dataset.style).toBe('blobots')
     expect(button('Continue').disabled).toBe(false)
-    await act(async () => { cards[1].click(); await Promise.resolve() })
-    expect(document.documentElement.dataset.style).toBe('bitbots')
+    await act(async () => { cards[0].click(); await Promise.resolve() })
+    expect(document.documentElement.dataset.style).toBe('haze')
     act(() => button('Continue').click())
     expect(mounted.textContent).toContain('What should we call you?')
   })
@@ -128,7 +129,7 @@ describe('FirstRunOnboarding', () => {
     mocks.rpc.mockResolvedValue({ runtimeId: 'runtime-codex', provider: 'codex', validated: true, fallback: false, models: [
       { id: 'gpt-6-sol', displayName: 'GPT-6 Sol', supportedThinking: [], serviceTiers: [], isDefault: true },
     ] })
-    setThemeStyle('bitbots')
+    setThemeStyle('haze')
     const { host: mounted } = mount({ initialStep: 2, runtimes: [runtime] })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(mounted.textContent).toContain('Meet your Manager')
@@ -138,6 +139,6 @@ describe('FirstRunOnboarding', () => {
     expect(mounted.textContent).toContain('every project and bot')
     expect(mounted.textContent).not.toMatch(/\bblob\b/i)
     expect(button('Create Manager')).toBeTruthy()
-    act(() => setThemeStyle('bitbots'))
+    act(() => setThemeStyle('haze'))
   })
 })

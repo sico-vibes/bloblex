@@ -14,7 +14,7 @@ describe('searchSettings', () => {
   })
 
   it('indexes all new appearance choices', () => {
-    for (const term of ['legacy', 'pop', 'dot', 'wallpaper', 'glass', 'font', 'mono']) expect(searchSettings(term).some((entry) => entry.page === 'Appearance'), term).toBe(true)
+    for (const term of ['haze', 'stone', 'characters', 'font', 'mono']) expect(searchSettings(term).some((entry) => entry.page === 'Appearance'), term).toBe(true)
   })
 
   it('requires every word to match', () => {

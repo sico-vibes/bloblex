@@ -2,6 +2,14 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (27 October 2026): two looks, fewer bot arts
+
+Owner decision in the live session of 27 October 2026. It amends the looks and bot art in the 24 and 22 October amendments below.
+
+- **Looks:** only **Haze** (primary, default for new installs) and **Stone** (stored id `blobots`) remain. **Frost** (stored id `bitbots`) is retired, together with its wallpaper and glass settings. Onboarding and Settings offer Haze and Stone. Haze gets the visual-fidelity work.
+- **Bot art:** keep the **3D robot**, **Glossy**, **Hand-painted**, the AI-made **character portraits** and the **logo marks**. The **2D robot** (stored `robot-pop`, which already stood in for the flat and dot robots) and the **pixel icons** (`px-*`) are retired.
+- **Migration:** a saved Frost (and the older Legacy, Pop and Dot) moves to Haze. The 2D, flat and dot robots become the 3D robot, and a pixel icon becomes the logo in the bot's colour. A Haze bot whose coding agent has no logo shows its initial. This happens in the window cache, the pre-paint script, storage startup, every look write and backup import. The daemon still *accepts* the retired values from older clients and backups, and stores what replaced them.
+
 # Amendment (24 October 2026): Sonnet lane for FIX43
 
 Owner directive for the FIX43 wave (task dialog and schedules, the tasks table error, task images, message actions, the companion in every look and resizing, live dictation words, Whistle, conversation branch lines), until the owner says otherwise.

@@ -1,4 +1,4 @@
-/* The flat, pop, dot and hand-painted bots. Pure SVG and CSS keyframes: no
+/* The hand-painted bots (the flat, 2D and dot robots were retired on 27 October 2026). Pure SVG and CSS keyframes: no
    canvas, no timers, no requestAnimationFrame. Every animation stops under
    prefers-reduced-motion, leaving a still pose. */
 
@@ -23,53 +23,6 @@
 .art-type-pixels rect { opacity: 0; animation: art-pixel 1.2s steps(1, end) infinite; animation-delay: calc(var(--i) * .12s); }
 @keyframes art-dot { 0%, 100% { opacity: .15; } 50% { opacity: 1; } }
 @keyframes art-pixel { 0%, 100% { opacity: 0; } 8%, 34% { opacity: 1; } 44% { opacity: 0; } }
-
-/* Flat robot. */
-.flat-head { fill: var(--bot); }
-.flat-rim { fill: none; stroke: rgb(255 255 255 / .38); stroke-width: 1.5; }
-.flat-ear { fill: color-mix(in oklab, var(--bot) 70%, #1a1b22); }
-.flat-visor { fill: #15161d; }
-.flat-eyes rect { fill: #f3f4fb; }
-.flat-eyes path { fill: none; stroke: #f3f4fb; stroke-width: 2.6; stroke-linecap: round; }
-.flat-think-dots circle { fill: #9aa4b8; }
-.flat-type-pixels rect { fill: color-mix(in oklab, var(--bot) 40%, white); }
-.art-mood-waiting .flat-eyes rect { fill: #ffd257; }
-.art-mood-error .flat-eyes path { stroke: #ff5a5a; }
-
-/* Pop robot: ink outline, hard shadow, pastel shell. */
-.pop-shadow { fill: #1d1b18; }
-.pop-ink { fill: #1d1b18; }
-.pop-cap { fill: var(--pop-trim, var(--bot)); stroke: #1d1b18; stroke-width: 2.5; }
-.pop-head { fill: var(--bot); stroke: #1d1b18; stroke-width: 3; }
-.pop-visor { fill: #1d1b18; }
-.pop-shine { fill: #fff; opacity: .22; }
-.pop-eyes rect { fill: var(--pop-screen, #fffaf0); }
-.pop-eyes path { fill: none; stroke: var(--pop-screen, #fffaf0); stroke-width: 2.6; stroke-linecap: round; }
-.pop-think-dots circle { fill: #9aa4b8; }
-.pop-type-pixels rect { fill: #9ff0c9; }
-.art-mood-typing .pop-eyes rect { fill: #9ff0c9; }
-.art-mood-waiting .pop-eyes rect { fill: #ffd257; }
-.art-mood-error .pop-eyes path { stroke: #ff5a5a; }
-
-/* Dot robot: a dark shell and a 7×5 dot screen. */
-.dot-head { fill: #1b1b1b; stroke: #2e2e2e; stroke-width: 1.5; }
-.dot-ear, .dot-stem, .dot-tip { fill: var(--bot); }
-.dot-grid circle { fill: #333; }
-.dot-lit circle { fill: #f4f4f4; }
-.dot-lit-waiting circle, .dot-lit-error circle { fill: #ff4b2b; }
-.dot-lit-happy circle { fill: #7cf7b1; }
-.art-mood-typing .dot-lit circle { fill: var(--bot); }
-.dot-think-dots circle { fill: #c9ccd3; animation: art-dot 1.2s steps(2, end) infinite; animation-delay: calc(var(--i) * .22s); }
-.dot-wave circle { fill: var(--bot); opacity: 0; animation: art-pixel 1.2s steps(1, end) infinite; animation-delay: calc(var(--i) * .1s); }
-.dot-type-a, .dot-type-b { display: none; }
-.art-mood-typing .dot-type-a { display: block; animation: art-swap-a .9s steps(1, end) infinite; }
-.art-mood-typing .dot-type-b { display: block; animation: art-swap-b .9s steps(1, end) infinite; }
-@keyframes art-swap-a { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
-@keyframes art-swap-b { 0%, 49% { opacity: 0; } 50%, 100% { opacity: 1; } }
-.art-mood-waiting .dot-tip { fill: #ff4b2b; animation: art-tip 1s steps(2, end) infinite; }
-.art-mood-idle .dot-lit circle { animation: art-blink-dots 5.5s infinite; }
-@keyframes art-blink-dots { 0%, 94%, 100% { opacity: 1; } 96% { opacity: .1; } }
-@keyframes art-tip { 50% { opacity: .15; } }
 
 /* Hand-painted blobs. The body never moves; only the eyes and the badge do. */
 .pb-shade { color: color-mix(in oklab, var(--pb) 68%, #0c0b1a); }

@@ -15,12 +15,9 @@
         try {
           const settings = JSON.parse(localStorage.getItem('bloblex.appearance') || '{}')
           const storedStyle = localStorage.getItem('bitbots.style')
-          const style = ['haze', 'bitbots', 'blobots'].includes(storedStyle) ? storedStyle : storedStyle ? 'bitbots' : 'haze'
+          // Retired looks (Frost, Pop, Dot, Legacy) paint as Haze.
+          const style = storedStyle === 'blobots' ? 'blobots' : 'haze'
           document.documentElement.dataset.style = style
-          const glass = localStorage.getItem('bitbots.glass')
-          document.documentElement.dataset.glass = ['solid', 'balanced', 'clear'].includes(glass) ? glass : 'solid'
-          const wallpaper = localStorage.getItem('bitbots.wallpaper')
-          document.documentElement.dataset.wallpaper = ['lake', 'dusk', 'bloom', 'sand', 'custom'].includes(wallpaper) ? wallpaper : 'lake'
           const queryTheme = params.get('theme')
           const theme = ['system', 'dark', 'light'].includes(queryTheme) ? queryTheme : ['system', 'dark', 'light'].includes(settings.theme) ? settings.theme : 'system'
           const textSize = ['small', 'default', 'large', 'larger'].includes(settings.textSize) ? settings.textSize : 'default'

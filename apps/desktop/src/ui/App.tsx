@@ -3,7 +3,7 @@ import { Activity, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, 
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
-import { setAccentColor, setBitbotsEnabled, setThemeStyle, themeStyle, useThemeStyle } from '../blob/bitbots'
+import { setAccentColor, setThemeStyle, themeStyle, useThemeStyle } from '../blob/bitbots'
 import { PixelClouds } from './PixelClouds'
 import { AppWallpaper } from './AppWallpaper'
 import { applyFonts } from './fonts'
@@ -106,7 +106,7 @@ import { discoveryResultText, useRuntimeDiscovery } from './runtimeDiscovery'
 import { FirstRunOnboarding } from './FirstRunOnboarding'
 import { LAUNCH_OVERALL_TIMEOUT_REASON, LAUNCH_TIMEOUTS, launchWarningsFor, runLaunchChecks, runtimeAuthSummary, throwIfLaunchAborted, type LaunchCheck } from './launchChecks'
 import { providerBrand } from './providerBrand'
-import { applyAppearance, applySurfaceAppearance, isThemeStyle, normalizeAccent, type TextSizeChoice, type ThemeChoice } from './appearance'
+import { applyAppearance, applySurfaceAppearance, normalizeAccent, normalizeThemeStyle, type TextSizeChoice, type ThemeChoice } from './appearance'
 import { hydrateDensity, hydrateHints, hydrateTour, useHintSeen } from './uiPrefs'
 import { recordInstructionVersion } from './instructionHistory'
 import { SessionExecutionControls } from './SessionExecutionControls'
@@ -203,7 +203,6 @@ export function App() {
     return () => document.removeEventListener('keydown', keydown)
   }, [experiments.shortcuts, companion])
   /** True once the daemon has sent `appearance.style`, retiring the legacy bitbots switch. */
-  const styleExplicit = useRef(false)
   const applyWindowSetting = useCallback((key: string, value: unknown) => {
     if (key === BUSY_SEND_SETTING) { setBusyMode(busySendMode(value)); return }
     if (key === 'exec_gate.codex.steer') { setSteerRevision(v => v + 1); return }
@@ -226,10 +225,8 @@ export function App() {
     else if (key === 'speech.enabled') setSpeechEnabled(value !== false)
     else if (key === 'speech.model') setSpeechModel(typeof value === 'string' && value ? value : DEFAULT_SPEECH_MODEL_ID)
     else if (key === 'experimental.runtimeLogos') setRuntimeLogos(value === true)
-    else if (key === 'appearance.style') { if (isThemeStyle(value)) { styleExplicit.current = true; setThemeStyle(value); void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), value) } }
+    else if (key === 'appearance.style') { if (typeof value === 'string') { const style = normalizeThemeStyle(value); setThemeStyle(style); void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), style) } }
     else if (key === 'appearance.accent') setAccentColor(normalizeAccent(value))
-    else if (key === 'appearance.wallpaper') { try { localStorage.setItem('bitbots.wallpaper', typeof value === 'string' ? value : 'lake') } catch {} document.documentElement.dataset.wallpaper = typeof value === 'string' ? value : 'lake'; window.dispatchEvent(new Event('bitbots-wallpaper-changed')) }
-    else if (key === 'appearance.glass') { try { localStorage.setItem('bitbots.glass', typeof value === 'string' ? value : 'solid') } catch {} document.documentElement.dataset.glass = typeof value === 'string' ? value : 'solid' }
     else if (key === 'appearance.font' || key === 'appearance.monoFont') { try { localStorage.setItem(key === 'appearance.font' ? 'bitbots.font' : 'bitbots.monoFont', typeof value === 'string' ? value : '') } catch {}; void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), themeStyle()) }
     else if (key === 'appearance.density') hydrateDensity(value)
     else if (key === 'appearance.theme' || key === 'appearance.textSize') {
@@ -244,8 +241,6 @@ export function App() {
     }
     else if (key === 'hints.seen') hydrateHints(value)
     else if (key === 'onboarding.tour') hydrateTour(value)
-    // Legacy fallback: only while the daemon has never sent `appearance.style`.
-    else if (key === 'experimental.bitbots') { if (!styleExplicit.current && typeof value === 'boolean') setBitbotsEnabled(value) }
   }, [])
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [schedulesOpen, setSchedulesOpen] = useState(false)
@@ -533,7 +528,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.wallpaper', 'appearance.glass', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
+      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }

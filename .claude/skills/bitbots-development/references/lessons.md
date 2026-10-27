@@ -2,6 +2,26 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-27 · Tooling · A "binary-safe" edit of storage `lib.rs` corrupted every non-ASCII character
+
+- **Symptom:** after a scripted edit, `message_reaction_rpc_persists…` failed with "Reaction or message role is unsupported" and `tool_details_are_bounded…` overran its limit. Every emoji and `…` in `crates/bloblex-storage/src/lib.rs` had become mojibake.
+- **Cause:** the Node helper read the file as `latin1` (to keep the NUL bytes) but wrote it with `fs.writeFileSync(file, text)`, which encodes as UTF-8. Each byte above 127 became two bytes.
+- **Fix:** read the damaged file as UTF-8 and write it back with `Buffer.from(text, 'latin1')`. That only works when no character is above U+00FF and none is U+FFFD; check that first, then compare the diff and the NUL count (`tr -cd '\000' | wc -c`) with `HEAD`.
+- **Avoid:** read and write the same encoding. Byte edits on this file need `latin1` on both sides (or `grep -a` plus `sed -i` on ASCII lines), and a diff check right after.
+
+## 2026-10-27 · Looks and art · Frost, the 2D robot and pixel icons retired (owner)
+
+- **What went:**
+  - The Frost look, with its stylesheet, wallpapers and the wallpaper/glass settings UI.
+  - The flat, 2D (`robot-pop`) and dot robot renderers.
+  - The 16 pixel icons.
+
+  The rules and migration are in `AGENTS.md` (27 October amendment) and `design-language.md`.
+- **What a dropped value must not do:** every place that parses a look must map retired values, not just reject them. `normalizeLook` dropped an unknown `art`, so a saved `robot-pop` would have become Automatic (Glossy) instead of the 3D robot; it now maps `RETIRED_ROBOT_ARTS` to `robot` and `px-*` to `logo-tint`.
+- **How the daemon handles them:** it keeps accepting the retired values (`RETIRED_ARTS`, `RETIRED_ICONS` in `valid_look`) and rewrites them in `look_column`, so old backups, pending proposals and older phones keep working.
+- **Left in place:** the native wallpaper commands and their bridge exports (`selectWallpaperImage`, `importWallpaper`, `readWallpaper`, `clearWallpaper` in `tauri.ts`, its mirrors and `src-tauri/src/lib.rs`), plus the daemon's `appearance.wallpaper` and `appearance.glass` validation. They are unused now. They were left because those files belonged to the wave12 backend lane at the time; remove them once that lane merges.
+- **Left in place:** `data-bitbots="on"` selectors from Legacy still sit in several stylesheets. Nothing sets that marker; they are dead CSS.
+
 ## 2026-10-27 · Gates · Restoring the tests after the T3/T7 waves (Claude, main checkout, uncommitted)
 
 The waves ran no tests; afterwards 141 TypeScript and 6 Rust tests failed. Three were real bugs, the rest pinned behaviour Codex changed on purpose.

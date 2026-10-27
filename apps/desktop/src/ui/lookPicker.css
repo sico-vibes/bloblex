@@ -44,11 +44,11 @@
 .sp-composer { height: 36px; padding: 0 5px 0 12px; display: flex; align-items: center; justify-content: space-between; color: var(--text-3); border: 1px solid var(--line-strong); background: var(--surface-input); }
 .sp-send { width: 26px; height: 26px; display: grid; place-items: center; color: var(--sp-accent-ink); background: var(--sp-accent); }
 
-/* Frost stays flat; Legacy keeps the original pixel treatment. */
-:root:root .sp-window[data-look="bitbots"] { border: 1px solid rgb(255 255 255 / .16); border-radius: 16px; background: rgb(22 23 28 / .84); backdrop-filter: blur(12px); }
-:root:root .sp-window[data-look="bitbots"] .sp-titlebar,
-:root:root .sp-window[data-look="bitbots"] .sp-side { background: rgb(22 23 28 / .78); }
-:root:root .sp-window[data-look="bitbots"] .sp-bubble.user { background: rgb(141 134 246 / .30); }
+/* Haze is smoky glass; Legacy keeps the original pixel treatment. */
+:root:root .sp-window[data-look="haze"] { border: 1px solid rgb(255 255 255 / .14); border-radius: 16px; background: rgb(30 31 35 / .84); backdrop-filter: blur(14px) saturate(1.1); }
+:root:root .sp-window[data-look="haze"] .sp-titlebar,
+:root:root .sp-window[data-look="haze"] .sp-side { background: rgb(30 31 35 / .74); }
+:root:root .sp-window[data-look="haze"] .sp-bubble.user { background: rgb(255 255 255 / .12); }
 :root:root .sp-window[data-look="legacy"] { border: 2px dotted var(--line-strong); border-radius: 0; box-shadow: 4px 4px 0 var(--bb-shadow-colour, #000); background-image: radial-gradient(var(--line) 1px, transparent 1.2px); background-size: 6px 6px; }
 :root:root .sp-window[data-look="legacy"] .sp-titlebar span,
 :root:root .sp-window[data-look="legacy"] .sp-label { font-family: "Doto", "DM Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: .08em; }

@@ -5,20 +5,20 @@
 import type { BlobMood } from '../characterState'
 import type { BlobShape } from '../look/forms'
 
-export type BotArt = 'robot' | 'robot-flat' | 'robot-pop' | 'robot-dot' | 'blob' | 'painted'
+export type BotArt = 'robot' | 'blob' | 'painted'
 
-export const BOT_ARTS = ['robot', 'robot-flat', 'robot-pop', 'robot-dot', 'blob', 'painted'] as const
+export const BOT_ARTS = ['robot', 'blob', 'painted'] as const
+
+/** Retired arts (the 2D robot and the flat and dot robots it absorbed); a stored one shows the 3D robot. */
+export const RETIRED_ROBOT_ARTS = ['robot-pop', 'robot-flat', 'robot-dot'] as const
 
 export const ART_LABELS: Record<BotArt, string> = {
   robot: '3D robot',
-  'robot-flat': 'Flat robot',
-  'robot-pop': '2D robot',
-  'robot-dot': 'Dot robot',
   blob: 'Glossy',
   painted: 'Hand-painted',
 }
 
-export const ROBOT_ARTS: readonly BotArt[] = ['robot', 'robot-pop']
+export const ROBOT_ARTS: readonly BotArt[] = ['robot']
 export const BLOB_ARTS: readonly BotArt[] = ['blob', 'painted']
 
 export type PaintedShape = 'classic' | 'cube' | 'star' | 'flower' | 'pear' | 'peanut' | 'ghost' | 'bunny' | 'kitty' | 'ufo' | 'boxbot' | 'tile'
@@ -100,19 +100,15 @@ export function artMoodFor(mood: BlobMood): ArtMood {
   return ART_MOOD_FOR[mood] ?? 'idle'
 }
 
-/** The art a bot wears when it has not chosen one. */
-export function defaultArtForStyle(style: string | null | undefined): BotArt {
-  switch (style) {
-    case 'bitbots': return 'robot-pop'
-    case 'blobots': return 'blob'
-    default: return 'blob'
-  }
+/** The art a bot wears when it has not chosen one: Glossy in both looks (Stone shows it; Haze shows a mark instead). */
+export function defaultArtForStyle(_style?: string | null): BotArt {
+  return 'blob'
 }
 
 /** An explicit choice wins; otherwise the app look decides. */
 export function resolveArt(look: { art?: unknown } | null | undefined, style: string | null | undefined): BotArt {
-  const art = isBotArt(look?.art) ? look.art : defaultArtForStyle(style)
-  return art === 'robot-flat' || art === 'robot-dot' ? 'robot-pop' : art
+  if ((RETIRED_ROBOT_ARTS as readonly unknown[]).includes(look?.art)) return 'robot'
+  return isBotArt(look?.art) ? look.art : defaultArtForStyle(style)
 }
 
 export function paintForShape(shape: string | null | undefined): PaintedShape {

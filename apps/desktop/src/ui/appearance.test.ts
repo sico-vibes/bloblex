@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { appearanceAttributes, accentTokens, contrastRatio, isThemeStyle, normalizeAccent, THEME_LOOKS, THEME_STYLES } from './appearance'
+import { appearanceAttributes, accentTokens, contrastRatio, isThemeStyle, normalizeAccent, normalizeThemeStyle, THEME_LOOKS, THEME_STYLES } from './appearance'
 
 const themeCss = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
-const frostCss = readFileSync(new URL('./themes/frost.css', import.meta.url), 'utf8')
+const hazeCss = readFileSync(new URL('./themes/haze.css', import.meta.url), 'utf8')
 const densityCss = readFileSync(new URL('./density.css', import.meta.url), 'utf8')
 
 function declarations(selector: string) {
@@ -48,13 +48,13 @@ function composite(color: string, under: string) {
 }
 
 describe('appearance token selection', () => {
-  it('keeps a visible focus ring on controls in Frost', () => {
-    expect(frostCss).not.toMatch(/\.app-shell\s+\*\s*\{[^}]*box-shadow\s*:\s*none/)
+  it('keeps a visible focus ring on controls in Haze', () => {
+    expect(hazeCss).not.toMatch(/\.app-shell\s+\*\s*\{[^}]*box-shadow\s*:\s*none/)
     expect(themeCss).toContain(':focus-visible { outline: none; box-shadow: var(--focus-ring); }')
     expect(densityCss).toContain('.density-control button:focus-visible { outline: none; box-shadow: var(--focus-ring); }')
   })
-  it('preserves visible focus rings in Frost and avoids a blanket shadow reset', () => {
-    expect(frostCss).not.toMatch(/\.app-shell\s+\*\s*\{[^}]*box-shadow\s*:\s*none/)
+  it('preserves visible focus rings in Haze and avoids a blanket shadow reset', () => {
+    expect(hazeCss).not.toMatch(/\.app-shell\s+\*\s*\{[^}]*box-shadow\s*:\s*none/)
     expect(themeCss).toContain('--focus-ring: 0 0 0 2px')
     expect(densityCss).toContain('.density-control button:focus-visible { outline: none; box-shadow: var(--focus-ring); }')
   })
@@ -115,21 +115,21 @@ describe('user accent colours', () => {
     expect(normalizeAccent(undefined)).toBe('')
   })
 
-  it('recognizes only Haze, Bitbots and Blobots', () => {
-    expect(THEME_STYLES).toEqual(['haze', 'bitbots', 'blobots'])
+  // Frost (bitbots) was retired on 27 October 2026; Haze and Stone (blobots) remain.
+  it('recognizes only Haze and Stone, and moves retired looks to Haze', () => {
+    expect(THEME_STYLES).toEqual(['haze', 'blobots'])
     for (const look of THEME_STYLES) expect(isThemeStyle(look)).toBe(true)
-    for (const retired of ['legacy', 'pop', 'dot']) expect(isThemeStyle(retired)).toBe(false)
+    for (const retired of ['bitbots', 'legacy', 'pop', 'dot']) {
+      expect(isThemeStyle(retired)).toBe(false)
+      expect(normalizeThemeStyle(retired)).toBe('haze')
+    }
+    expect(normalizeThemeStyle('blobots')).toBe('blobots')
     expect(isThemeStyle('Blobots')).toBe(false)
     expect(isThemeStyle('')).toBe(false)
     expect(isThemeStyle(undefined)).toBe(false)
     expect(THEME_LOOKS.map((look) => look.id)).toEqual(THEME_STYLES)
-    expect(THEME_LOOKS[0]?.description).toBe('Smoky glass. Bots show a logo or a pixel icon.')
-    expect(THEME_LOOKS[1]?.description).toBe('Frosted glass over a wallpaper you choose.')
-  })
-
-  it('keeps Frost body text above AA on solid glass over Lake and Dusk extremes', () => {
-    for (const background of ['#232932','#3b3a3c','#15161d','#3b3532']) expect(contrastRatio('#f4f5f7', background)).toBeGreaterThanOrEqual(4.5)
-    for (const background of ['#eef1f5','#fafafa','#e7e7eb','#faf7f5']) expect(contrastRatio('#15161c', background)).toBeGreaterThanOrEqual(4.5)
+    expect(THEME_LOOKS[0]?.description).toBe('Smoky glass. Bots show a logo or a character.')
+    expect(THEME_LOOKS[1]?.description).toBe('Soft, quiet and monochrome.')
   })
 
   it('computes WCAG contrast for known pairs', () => {

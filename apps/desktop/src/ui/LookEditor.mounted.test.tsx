@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlobLook } from '../blob/look'
 import { CHARACTER_ASSETS } from '../blob/haze/characters'
-import { setBitbotsEnabled, setThemeStyle } from '../blob/bitbots'
+import { setThemeStyle } from '../blob/bitbots'
 import { LookEditor } from './LookEditor'
 
 vi.mock('../blob/BlobCanvas', () => ({
@@ -24,7 +24,7 @@ function mount(look: BlobLook, locked = false) {
 }
 const click = (element: Element | null | undefined) => act(() => { (element as HTMLElement).click() })
 
-beforeEach(() => { setBitbotsEnabled(false); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
+beforeEach(() => { setThemeStyle('blobots'); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
 afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } act(() => setThemeStyle('blobots')); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('look editor', () => {
@@ -35,7 +35,7 @@ describe('look editor', () => {
     expect(character.getAttribute('aria-checked')).toBe('true')
     expect(character.disabled).toBe(true)
     expect(character.querySelector('.haze-character-image')?.getAttribute('src')).toBe(CHARACTER_ASSETS['char-kratos'].static)
-    act(() => setThemeStyle('bitbots'))
+    act(() => setThemeStyle('blobots'))
     const other = mount({ shape: 'circle', icon: 'char-kratos' })
     expect(other.host.querySelector('.haze-character-grid')).toBeNull()
     expect(other.host.querySelector('[aria-label="Kratos"]')).toBeNull()
@@ -172,17 +172,18 @@ describe('look editor', () => {
   it('sets and clears the art style from the Style control', () => {
     const explicit = mount({ shape: 'circle', seed: 'a', art: 'painted', paint: 'ufo' })
     const styleOptions = [...explicit.host.querySelectorAll('[data-style-option]')]
-    expect(styleOptions).toHaveLength(5)
+    // Automatic, 3D robot, Glossy and Hand-painted (the 2D robot was retired on 27 October 2026).
+    expect(styleOptions).toHaveLength(4)
     expect(explicit.host.querySelector('[data-style-option="painted"][aria-checked="true"]')).toBeTruthy()
-    click(explicit.host.querySelector('[data-style-option="robot-pop"]'))
-    expect(explicit.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-pop', paint: 'ufo' })
+    click(explicit.host.querySelector('[data-style-option="robot"]'))
+    expect(explicit.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot', paint: 'ufo' })
     click(explicit.host.querySelector('[data-style-option="auto"]'))
     expect(explicit.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', paint: 'ufo' })
 
     const automatic = mount({ shape: 'circle', seed: 'a' })
     expect(automatic.host.querySelector('[data-style-option="auto"][aria-checked="true"]')).toBeTruthy()
-    click(automatic.host.querySelector('[data-style-option="robot-pop"]'))
-    expect(automatic.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot-pop' })
+    click(automatic.host.querySelector('[data-style-option="robot"]'))
+    expect(automatic.onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'robot' })
   })
 
   it('shows the twelve painted bodies and writes the chosen one', () => {
@@ -195,16 +196,16 @@ describe('look editor', () => {
     expect(onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', seed: 'a', art: 'painted', paint: 'ufo' })
   })
 
-  it('shows only colour for a flat robot', () => {
-    const { host } = mount({ shape: 'circle', seed: 'a', art: 'robot-flat' })
-    expect(host.querySelector('[aria-label="Bot shape"]')).toBeNull()
+  it('opens the 3D robot editor for a stored retired robot art', () => {
+    const { host } = mount({ shape: 'circle', seed: 'a', art: 'robot-flat' as never })
+    expect(host.querySelector('[data-style-option="robot"][aria-checked="true"]')).toBeTruthy()
     expect(host.querySelector('[aria-label="Painted shape"]')).toBeNull()
     expect(host.querySelectorAll('.swatch').length).toBeGreaterThan(0)
   })
 
   it('makes the Style control and painted grid inert while the bot is locked', () => {
     const { host, onLookChange } = mount({ shape: 'circle', seed: 'a', art: 'painted' }, true)
-    expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')]).toHaveLength(5)
+    expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')]).toHaveLength(4)
     expect([...host.querySelectorAll<HTMLButtonElement>('.look-style-option')].every((button) => button.disabled)).toBe(true)
     expect([...host.querySelectorAll<HTMLButtonElement>('[aria-label="Painted shape"] [role="radio"]')].every((button) => button.disabled)).toBe(true)
     click(host.querySelector('.look-style-option'))

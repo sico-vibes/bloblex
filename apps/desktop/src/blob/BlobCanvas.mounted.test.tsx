@@ -3,7 +3,7 @@ import React, { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BlobCanvas } from './BlobCanvas'
-import { setBitbotsEnabled } from './bitbots'
+import { setThemeStyle } from './bitbots'
 import type { BotArt } from './art/art'
 import * as soundCues from './soundCues'
 import * as lookPaint from './look/paint'
@@ -80,7 +80,7 @@ function frameQueueSize() { return frames.size }
 
 beforeEach(() => {
   // These cases exercise the classic blob renderer; Blobots is the style under test.
-  setBitbotsEnabled(false)
+  setThemeStyle('blobots')
   clock = 10_000
   nextFrame = 1
   frames = new Map()
@@ -315,9 +315,6 @@ describe('BlobCanvas art dispatch', () => {
   it('picks the renderer for every art, and an explicit art overrides the look', () => {
     const cases: Array<[BotArt, string]> = [
       ['blob', 'canvas.blob-canvas'],
-      ['robot-flat', '[data-art="robot-flat"]'],
-      ['robot-pop', '[data-art="robot-pop"]'],
-      ['robot-dot', '[data-art="robot-dot"]'],
       ['painted', '[data-art="painted"]'],
     ]
     for (const [art, selector] of cases) {
@@ -329,8 +326,8 @@ describe('BlobCanvas art dispatch', () => {
 
   it('follows the app look when the look names no art', () => {
     const expectations: Array<[string, string]> = [
-      ['bitbots', '[data-art="robot-pop"]'],
       ['blobots', 'canvas.blob-canvas'],
+      ['haze', '.haze-mark'],
     ]
     for (const [style, selector] of expectations) {
       const view = mount(<BlobCanvas color="#e67f72" size={40} style={style as never} />)
@@ -340,7 +337,7 @@ describe('BlobCanvas art dispatch', () => {
   })
 
   it('resolves a look art over the app look', () => {
-    const view = mount(<BlobCanvas color="#e67f72" size={40} style="bitbots" look={{ shape: 'circle', art: 'painted' }} />)
+    const view = mount(<BlobCanvas color="#e67f72" size={40} style="blobots" look={{ shape: 'circle', art: 'painted' }} />)
     expect(view.host.querySelector('[data-art="painted"]')).toBeTruthy()
     view.unmount()
   })

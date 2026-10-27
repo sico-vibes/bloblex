@@ -20,7 +20,6 @@ import './ui/polish.css'
 // Vite collapses CSS-only dynamic imports inside a conditional expression into
 // one preload of the last branch (beta.35 loaded Dot CSS for Frost and Pop).
 // Keep all looks in the entry stylesheet; their rules are scoped by data-style.
-import './ui/themes/frost.css'
 import './ui/themes/haze.css'
 
 const dictation = new URLSearchParams(window.location.search).has('dictation')

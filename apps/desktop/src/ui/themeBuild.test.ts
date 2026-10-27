@@ -19,7 +19,6 @@ function sourceFiles(directory: string): string[] {
 describe('look stylesheet loading', () => {
   it('statically imports every selectable look from the entry point', () => {
     for (const path of [
-      './ui/themes/frost.css',
       './ui/themes/haze.css',
     ]) expect(ENTRY).toMatch(new RegExp(`import\\s+['"]${path.replaceAll('.', '\\.')}['"]`))
   })

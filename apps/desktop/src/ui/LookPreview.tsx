@@ -53,7 +53,7 @@ export function LookPreview({ look }: { look: ThemeStyle | null }) {
   return <div className="look-preview" data-open={look ? 'true' : 'false'} role="img" aria-label={previewName ? `Preview of the ${previewName} look` : undefined} aria-hidden={look ? undefined : true}>
     <div className="look-preview-inner">
       <div className="look-preview-stage">
-        <PreviewWindow look={look && look !== 'blobots' ? look : 'bitbots'} active={!!look && look !== 'blobots'} />
+        <PreviewWindow look="haze" active={look === 'haze'} />
         <PreviewWindow look="blobots" active={look === 'blobots'} />
       </div>
     </div>

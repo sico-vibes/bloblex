@@ -72,7 +72,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 })
 
 import { App } from './App'
-import { setBitbotsEnabled } from '../blob/bitbots'
+import { setThemeStyle } from '../blob/bitbots'
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 
 const stamp = '2026-10-01T00:00:00.000Z'
@@ -181,7 +181,7 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn(), clear: vi.fn() })
   h.daemonEventHandlers = []
   for (const mock of Object.values(h)) if (typeof mock === 'function' && 'mockReset' in mock) (mock as ReturnType<typeof vi.fn>).mockReset()
-  setBitbotsEnabled(false)
+  setThemeStyle('blobots')
   configure()
 })
 

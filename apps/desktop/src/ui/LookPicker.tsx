@@ -13,7 +13,7 @@ export const DEFAULT_AVATAR_COLOUR = '#b7a7f4'
 
 /** Kept for the expanded onboarding preview below the look cards. */
 export function LookAvatar({ look, size = 56, mood = 'idle', greeting = false, mini = false }: { look: ThemeStyle; size?: number; mood?: BlobMood; greeting?: boolean; mini?: boolean }) {
-  return <BlobCanvas style={look} color={DEFAULT_AVATAR_COLOUR} size={size} mood={mood} greeting={greeting} mini={mini} decorative label={look === 'haze' ? 'Haze bot' : look === 'bitbots' ? 'Frost bot' : 'Stone bot'} />
+  return <BlobCanvas style={look} color={DEFAULT_AVATAR_COLOUR} size={size} mood={mood} greeting={greeting} mini={mini} decorative label={look === 'haze' ? 'Haze bot' : 'Stone bot'} />
 }
 
 /**
@@ -26,7 +26,7 @@ export function LookPicker({ value, onChange, disabled = false, compact = false,
   compact?: boolean
   label?: string
 }) {
-  const order: ThemeStyle[] = ['haze', 'bitbots', 'blobots']
+  const order: ThemeStyle[] = ['haze', 'blobots']
   return <div className={`look-orb-picker ${compact ? 'compact' : ''}`} role="radiogroup" aria-label={label}>
     {order.map((id) => {
       const look = LOOKS.find((item) => item.id === id)!

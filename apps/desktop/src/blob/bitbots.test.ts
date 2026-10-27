@@ -20,32 +20,29 @@ describe('theme style switch', () => {
     expect(bitbots.bitbotsEnabled()).toBe(false)
     expect(document.documentElement.dataset.style).toBe('haze')
     expect(document.documentElement.dataset.bitbots).toBeUndefined()
-    expect(document.documentElement.dataset.wallpaper).toBe('lake')
-    expect(document.documentElement.dataset.glass).toBe('solid')
+    // Wallpaper and glass belonged to Frost, retired on 27 October 2026.
+    expect(document.documentElement.dataset.wallpaper).toBeUndefined()
+    expect(document.documentElement.dataset.glass).toBeUndefined()
   })
 
-  it('keeps the retired pixel marker absent and applies wallpaper and glass preferences', async () => {
+  it('switches between the two looks and keeps the retired pixel marker absent', async () => {
     const bitbots = await loadModule()
-    for (const look of ['bitbots','blobots'] as const) {
+    for (const look of ['blobots', 'haze'] as const) {
       bitbots.setThemeStyle(look)
       expect(document.documentElement.dataset.style).toBe(look)
       expect(document.documentElement.dataset.bitbots).toBeUndefined()
+      expect(localStorage.getItem('bitbots.style')).toBe(look)
     }
     expect(bitbots.bitbotsEnabled()).toBe(false)
-    bitbots.setWallpaper('dusk')
-    bitbots.setGlass('clear')
-    expect(document.documentElement.dataset.wallpaper).toBe('dusk')
-    expect(document.documentElement.dataset.glass).toBe('clear')
-    expect(localStorage.getItem('bitbots.wallpaper')).toBe('dusk')
-    expect(localStorage.getItem('bitbots.glass')).toBe('clear')
   })
 
-  it.each(['legacy', 'pop', 'dot'])('migrates a removed cached look %s to Bitbots', async (look) => {
+  // Frost (stored as bitbots) was retired on 27 October 2026, after Legacy, Pop and Dot.
+  it.each(['bitbots', 'legacy', 'pop', 'dot'])('migrates a removed cached look %s to Haze', async (look) => {
     localStorage.setItem('bitbots.style', look)
     localStorage.setItem('bloblex.bitbots', '0')
     const bitbots = await loadModule()
-    expect(bitbots.themeStyle()).toBe('bitbots')
-    expect(localStorage.getItem('bitbots.style')).toBe('bitbots')
+    expect(bitbots.themeStyle()).toBe('haze')
+    expect(localStorage.getItem('bitbots.style')).toBe('haze')
     expect(document.documentElement.dataset.bitbots).toBeUndefined()
   })
 
@@ -53,9 +50,7 @@ describe('theme style switch', () => {
     localStorage.setItem('bitbots.style', 'blobots')
     const bitbots = await loadModule()
     expect(bitbots.themeStyle()).toBe('blobots')
-    expect(bitbots.bitbotsEnabled()).toBe(false)
     expect(document.documentElement.dataset.style).toBe('blobots')
-    expect(document.documentElement.dataset.bitbots).toBeUndefined()
   })
 
   it('falls back to the legacy key only when the new key is absent', async () => {
@@ -63,39 +58,17 @@ describe('theme style switch', () => {
     expect((await loadModule()).themeStyle()).toBe('blobots')
     localStorage.clear()
     localStorage.setItem('bloblex.bitbots', '1')
-    expect((await loadModule()).themeStyle()).toBe('bitbots')
+    expect((await loadModule()).themeStyle()).toBe('haze')
     localStorage.clear()
-    localStorage.setItem('bitbots.style', 'bitbots')
+    localStorage.setItem('bitbots.style', 'haze')
     localStorage.setItem('bloblex.bitbots', '0')
-    expect((await loadModule()).themeStyle()).toBe('bitbots')
+    expect((await loadModule()).themeStyle()).toBe('haze')
   })
 
-  it('toggles the document attribute and never writes the legacy key', async () => {
+  it('never writes the legacy key', async () => {
     const bitbots = await loadModule()
     bitbots.setThemeStyle('blobots')
-    expect(document.documentElement.dataset.style).toBe('blobots')
-    expect(document.documentElement.dataset.bitbots).toBeUndefined()
-    expect(localStorage.getItem('bitbots.style')).toBe('blobots')
     expect(localStorage.getItem('bloblex.bitbots')).toBeNull()
-
-    bitbots.setThemeStyle('bitbots')
-    expect(document.documentElement.dataset.bitbots).toBeUndefined()
-    expect(localStorage.getItem('bitbots.style')).toBe('bitbots')
-
-
-    bitbots.setBitbotsEnabled(false)
-    expect(bitbots.bitbotsEnabled()).toBe(false)
-    expect(bitbots.themeStyle()).toBe('blobots')
-  })
-
-  it('keeps the deprecated setter false-to-Blobots and true-to-Bitbots behavior', async () => {
-    const bitbots = await loadModule()
-    bitbots.setBitbotsEnabled(true)
-    expect(bitbots.themeStyle()).toBe('bitbots')
-    expect(bitbots.bitbotsEnabled()).toBe(false)
-    expect(document.documentElement.dataset.bitbots).toBeUndefined()
-    bitbots.setBitbotsEnabled(false)
-    expect(bitbots.themeStyle()).toBe('blobots')
   })
 
   it('applies and clears the user accent on the document', async () => {

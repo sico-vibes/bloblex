@@ -399,7 +399,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('usage-bar')) fixtureSettings['experimental.usageBar'] = true
     if (flags().has('logos')) fixtureSettings['experimental.runtimeLogos'] = true
     if (flags().get('style')) fixtureSettings['appearance.style'] = flags().get('style')
-    if (flags().get('style') && ['bitbots','blobots'].includes(String(flags().get('style')))) localStorage.setItem('bitbots.style', String(flags().get('style')))
+    if (flags().get('style') && ['haze','blobots'].includes(String(flags().get('style')))) localStorage.setItem('bitbots.style', String(flags().get('style')))
     if (['system','dark','light'].includes(String(flags().get('theme')))) { fixtureSettings['appearance.theme'] = flags().get('theme'); try { const saved = JSON.parse(localStorage.getItem('bloblex.appearance') ?? '{}'); localStorage.setItem('bloblex.appearance', JSON.stringify({ ...saved, theme: flags().get('theme') })) } catch {} }
     if (flags().get('accent')) fixtureSettings['appearance.accent'] = flags().get('accent')
     if (flags().get('density')) fixtureSettings['appearance.density'] = flags().get('density')

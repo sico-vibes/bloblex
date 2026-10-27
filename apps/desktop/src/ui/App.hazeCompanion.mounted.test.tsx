@@ -344,7 +344,7 @@ describe('Haze companion', () => {
   })
 })
 
-describe.each(['bitbots', 'blobots'] as const)('The same companion layout in %s', (look) => {
+describe.each(['blobots'] as const)('The same companion layout in %s', (look) => {
   beforeEach(() => { setThemeStyle(look) })
 
   it('shows the bot list and conversation, with no Haze gradient and no island tabs', async () => {
@@ -364,7 +364,7 @@ describe.each(['bitbots', 'blobots'] as const)('The same companion layout in %s'
 })
 
 // FIX43 item 7: the main window opens a bot with no conversation into a local draft (FIX38 H2); the companion does the same.
-describe.each(['haze', 'bitbots', 'blobots'] as const)('A bot without a conversation in the %s companion', (look) => {
+describe.each(['haze', 'blobots'] as const)('A bot without a conversation in the %s companion', (look) => {
   beforeEach(() => { setThemeStyle(look) })
 
   it('shows a ready composer, stores nothing on the click, and the first message creates the conversation', async () => {

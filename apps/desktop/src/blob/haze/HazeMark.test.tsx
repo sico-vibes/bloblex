@@ -31,13 +31,20 @@ describe('Haze character renderer', () => {
   })
 
   it('falls back safely for unknown icon ids', () => {
-    expect(resolveHazeIcon({ icon: 'char-unknown' }, null)).toBe('px-robot')
+    expect(resolveHazeIcon({ icon: 'char-unknown' })).toBe('logo')
+  })
+
+  // Pixel icons were retired on 27 October 2026; a logo with no known runtime shows the bot's initial.
+  it('shows the bot initial when the runtime has no logo', () => {
+    const host = mount(24, 'logo')
+    expect(host.querySelector('.haze-mark')?.classList.contains('is-initial')).toBe(true)
+    expect(host.querySelector('.haze-initial')?.textContent).toBe('K')
   })
 
   it('renders saved character ids only while Haze is the active look', () => {
     const props = { color: '#9be7c4', size: 24, look: { shape: 'circle' as const, icon: 'char-kratos' as const }, label: 'Bot' }
     expect(renderToStaticMarkup(<BlobCanvas {...props} style="haze" />)).toContain('data-icon="char-kratos"')
-    for (const style of ['bitbots', 'blobots'] as const) {
+    for (const style of ['blobots'] as const) {
       const markup = renderToStaticMarkup(<BlobCanvas {...props} style={style} />)
       expect(markup).not.toContain('haze-mark')
       expect(markup).not.toContain('char-kratos')

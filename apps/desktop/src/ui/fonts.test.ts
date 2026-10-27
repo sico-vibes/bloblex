@@ -9,7 +9,7 @@ describe('bundled font catalogue', () => {
     expect(new Set(ids).size).toBe(ids.length)
     expect(ids.every((id) => /^[a-z0-9-]{1,40}$/.test(id))).toBe(true)
     for (const style of THEME_STYLES) expect(FONT_DEFAULTS[style]).toBeDefined()
-    expect(FONT_DEFAULTS).toMatchObject({ bitbots: { ui: 'inter', mono: '' }, blobots: { ui: '', mono: '' } })
+    expect(FONT_DEFAULTS).toMatchObject({ haze: { ui: 'inter', mono: '' }, blobots: { ui: '', mono: '' } })
   })
   it('removes inline font overrides when a look supplies its own stylesheet fonts', async () => {
     document.documentElement.style.setProperty('--font-ui', 'Temporary UI')
@@ -23,8 +23,8 @@ describe('bundled font catalogue', () => {
     expect(document.documentElement.style.getPropertyValue('--font-ui')).toBe('')
     expect(document.documentElement.style.getPropertyValue('--font-mono')).toBe('')
   })
-  it('loads Inter for Bitbots by default while leaving Blobots defaults alone', async () => {
-    await applyFonts('', '', 'bitbots')
+  it('loads Inter for Haze by default while leaving Stone defaults alone', async () => {
+    await applyFonts('', '', 'haze')
     expect(document.documentElement.style.getPropertyValue('--font-ui')).toContain('Inter')
     expect(document.documentElement.style.getPropertyValue('--font-mono')).toBe('')
     await applyFonts('', '', 'blobots')

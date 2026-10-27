@@ -9,7 +9,7 @@ import { BLOB_SHAPES, layoutForm, type BlobShape, type FormLayout } from './form
 import { traits, type TraitOverrides } from './seed'
 import { normalizeBot, type BotStyle } from './bot'
 import {
-  PAINTED_SHAPES, isBotArt, isPaintedShape, resolvePaint,
+  PAINTED_SHAPES, RETIRED_ROBOT_ARTS, isBotArt, isPaintedShape, resolvePaint,
   type BotArt, type PaintedShape,
 } from '../art/art'
 import { isHazeIcon, type HazeIcon } from '../haze/icons'
@@ -32,7 +32,7 @@ export interface BlobLook {
   art?: BotArt
   /** The hand-painted body. Omitted, it is derived from the blob shape. */
   paint?: PaintedShape
-  /** The Haze look's mark: the runtime logo or a pixel icon. Omitted, it is the logo. */
+  /** The Haze look's mark: the runtime logo or a character. Omitted, it is the logo. */
   icon?: HazeIcon
 }
 
@@ -82,8 +82,12 @@ export function normalizeLook(raw: unknown): BlobLook | null {
   const bot = normalizeBot(value.bot)
   if (bot) look.bot = bot
   if (isBotArt(value.art)) look.art = value.art
+  // The retired 2D, flat and dot robots become the 3D robot.
+  else if ((RETIRED_ROBOT_ARTS as readonly unknown[]).includes(value.art)) look.art = 'robot'
   if (isPaintedShape(value.paint)) look.paint = value.paint
   if (isHazeIcon(value.icon)) look.icon = value.icon
+  // A retired pixel icon becomes the logo in the bot colour.
+  else if (typeof value.icon === 'string' && value.icon.startsWith('px-')) look.icon = 'logo-tint'
   return look
 }
 

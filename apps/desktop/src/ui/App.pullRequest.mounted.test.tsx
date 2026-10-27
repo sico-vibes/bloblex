@@ -73,7 +73,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 })
 
 import { App } from './App'
-import { setBitbotsEnabled } from '../blob/bitbots'
+import { setThemeStyle } from '../blob/bitbots'
 import { resetDraftStoreForTests } from './draftStore'
 import { clearRepositoryCache } from './sessionRepository'
 import type { Agent, Runtime, Session, Snapshot } from '../types'
@@ -205,7 +205,7 @@ beforeEach(() => {
   h.daemonEventHandlers = []
   createdSessions = []
   for (const mock of Object.values(h)) if (typeof mock === 'function' && 'mockReset' in mock) (mock as ReturnType<typeof vi.fn>).mockReset()
-  setBitbotsEnabled(false)
+  setThemeStyle('blobots')
   configure()
 })
 

@@ -1,11 +1,11 @@
 // The Haze look's bot mark: the runtime's logo (own colours, the bot colour or
-// one colour) or a pixel icon in the bot colour. It replaces every mascot while
+// one colour) or a character portrait; without a known logo, the bot's initial. It replaces every mascot while
 // Haze is on; the status lives in the row's gradient, not in the mark.
 import { useEffect, useId, useRef, type CSSProperties } from 'react'
 import claudeSvg from '../../assets/providers/claude.svg?raw'
 import { ProviderLogo } from '../../ui/providerBrand'
 import type { BlobCanvasProps } from '../BlobCanvas'
-import { PIXEL_ART, isHazeIcon, isPixelIcon, type HazeIcon, type PixelIcon } from './icons'
+import { isHazeIcon, type HazeIcon } from './icons'
 import { CHARACTER_ASSETS, isHazeCharacter } from './characters'
 import { useLookProvider } from './runtimeRegistry'
 import './haze.css'
@@ -21,11 +21,10 @@ function logoFamily(provider: string | null): LogoFamily | null {
   return null
 }
 
-/** The icon a bot shows: its choice, else its runtime's logo, else a pixel robot. */
-export function resolveHazeIcon(look: { icon?: unknown } | null | undefined, provider: string | null): HazeIcon {
-  const chosen = isHazeIcon(look?.icon) ? look.icon : 'logo'
-  if (!isPixelIcon(chosen) && !isHazeCharacter(chosen) && !logoFamily(provider)) return 'px-robot'
-  return chosen
+/** The icon a bot shows: its choice, else its runtime's logo. A retired pixel icon is the logo in the bot colour. */
+export function resolveHazeIcon(look: { icon?: unknown } | null | undefined): HazeIcon {
+  if (typeof look?.icon === 'string' && look.icon.startsWith('px-')) return 'logo-tint'
+  return isHazeIcon(look?.icon) ? look.icon : 'logo'
 }
 
 const SLEEPY = new Set(['offline', 'sleeping', 'rate_limited'])
@@ -42,17 +41,16 @@ export function HazeMark({ color, size = 24, mood = 'idle', look, label = 'Bot',
     const timer = window.setTimeout(() => done.current?.(), GREETING_MS)
     return () => window.clearTimeout(timer)
   }, [greeting])
-  const icon = resolveHazeIcon(look, provider)
+  const icon = resolveHazeIcon(look)
   const family = logoFamily(provider)
   const markSize = isHazeCharacter(icon) ? Math.max(size, 26) : size
   const box = { width: markSize, height: markSize, '--haze-mark-size': `${markSize}px` } as CSSProperties
   const a11y = decorative ? { 'aria-hidden': true as const } : { role: 'img' as const, 'aria-label': label }
-  return <span className={`haze-mark${SLEEPY.has(mood) ? ' is-resting' : ''}${greeting ? ' is-greeting' : ''}${isPixelIcon(icon) ? ' is-pixel' : isHazeCharacter(icon) ? ' is-character' : ' is-logo'} ${className}`} style={box} data-icon={icon} data-tauri-drag-region={dragRegion || undefined} {...a11y}>
+  return <span className={`haze-mark${SLEEPY.has(mood) ? ' is-resting' : ''}${greeting ? ' is-greeting' : ''}${isHazeCharacter(icon) ? ' is-character' : family ? ' is-logo' : ' is-initial'} ${className}`} style={box} data-icon={icon} data-tauri-drag-region={dragRegion || undefined} {...a11y}>
     {isHazeCharacter(icon) ? <img className="haze-character-image" src={CHARACTER_ASSETS[icon][size > 32 ? 'animated' : 'static']} alt="" draggable={false} />
-      : isPixelIcon(icon) ? <PixelArt icon={icon} color={color} />
       : icon === 'logo' && provider ? <ProviderLogo provider={provider} size={Math.round(size * .8)} />
       : family ? <TintLogo family={family} fill={icon === 'logo-tint' ? color : 'currentColor'} />
-      : null}
+      : <span className="haze-initial" style={{ background: color }}>{initialOf(label)}</span>}
   </span>
 }
 
@@ -69,26 +67,7 @@ function TintLogo({ family, fill }: { family: LogoFamily; fill: string }) {
   </svg>
 }
 
-function shade(hex: string, amount: number) {
-  const raw = /^#[0-9a-f]{6}$/i.test(hex) ? hex.slice(1) : '9aa3ad'
-  const channels = [0, 2, 4].map((at) => Number.parseInt(raw.slice(at, at + 2), 16))
-  const mixed = channels.map((value) => Math.round(amount < 0 ? value * (1 + amount) : value + (255 - value) * amount))
-  return `rgb(${mixed.join(' ')})`
-}
-
-/** A 12×12 pixel icon; runs of one colour are drawn as one rectangle. */
-function PixelArt({ icon, color }: { icon: PixelIcon; color: string }) {
-  const palette: Record<string, string> = { B: color, D: shade(color, -.32), L: shade(color, .42), K: '#1b1a20', W: '#ffffff' }
-  const cells: Array<{ x: number; y: number; w: number; fill: string }> = []
-  PIXEL_ART[icon].forEach((row, y) => {
-    let x = 0
-    while (x < row.length) {
-      const key = row[x]!, fill = palette[key]
-      let end = x + 1
-      while (end < row.length && row[end] === key) end++
-      if (fill) cells.push({ x, y, w: end - x, fill })
-      x = end
-    }
-  })
-  return <svg className="haze-pixel" viewBox="0 0 12 12" shapeRendering="crispEdges" aria-hidden="true">{cells.map((cell) => <rect key={`${cell.x}-${cell.y}`} x={cell.x} y={cell.y} width={cell.w} height={1} fill={cell.fill} />)}</svg>
+/** The first letter or digit of the bot's name, for a bot whose runtime has no logo. */
+function initialOf(label: string) {
+  return /[\p{L}\p{N}]/u.exec(label)?.[0]?.toUpperCase() ?? '·'
 }

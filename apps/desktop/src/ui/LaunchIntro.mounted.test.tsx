@@ -6,6 +6,7 @@ import { LaunchIntro, LaunchWarnings } from './LaunchIntro'
 import { setThemeStyle } from '../blob/bitbots'
 import type { LaunchCheck } from './launchChecks'
 import type { BlobCanvasProps } from '../blob/BlobCanvas'
+import type { Agent } from '../types'
 
 const canvasMock = vi.hoisted(() => ({ latest: null as null | Record<string, unknown> }))
 vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: BlobCanvasProps) => {
@@ -14,10 +15,10 @@ vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: (props: BlobCanvasProps) => {
 } }))
 let root: Root | null = null
 let host: HTMLDivElement | null = null
-function mount(checks: LaunchCheck[], serviceDown = false) {
+function mount(checks: LaunchCheck[], serviceDown = false, agent: Agent | null = null) {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const complete = vi.fn(), retry = vi.fn(), offline = vi.fn()
-  const render = (nextChecks: LaunchCheck[], nextServiceDown: boolean) => <LaunchIntro checks={nextChecks} runtimes={[]} serviceDown={nextServiceDown} onComplete={complete} onRetry={retry} onContinueOffline={offline} />
+  const render = (nextChecks: LaunchCheck[], nextServiceDown: boolean) => <LaunchIntro checks={nextChecks} runtimes={[]} serviceDown={nextServiceDown} agent={agent} onComplete={complete} onRetry={retry} onContinueOffline={offline} />
   act(() => root!.render(render(checks, serviceDown)))
   return { complete, retry, offline, host, update: (nextChecks: LaunchCheck[], nextServiceDown: boolean) => act(() => root!.render(render(nextChecks, nextServiceDown))) }
 }
@@ -30,7 +31,7 @@ describe('LaunchIntro', () => {
     setThemeStyle('blobots')
     const { host: mounted } = mount([{ id: 'service', label: 'Connecting', state: 'running', detail: 'Checking' }])
     expect(mounted.querySelector('.launch-pixel-scan')).toBeNull()
-    act(() => setThemeStyle('bitbots'))
+    act(() => setThemeStyle('haze'))
     expect(mounted.querySelector('.launch-pixel-scan')).toBeNull()
   })
   it('shows ordered checks and permits warning states to complete', () => {
@@ -42,13 +43,15 @@ describe('LaunchIntro', () => {
     expect(mounted.textContent).toContain('No coding agents found')
   })
 
-  it('uses the active look art for its greeting and completes through the canvas callback', () => {
-    setThemeStyle('bitbots')
-    const { host: mounted, complete } = mount([{ id: 'service', label: 'Connecting', state: 'ok', detail: 'Connected' }])
+  // Both looks default to Glossy (the wave greeting); a bot with its own art greets with that art.
+  it('uses the bot art for its greeting and completes through the canvas callback', () => {
+    setThemeStyle('blobots')
+    const agent = { id: 'agent-a', name: 'Ada', runtimeId: 'rt', color: 'violet', look: { shape: 'circle', art: 'painted' } } as unknown as Agent
+    const { host: mounted, complete } = mount([{ id: 'service', label: 'Connecting', state: 'ok', detail: 'Connected' }], false, agent)
     const canvas = mounted.querySelector<HTMLCanvasElement>('.launch-blob-stage canvas.blob-canvas')
     expect(canvas?.dataset.greeting).toBe('true')
     expect(canvasMock.latest?.greeting).toBe(true)
-    expect(canvasMock.latest?.look).toBeNull()
+    expect((canvasMock.latest?.look as { art?: string } | null)?.art).toBe('painted')
     act(() => (canvasMock.latest?.onGreetingComplete as (() => void) | undefined)?.())
     expect(complete).toHaveBeenCalledOnce()
   })

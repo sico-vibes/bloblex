@@ -6,23 +6,21 @@
 import { useSyncExternalStore } from 'react'
 import type { BlobMood } from './characterState'
 import type { RobotHeadState } from '../vendor/robot-heads'
-import { DEFAULT_THEME_STYLE, accentTokens, isThemeStyle, normalizeAccent, type ThemeStyle } from '../ui/appearance'
+import { DEFAULT_THEME_STYLE, accentTokens, isThemeStyle, normalizeAccent, normalizeThemeStyle, type ThemeStyle } from '../ui/appearance'
 
 const STYLE_KEY = 'bitbots.style'
 /** The pre-style key; read once for migration, never written. */
 const LEGACY_KEY = 'bloblex.bitbots'
 const ACCENT_KEY = 'bitbots.accent'
-const WALLPAPER_KEY = 'bitbots.wallpaper'
-const GLASS_KEY = 'bitbots.glass'
 
 function readStyle(): ThemeStyle {
   try {
     const cached = localStorage.getItem(STYLE_KEY)
     if (isThemeStyle(cached)) return cached
-    if (cached) { localStorage.setItem(STYLE_KEY, 'bitbots'); return 'bitbots' }
-    const legacy = localStorage.getItem(LEGACY_KEY)
-    if (legacy === '1') return 'bitbots'
-    if (legacy === '0') return 'blobots'
+    // A retired look (Frost, Pop, Dot, Legacy) moves to Haze, and is written back.
+    if (cached) { localStorage.setItem(STYLE_KEY, normalizeThemeStyle(cached)); return normalizeThemeStyle(cached) }
+    // The pre-style flag: '0' was Stone (Blobots); '1' was Frost, now Haze.
+    if (localStorage.getItem(LEGACY_KEY) === '0') return 'blobots'
   } catch { /* The cache only avoids a flash. */ }
   return DEFAULT_THEME_STYLE
 }
@@ -33,7 +31,6 @@ function readAccent(): string {
 
 let style = readStyle()
 let accent = readAccent()
-let customWallpaperUrl = ''
 const listeners = new Set<() => void>()
 
 function applyAccent(root: HTMLElement) {
@@ -58,8 +55,8 @@ function applyDocument() {
   const root = document.documentElement
   root.dataset.style = style
   delete root.dataset.bitbots
-  root.dataset.wallpaper = readWallpaper()
-  root.dataset.glass = readGlass()
+  delete root.dataset.wallpaper
+  delete root.dataset.glass
   applyAccent(root)
 }
 
@@ -97,8 +94,6 @@ export function legacyPixelEnabled() { return false }
 /** @deprecated Use legacyPixelEnabled. */
 export function bitbotsEnabled() { return false }
 
-export function setBitbotsEnabled(next: boolean) { setThemeStyle(next ? 'bitbots' : 'blobots') }
-
 export function accentColor(): string { return accent }
 
 export function setAccentColor(hex: string) {
@@ -128,25 +123,6 @@ export function useBitbots(): boolean {
 
 export function useLegacyPixel(): boolean { return useSyncExternalStore(subscribe, legacyPixelEnabled, () => false) }
 
-function readWallpaper(): string {
-  try { const value = localStorage.getItem(WALLPAPER_KEY); return ['lake', 'dusk', 'bloom', 'sand', 'custom'].includes(value ?? '') ? value! : 'lake' } catch { return 'lake' }
-}
-function readGlass(): string {
-  try { const value = localStorage.getItem(GLASS_KEY); return ['solid', 'balanced', 'clear'].includes(value ?? '') ? value! : 'solid' } catch { return 'solid' }
-}
-export function setWallpaper(value: 'lake' | 'dusk' | 'bloom' | 'sand' | 'custom') {
-  try { localStorage.setItem(WALLPAPER_KEY, value) } catch { /* The cache only avoids a flash. */ }
-  if (typeof document !== 'undefined') document.documentElement.dataset.wallpaper = value
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event('bitbots-wallpaper-changed'))
-  for (const listener of listeners) listener()
-}
-export function setCustomWallpaperUrl(url: string) { customWallpaperUrl = url; if (typeof window !== 'undefined') window.dispatchEvent(new Event('bitbots-wallpaper-changed')) }
-export function getCustomWallpaperUrl() { return customWallpaperUrl }
-export function setGlass(value: 'solid' | 'balanced' | 'clear') {
-  try { localStorage.setItem(GLASS_KEY, value) } catch { /* The cache only avoids a flash. */ }
-  if (typeof document !== 'undefined') document.documentElement.dataset.glass = value
-  for (const listener of listeners) listener()
-}
 
 /** Re-renders when the accent changes. */
 export function useAccentColor(): string {

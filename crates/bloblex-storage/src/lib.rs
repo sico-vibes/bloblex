@@ -1679,7 +1679,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="experimental.memory" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="memory.sharedAgentWrites" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="skills.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
-    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["haze","bitbots","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="appearance.style" && !v.as_str().is_some_and(|s| ["haze","blobots"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="appearance.wallpaper" && !v.as_str().is_some_and(|s| ["lake","dusk","bloom","sand","custom"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="appearance.glass" && !v.as_str().is_some_and(|s| ["solid","balanced","clear"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if matches!(k,"appearance.font" | "appearance.monoFont") && !v.as_str().is_some_and(|s| s.is_empty() || (s.len()<=40 && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c==b'-'))){return Err(StorageError::InvalidAgent)}
@@ -1942,7 +1942,11 @@ impl Storage {
     }
     fn normalize_removed_theme(self) -> Result<Self, StorageError> {
         { let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-          c.execute("UPDATE settings SET value='\"bitbots\"' WHERE key='appearance.style' AND value IN ('\"legacy\"','\"pop\"','\"dot\"')", [])?;
+          // Retired looks (Legacy, Pop, Dot, and Frost on 27 October 2026) move to Haze.
+          c.execute("UPDATE settings SET value='\"haze\"' WHERE key='appearance.style' AND value IN ('\"legacy\"','\"pop\"','\"dot\"','\"bitbots\"')", [])?;
+          // Retired art: the 2D, flat and dot robots become the 3D robot; pixel icons become the logo in the bot colour.
+          c.execute("UPDATE agents SET look=json_set(look,'$.art','robot') WHERE json_valid(look) AND json_extract(look,'$.art') IN ('robot-pop','robot-flat','robot-dot')", [])?;
+          c.execute("UPDATE agents SET look=json_set(look,'$.icon','logo-tint') WHERE json_valid(look) AND json_extract(look,'$.icon') LIKE 'px-%'", [])?;
         }
         Ok(self)
     }
@@ -7178,14 +7182,18 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
 /// body and Haze mark. Kept small so it travels in every snapshot.
 fn valid_look(look: &Value) -> bool {
     const SHAPES: [&str; 13] = ["circle","pebble","squircle","round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
-    const ARTS: [&str; 6] = ["robot","robot-flat","robot-pop","robot-dot","blob","painted"];
+    const ARTS: [&str; 3] = ["robot","blob","painted"];
+    // Retired on 27 October 2026; still accepted from older clients and backups, and stored as "robot" (`normalize_retired_look`).
+    const RETIRED_ARTS: [&str; 3] = ["robot-flat","robot-pop","robot-dot"];
     const PAINTS: [&str; 12] = ["classic","cube","star","flower","pear","peanut","ghost","bunny","kitty","ufo","boxbot","tile"];
-    const ICONS: [&str; 48] = ["logo","logo-tint","logo-mono","px-robot","px-cat","px-ghost","px-alien","px-fox","px-frog","px-owl","px-bunny","px-bear","px-octopus","px-mushroom","px-slime","px-wizard","px-duck","px-rocket","px-bolt","char-albert-einstein","char-nikola-tesla","char-cleopatra","char-superman","char-sherlock-holmes","char-robin-hood","char-thor","char-hulk","char-marie-curie","char-joan-of-arc","char-amelia-earhart","char-sun-wukong","char-frida-kahlo","char-captain-marvel","char-ada-lovelace","char-ludwig-van-beethoven","char-charlie-chaplin","char-william-shakespeare","char-queen-elizabeth-i","char-master-chief","char-sonic","char-anubis","char-wolfgang-amadeus-mozart","char-arthur-morgan","char-count-dracula","char-hua-mulan","char-gandalf","char-benjamin-franklin","char-kratos"];
+    const ICONS: [&str; 32] = ["logo","logo-tint","logo-mono","char-albert-einstein","char-nikola-tesla","char-cleopatra","char-superman","char-sherlock-holmes","char-robin-hood","char-thor","char-hulk","char-marie-curie","char-joan-of-arc","char-amelia-earhart","char-sun-wukong","char-frida-kahlo","char-captain-marvel","char-ada-lovelace","char-ludwig-van-beethoven","char-charlie-chaplin","char-william-shakespeare","char-queen-elizabeth-i","char-master-chief","char-sonic","char-anubis","char-wolfgang-amadeus-mozart","char-arthur-morgan","char-count-dracula","char-hua-mulan","char-gandalf","char-benjamin-franklin","char-kratos"];
+    // Pixel icons, retired on 27 October 2026; still accepted, and stored as "logo-tint".
+    const RETIRED_ICONS: [&str; 16] = ["px-robot","px-cat","px-ghost","px-alien","px-fox","px-frog","px-owl","px-bunny","px-bear","px-octopus","px-mushroom","px-slime","px-wizard","px-duck","px-rocket","px-bolt"];
     let Some(object) = look.as_object() else { return false };
     if object.keys().any(|key| !["shape","seed","traits","bot","art","paint","icon"].contains(&key.as_str())) { return false; }
-    if object.get("art").is_some_and(|art| !art.is_null() && !art.as_str().is_some_and(|art| ARTS.contains(&art))) { return false; }
+    if object.get("art").is_some_and(|art| !art.is_null() && !art.as_str().is_some_and(|art| ARTS.contains(&art) || RETIRED_ARTS.contains(&art))) { return false; }
     if object.get("paint").is_some_and(|paint| !paint.is_null() && !paint.as_str().is_some_and(|paint| PAINTS.contains(&paint))) { return false; }
-    if object.get("icon").is_some_and(|icon| !icon.is_null() && !icon.as_str().is_some_and(|icon| ICONS.contains(&icon))) { return false; }
+    if object.get("icon").is_some_and(|icon| !icon.is_null() && !icon.as_str().is_some_and(|icon| ICONS.contains(&icon) || RETIRED_ICONS.contains(&icon))) { return false; }
     // Bitbots theme styling: a robot outline and three colours, all optional.
     if let Some(bot) = object.get("bot").filter(|bot| !bot.is_null()) {
         let Some(bot) = bot.as_object() else { return false };
@@ -7209,7 +7217,14 @@ fn valid_look(look: &Value) -> bool {
     }
     true
 }
-fn look_column(look: &Value) -> Option<String> { (!look.is_null()).then(|| look.to_string()) }
+fn look_column(look: &Value) -> Option<String> { (!look.is_null()).then(|| normalize_retired_look(look).to_string()) }
+/// A look written by an older client or backup, with retired art moved to what replaced it.
+fn normalize_retired_look(look: &Value) -> Value {
+    let mut look = look.clone();
+    if look["art"].as_str().is_some_and(|art| ["robot-pop","robot-flat","robot-dot"].contains(&art)) { look["art"] = json!("robot"); }
+    if look["icon"].as_str().is_some_and(|icon| icon.starts_with("px-")) { look["icon"] = json!("logo-tint"); }
+    look
+}
 const DETAIL_TEXT_LIMIT: usize = 4000;
 
 fn clip_text(text: &str, limit: usize) -> String {
@@ -7471,18 +7486,33 @@ mod pricing_override_removal_tests {
     }
     #[test]
     fn removed_theme_preferences_migrate_without_removing_bots_or_conversations() {
-        for old in ["legacy", "pop", "dot"] {
+        // Frost (bitbots) was retired on 27 October 2026, after Legacy, Pop and Dot; all of them land on Haze.
+        for old in ["legacy", "pop", "dot", "bitbots"] {
             let db = Storage::open_in_memory().unwrap();
             db.upsert_runtime(&json!({"id":"theme-runtime","provider":"codex","status":"online"})).unwrap();
             let agent = db.agent_create(&json!({"name":"Keep me","runtimeId":"theme-runtime"})).unwrap().0;
             db.create_session_for_agent("theme-session", "theme-runtime", "codex", ".", "Keep this conversation", agent["id"].as_str()).unwrap();
             db.conn.lock().unwrap().execute("INSERT INTO settings(key,value) VALUES('appearance.style',?1)", [json!(old).to_string()]).unwrap();
             let db = db.normalize_removed_theme().unwrap();
-            assert_eq!(db.settings().unwrap()["appearance.style"], "bitbots");
+            assert_eq!(db.settings().unwrap()["appearance.style"], "haze");
             assert!(db.agent_get(agent["id"].as_str().unwrap()).is_ok());
             assert!(db.session_exists("theme-session").unwrap());
             assert!(db.set_setting("appearance.style", &json!(old)).is_err());
         }
+    }
+
+    #[test]
+    fn retired_robot_art_and_pixel_icons_migrate_and_are_rewritten_on_write() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"art-runtime","provider":"codex","status":"online"})).unwrap();
+        // Written by an older client: accepted, and stored as the 3D robot and the tinted logo.
+        let agent = db.agent_create(&json!({"name":"Old look","runtimeId":"art-runtime","look":{"shape":"circle","art":"robot-pop","icon":"px-cat"}})).unwrap().0;
+        let id = agent["id"].as_str().unwrap().to_owned();
+        assert_eq!(db.agent_get(&id).unwrap()["look"], json!({"shape":"circle","art":"robot","icon":"logo-tint"}));
+        // Already stored before the change: the startup pass rewrites it.
+        db.conn.lock().unwrap().execute("UPDATE agents SET look=?2 WHERE id=?1", rusqlite::params![id, json!({"shape":"circle","art":"robot-dot","icon":"px-owl"}).to_string()]).unwrap();
+        let db = db.normalize_removed_theme().unwrap();
+        assert_eq!(db.agent_get(&id).unwrap()["look"], json!({"shape":"circle","art":"robot","icon":"logo-tint"}));
     }
 
     #[test]
@@ -7523,7 +7553,8 @@ mod tests {
     use super::*;
     #[test]
     fn appearance_values_validate() {
-        for style in ["haze", "bitbots", "blobots"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
+        for style in ["haze", "blobots"] { assert!(validate_setting_value("appearance.style", &json!(style)).is_ok()); }
+        assert!(validate_setting_value("appearance.style", &json!("bitbots")).is_err());
         for wallpaper in ["lake", "dusk", "bloom", "sand", "custom"] { assert!(validate_setting_value("appearance.wallpaper", &json!(wallpaper)).is_ok()); }
         for glass in ["solid", "balanced", "clear"] { assert!(validate_setting_value("appearance.glass", &json!(glass)).is_ok()); }
         for key in ["appearance.font", "appearance.monoFont"] { for font in ["", "space-grotesk", "jersey-10"] { assert!(validate_setting_value(key, &json!(font)).is_ok()); } }

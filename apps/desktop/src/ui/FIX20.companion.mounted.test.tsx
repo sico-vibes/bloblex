@@ -169,8 +169,8 @@ function configure(snapshotValue = snapshot()) {
 }
 
 beforeEach(() => {
-  // These cover the classic island (Bitbots and Blobots). Haze draws its own shell (App.hazeCompanion.mounted.test.tsx).
-  setThemeStyle('bitbots')
+  // These cover the classic island (Stone; Frost was retired on 27 October 2026). Haze draws its own shell (App.hazeCompanion.mounted.test.tsx).
+  setThemeStyle('blobots')
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-10-02T12:00:00.000Z'))
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)

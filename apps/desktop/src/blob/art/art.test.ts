@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { BlobMood } from '../characterState'
 import {
-  ART_LABELS, ART_MOOD_SAMPLE, ART_MOODS, BLOB_ARTS, BOT_ARTS, PAINTED_LABELS, PAINTED_SHAPES, ROBOT_ARTS,
+  ART_LABELS, ART_MOOD_SAMPLE, ART_MOODS, BLOB_ARTS, BOT_ARTS, PAINTED_LABELS, PAINTED_SHAPES, RETIRED_ROBOT_ARTS, ROBOT_ARTS,
   artMoodFor, defaultArtForStyle, isBotArt, isPaintedShape, resolveArt, resolvePaint,
 } from './art'
 
 const MOODS: BlobMood[] = ['idle', 'online', 'thinking', 'working', 'tool_activity', 'file_activity', 'file_drop', 'file_preparing', 'file_ready', 'file_sending', 'file_error', 'permission', 'success', 'error', 'offline', 'listening', 'rate_limited', 'sleeping']
 
 describe('bot art', () => {
-  it('offers the six arts under two groups with labels', () => {
-    expect([...BOT_ARTS]).toEqual(['robot', 'robot-flat', 'robot-pop', 'robot-dot', 'blob', 'painted'])
-    expect([...ROBOT_ARTS]).toEqual(['robot', 'robot-pop'])
+  // The 2D robot (with the flat and dot robots it absorbed) was retired on 27 October 2026.
+  it('offers the three arts under two groups with labels', () => {
+    expect([...BOT_ARTS]).toEqual(['robot', 'blob', 'painted'])
+    expect([...ROBOT_ARTS]).toEqual(['robot'])
+    expect([...RETIRED_ROBOT_ARTS]).toEqual(['robot-pop', 'robot-flat', 'robot-dot'])
     expect([...BLOB_ARTS]).toEqual(['blob', 'painted'])
     for (const art of BOT_ARTS) expect(ART_LABELS[art]).toBeTruthy()
   })
@@ -21,11 +23,12 @@ describe('bot art', () => {
     expect(isPaintedShape('cat')).toBe(false)
     expect(isPaintedShape('ufo')).toBe(true)
     expect(isBotArt('glossy')).toBe(false)
-    expect(isBotArt('robot-dot')).toBe(true)
+    expect(isBotArt('robot-dot')).toBe(false)
   })
 
-  it('maps the app look to a default art, and anything else to a blob', () => {
-    expect(defaultArtForStyle('bitbots')).toBe('robot-pop')
+  it('uses Glossy as the default art in every look', () => {
+    expect(defaultArtForStyle('haze')).toBe('blob')
+    expect(defaultArtForStyle('bitbots')).toBe('blob')
     expect(defaultArtForStyle('blobots')).toBe('blob')
     expect(defaultArtForStyle('legacy')).toBe('blob')
     expect(defaultArtForStyle('pop')).toBe('blob')
@@ -35,11 +38,10 @@ describe('bot art', () => {
   })
 
   it('lets an explicit choice override the app look, and ignores a bad one', () => {
-    expect(resolveArt({ art: 'painted' }, 'bitbots')).toBe('painted')
-    expect(resolveArt({}, 'bitbots')).toBe('robot-pop')
-    expect(resolveArt({ art: 'robot-flat' }, 'blobots')).toBe('robot-pop')
-    expect(resolveArt({ art: 'robot-dot' }, 'blobots')).toBe('robot-pop')
-    expect(resolveArt({ art: 'nonsense' }, 'bitbots')).toBe('robot-pop')
+    expect(resolveArt({ art: 'painted' }, 'blobots')).toBe('painted')
+    expect(resolveArt({}, 'blobots')).toBe('blob')
+    for (const art of RETIRED_ROBOT_ARTS) expect(resolveArt({ art }, 'blobots')).toBe('robot')
+    expect(resolveArt({ art: 'nonsense' }, 'blobots')).toBe('blob')
   })
 
   it('derives the painted body from the blob shape and prefers an explicit one', () => {

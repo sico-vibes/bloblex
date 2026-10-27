@@ -7,7 +7,7 @@
 .haze-mark .haze-logo { width: 80%; height: 80%; overflow: visible; }
 .haze-mark .provider-logo { width: 80% !important; height: 80% !important; }
 .haze-mark .provider-logo-image { width: 100%; height: 100%; object-fit: contain; }
-.haze-mark .haze-pixel { width: 92%; height: 92%; }
+.haze-mark .haze-initial { width: 80%; height: 80%; display: grid; place-items: center; border-radius: 28%; color: #fff; font: 600 calc(var(--haze-mark-size, 24px) * .42) / 1 var(--font-ui), sans-serif; text-shadow: 0 1px 1px rgb(0 0 0 / .25); }
 .haze-mark.is-character { overflow: visible; }
 .haze-character-image { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 

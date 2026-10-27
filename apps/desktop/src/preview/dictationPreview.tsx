@@ -14,7 +14,7 @@ import { isThemeStyle, type ThemeStyle } from '../ui/appearance'
 
 const previewParams = new URLSearchParams(location.search)
 const requestedStyle = previewParams.get('style')
-const previewStyle: ThemeStyle = isThemeStyle(requestedStyle) ? requestedStyle : 'bitbots'
+const previewStyle: ThemeStyle = isThemeStyle(requestedStyle) ? requestedStyle : 'haze'
 setThemeStyle(previewStyle)
 document.documentElement.dataset.surfaceTheme = previewParams.get('theme') === 'light' ? 'light' : 'dark'
 document.documentElement.classList.remove('companion-surface', 'dictation-surface')

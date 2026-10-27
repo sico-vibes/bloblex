@@ -37,7 +37,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'General', group: 'Companion', label: 'Focus mode', keywords: 'quiet peek interrupt concentrate' },
   { page: 'General', group: 'Companion', label: 'Reset companion position', keywords: 'move place edge corner screen' },
   { page: 'General', group: 'Support', label: 'Export diagnostics', keywords: 'logs report problem support zip upload debug' },
-  { page: 'Appearance', group: 'Look', label: 'Look', keywords: 'bitbots blobots legacy pop dot frost wallpaper glass font style robots blobs' },
+  { page: 'Appearance', group: 'Look', label: 'Look', keywords: 'haze stone blobots theme style robots characters logos font' },
   { page: 'Appearance', group: 'Look', label: 'More looks', keywords: 'legacy pop dot alternate alternative' },
   { page: 'Appearance', group: 'Look options', label: 'Wallpaper', keywords: 'lake dusk bloom sand custom image background' },
   { page: 'Appearance', group: 'Look options', label: 'Glass', keywords: 'solid balanced clear transparency blur' },

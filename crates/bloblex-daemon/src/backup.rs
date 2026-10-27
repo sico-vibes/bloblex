@@ -754,7 +754,7 @@ async fn import(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         let mut keys = incoming.keys().collect::<Vec<_>>();
         keys.sort();
         for key in keys {
-            let value = if key == "appearance.style" && matches!(incoming[key].as_str(), Some("legacy" | "pop" | "dot")) { json!("bitbots") } else { incoming[key].clone() };
+            let value = if key == "appearance.style" && matches!(incoming[key].as_str(), Some("legacy" | "pop" | "dot" | "bitbots")) { json!("haze") } else { incoming[key].clone() };
             if !exportable_setting(key, &value) {
                 continue;
             }

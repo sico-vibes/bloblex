@@ -9,14 +9,14 @@ import {
   type BlobLook, type BlobShape, type LookControl,
 } from '../blob/look'
 import {
-  ART_LABELS, BLOB_ARTS, PAINTED_LABELS, PAINTED_SHAPES, ROBOT_ARTS, defaultArtForStyle, resolveArt, resolvePaint,
+  ART_LABELS, BLOB_ARTS, PAINTED_LABELS, PAINTED_SHAPES, RETIRED_ROBOT_ARTS, ROBOT_ARTS, defaultArtForStyle, resolveArt, resolvePaint,
   type BotArt, type PaintedShape,
 } from '../blob/art/art'
 import { inDesktop } from '../tauri'
 import { SwatchGrid } from './SwatchGrid'
 import { AGENT_SWATCHES, swatchForColor } from './agentColor'
 import { useEntityNoun } from './vocabulary'
-import { HAZE_ICONS, ICON_LABELS, LOGO_ICONS, PIXEL_ICONS, type HazeIcon } from '../blob/haze/icons'
+import { HAZE_ICONS, ICON_LABELS, LOGO_ICONS, type HazeIcon } from '../blob/haze/icons'
 import { CHARACTER_ASSETS, HAZE_CHARACTERS, isHazeCharacter } from '../blob/haze/characters'
 import { rememberLookRuntime, useLookProvider } from '../blob/haze/runtimeRegistry'
 import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
@@ -99,15 +99,15 @@ export function LookEditor({ look, color, colorHex, name, locked = false, runtim
   if (style === 'haze') {
     const pick = (icon: HazeIcon) => onLookChange({ ...look, icon })
     const current = look.icon ?? 'logo'
-    const keyboardChoices = provider ? HAZE_ICONS : [...PIXEL_ICONS, ...HAZE_CHARACTERS.map(({ id }) => id)]
+    const keyboardChoices = provider ? HAZE_ICONS : HAZE_CHARACTERS.map(({ id }) => id)
     const option = (icon: HazeIcon) => {
       const preview = { ...look, icon }
       rememberLookRuntime(preview, runtimeId)
       const selected = current === icon
       const initialTabStop = !keyboardChoices.includes(current as never) && icon === keyboardChoices[0]
-      return <button key={icon} type="button" role="radio" aria-checked={selected} aria-label={ICON_LABELS[icon]} title={ICON_LABELS[icon]} tabIndex={selected || initialTabStop ? 0 : -1} disabled={locked || (!provider && !icon.startsWith('px-') && !isHazeCharacter(icon))} className={`look-style-option haze-icon-option${selected ? ' selected' : ''}`} onClick={() => pick(icon)}>
+      return <button key={icon} type="button" role="radio" aria-checked={selected} aria-label={ICON_LABELS[icon]} title={ICON_LABELS[icon]} tabIndex={selected || initialTabStop ? 0 : -1} disabled={locked || (!provider && !isHazeCharacter(icon))} className={`look-style-option haze-icon-option${selected ? ' selected' : ''}`} onClick={() => pick(icon)}>
         {isHazeCharacter(icon) ? <img className="haze-character-image" src={CHARACTER_ASSETS[icon].static} alt="" draggable={false} />
-          : <BlobCanvas decorative color={colorHex} size={icon.startsWith('px-') ? 30 : 26} look={preview} label={ICON_LABELS[icon]} />}
+          : <BlobCanvas decorative color={colorHex} size={26} look={preview} label={ICON_LABELS[icon]} />}
       </button>
     }
     const onGridKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -132,8 +132,6 @@ export function LookEditor({ look, color, colorHex, name, locked = false, runtim
       <div className="look-panel" role="radiogroup" aria-label="Icon" onKeyDown={onGridKey}>
         <span className="look-section-label">Logo{!provider && ' · choose a coding agent first'}</span>
         <div className="haze-icon-grid logos">{LOGO_ICONS.map(option)}</div>
-        <span className="look-section-label">Pixel icon</span>
-        <div className="haze-icon-grid">{PIXEL_ICONS.map(option)}</div>
         <span className="look-section-label">Characters</span>
         <div className="haze-icon-grid haze-character-grid">{HAZE_CHARACTERS.map(({ id }) => option(id))}</div>
         {!isHazeCharacter(current) && <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>}
@@ -157,9 +155,9 @@ export function LookEditor({ look, color, colorHex, name, locked = false, runtim
     </div>
 
     <div className="look-panel">
-      <StyleControl art={look.art === 'robot-flat' || look.art === 'robot-dot' ? 'robot-pop' : look.art} style={style} look={look} colorHex={colorHex} locked={locked} onChange={chooseArt} />
+      <StyleControl art={(RETIRED_ROBOT_ARTS as readonly unknown[]).includes(look.art) ? 'robot' : look.art} style={style} look={look} colorHex={colorHex} locked={locked} onChange={chooseArt} />
 
-      {(art === 'robot' || art === 'robot-pop')
+      {art === 'robot'
         ? <BotEditor look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />
         : art === 'painted'
           ? <PaintPanel look={look} color={color} colorHex={colorHex} locked={locked} onLookChange={onLookChange} onColorChange={onColorChange} />

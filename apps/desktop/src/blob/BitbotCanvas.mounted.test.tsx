@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BlobCanvas } from './BlobCanvas'
-import { setBitbotsEnabled } from './bitbots'
+import { setThemeStyle } from './bitbots'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -12,7 +12,7 @@ let host: HTMLDivElement | null = null
 afterEach(() => {
   if (root) act(() => root!.unmount())
   host?.remove(); root = null; host = null
-  setBitbotsEnabled(false)
+  setThemeStyle('blobots')
   vi.useRealTimers()
 })
 
@@ -24,7 +24,7 @@ function mount(node: React.ReactNode) {
 
 describe('BlobCanvas in Bitbots mode', () => {
   it('draws a robot with the antenna off and speed one, in the outline the look asks for', () => {
-    setBitbotsEnabled(true)
+    setThemeStyle('blobots')
     const element = mount(<BlobCanvas color="#2b49a3" size={60} mood="thinking" label="Vex" art="robot" look={{ shape: 'circle', seed: 's', bot: { shape: 'hexagon' } }} />)
     const frame = element.querySelector('.bitbot-frame')!
     expect(frame.getAttribute('data-bitbot-shape')).toBe('hexagon')
@@ -41,7 +41,7 @@ describe('BlobCanvas in Bitbots mode', () => {
   })
 
   it('draws the 3D robot for an explicit robot art, whatever the app look', () => {
-    setBitbotsEnabled(false)
+    setThemeStyle('blobots')
     const element = mount(<BlobCanvas color="#2b49a3" size={60} art="robot" label="Vex" />)
     expect(element.querySelector('.bitbot-frame')).toBeTruthy()
     expect(element.querySelector('canvas.blob-canvas')).toBeNull()
@@ -49,7 +49,7 @@ describe('BlobCanvas in Bitbots mode', () => {
 
   it('welcomes with a spin and then reports the greeting done', () => {
     vi.useFakeTimers()
-    setBitbotsEnabled(true)
+    setThemeStyle('blobots')
     const done = vi.fn()
     const element = mount(<BlobCanvas color="#2b49a3" size={60} art="robot" greeting onGreetingComplete={done} />)
     const robot = element.querySelector<HTMLElement>('[role="img"]')!
@@ -64,7 +64,7 @@ describe('BlobCanvas in Bitbots mode', () => {
 
   it('three quick pokes make it dizzy and then it recovers', () => {
     vi.useFakeTimers()
-    setBitbotsEnabled(true)
+    setThemeStyle('blobots')
     const start = vi.fn(), recover = vi.fn()
     const element = mount(<BlobCanvas color="#2b49a3" size={60} art="robot" onDizzy={start} onDizzyRecovery={recover} />)
     const frame = element.querySelector('.bitbot-frame')!

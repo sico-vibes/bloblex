@@ -8,15 +8,14 @@ A calm chat app for developers moving between coding-agent sessions. The bots su
 
 ## The three looks
 
-`appearance.style` → `<html data-style>`. Settings and onboarding use one orb row, ordered **Haze, Frost, Stone** (owner, 24 October 2026: Haze is the primary look and the default for a new install; the Bitbots look is shown as **Frost** and Blobots as **Stone**, while the stored ids stay `bitbots` and `blobots`, so no migration). The orbs are one family: a dark shaded sphere crossed by one horizontal ribbon (Haze a warm wave band, Frost a frosted icy pane, Stone a soft grey band). Names appear on hover/focus, with no card subtext or visible family grouping.
+`appearance.style` → `<html data-style>`. Settings and onboarding use one orb row, ordered **Haze, Stone** (owner, 24 October 2026: Haze is the primary look and the default for a new install; Blobots is shown as **Stone**, stored id `blobots`). **Frost (`bitbots`) was retired on 27 October 2026** with its wallpaper and glass settings; a saved Frost moves to Haze. The orbs are one family: a dark shaded sphere crossed by one horizontal ribbon (Haze a warm wave band, Stone a soft grey band). Names appear on hover/focus, with no card subtext or visible family grouping.
 
 | Look (value) | Feel | Default bot art | Default fonts |
 |---|---|---|---|
 | Haze (`haze`) | Frosted glass: the real desktop is blurred by Windows behind the main window, with a translucent tint of large blended blobs over it (see "Haze: frosted glass"); one cohesive shell (flush panels split by hairlines, no floating cards, no CSS backdrop blur). Without the native blur it falls back to a background about 80% opaque (20% transparent) over the real desktop (see "Haze: backdrop opacity"). One-line sidebar rows: mark + name + time. | Runtime logo (`look.icon` `logo`, `logo-tint`, `logo-mono`), a 12×12 pixel icon (`px-*`) or a full-colour character portrait (`char-*`), drawn by `blob/haze/HazeMark.tsx` | Inter + system mono |
-| Frost (`bitbots`, formerly shown as Bitbots) | Flat translucent panels over a wallpaper (Lake default; Dusk, Bloom, Sand, the user's image), 10 px gaps between floating panels, 20 px panel radius, hairline borders. Glass: Solid (tint .93, blur 24 px, default), Balanced (.58/10), Clear (.36/6). | 2D robot | Inter + system mono |
 | Stone (`blobots`, formerly shown as Blobots) | Monochrome dark or light, flush panels | Glossy blob | Base fonts (`FONT_DEFAULTS` in `ui/fonts.ts`) |
 
-Both support dark and light. Frost styles the companion and dictation windows; Blobots keeps its existing overlay palette. Pop, Dot and Legacy themes and stylesheets are removed (owner direction, 20 October 2026); old saved choices migrate to Bitbots.
+Both support dark and light. Stone keeps its existing companion and dictation overlay palette. Pop, Dot and Legacy (20 October 2026) and Frost (27 October 2026) are removed; every old saved choice migrates to Haze.
 
 ## Haze: frosted glass (owner directive, 27 October 2026; supersedes "backdrop opacity" below where they differ)
 
@@ -35,7 +34,7 @@ The main Haze window's background is **about 80% opaque, 20% transparent**, with
 
 - **Native:** the main window stays `transparent: true` in `src-tauri/tauri.conf.json` (tao applies the same empty DWM blur region the companion and dictation windows use; the title bar stays native and opaque). It is what lets the remaining 20% of the desktop show through. Transparency is a creation-time window property, so changing it needs a rebuild and a restart.
 - **CSS (`ui/themes/haze.css`, `.haze-backdrop`):** the non-interactive `.haze-backdrop` element paints an opaque composition (a neutral base `--haze-base`, `#1a1b1d` dark and `#f1efeb` light, under four broad overlapping radial blobs of 80 to 125 vw/vh radius with a four-stop falloff) and carries `opacity: .8` itself, so the whole backdrop composes to about 0.8. The opacity sits on this one element only: never put an opacity on a container that holds content, and do not stack another full-window tint over the backdrop. `html`, `body`, `.app-shell` and the panes stay transparent; the sidebar tint is 8%.
-- **Frost and Stone stay opaque.** Stone's `--surface-app` is opaque; Frost has an opaque body colour under its wallpaper (`themes/frost.css`). Companion and dictation windows are unchanged (opaque smoke).
+- **Stone stays opaque.** Stone's `--surface-app` is opaque. Companion and dictation windows are unchanged (opaque smoke).
 - **Legibility:** text now sits mostly over the opaque base, so contrast depends little on the desktop behind. Nothing was measured in this pass (owner rule: no screenshots).
 
 ## Haze: the status gradient (owner directive, 24 October 2026)
@@ -92,7 +91,7 @@ All colours, sizes and radii come from `apps/desktop/src/ui/theme.css` tokens (`
 
 ## Bot art
 
-Per bot, offer Automatic, 3D robot (`robot`), 2D robot (`robot-pop`), Glossy (`blob`) and Hand-painted (`painted`). Both robots use the four `look.bot.shape` outlines and shell/trim/screen controls. Saved `robot-flat` and `robot-dot` ids remain valid in the daemon (`valid_look`) and resolve to 2D robot in the app (`resolveArt`, `blob/art/art.ts`); the Flat and Dot renderers stay in the code and on the character sheet (`/preview.html`), but the picker does not offer them. Automatic uses 2D for Bitbots and Glossy for Blobots. Hand-painted has twelve `look.paint` shapes; its body stays still, its eyes blink and large avatars track the pointer (`useEyeTracking.ts`). Mini avatars have no pointer listener; listeners and animation frames are cleaned up, and reduced motion stays still. Corner status badges retain their meaning. Manager badge: white star on orange.
+Per bot, offer Automatic, 3D robot (`robot`), Glossy (`blob`) and Hand-painted (`painted`) (owner, 27 October 2026). The 3D robot uses the four `look.bot.shape` outlines and shell/trim/screen controls. The 2D robot (`robot-pop`) and the flat and dot robots it stood in for are retired and their renderers deleted: saved ids still pass the daemon's `valid_look` (`RETIRED_ARTS`), are stored as `robot` (`normalize_retired_look`, storage startup) and resolve to the 3D robot in the app (`RETIRED_ROBOT_ARTS`, `resolveArt`, `normalizeLook`). Automatic is Glossy in both looks. Hand-painted has twelve `look.paint` shapes; its body stays still, its eyes blink and large avatars track the pointer (`useEyeTracking.ts`). Mini avatars have no pointer listener; listeners and animation frames are cleaned up, and reduced motion stays still. Corner status badges retain their meaning. Manager badge: white star on orange.
 
 The update notice lives immediately above the profile in the left sidebar, including without a selected conversation. Settings use row-shaped skeletons while loading. Finished tasks use two lines, with status/time beside the name. Selected and hovered surfaces must pair every descendant with readable text; user-bubble links inherit the bubble foreground.
 

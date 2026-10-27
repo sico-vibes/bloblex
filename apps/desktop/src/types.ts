@@ -70,6 +70,19 @@ export interface QueuedPrompt extends JsonRecord {
   error: string | null
   position: number
   lateBySecs?: number
+  /** The daemon stopped while this was being sent, so it may already have reached the agent. */
+  ambiguous?: boolean
+}
+
+/** What a model change would do, from `session.model.plan`: the daemon decides, the UI only shows it. */
+export interface ModelChangePlan {
+  modelChanged: boolean
+  busy: boolean
+  locked: boolean
+  contextAtRisk: boolean
+  /** `kept`: the provider chat carries on with the new model. `recap`: a fresh provider session with a short summary. `none`: nothing to lose. */
+  continuity: 'kept' | 'recap' | 'none'
+  reason: string
 }
 
 export interface PromptQueueState {
@@ -579,6 +592,12 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
         else files.push(file)
         return { ...session, files }
       }
+      if (event.type === 'turn.completed') {
+        // The turn's own record follows the event, so a turn that errored mid-way and then finished is a completed turn.
+        const turnId = typeof payload.turnId === 'string' ? payload.turnId : null
+        const turns = turnId ? (session.turns ?? []).map((turn) => turn.id === turnId ? { ...turn, state: 'completed', failureClass: undefined, detail: undefined, recoveryHandled: undefined } : turn) : session.turns
+        return { ...session, state: 'completed', ...(turns ? { turns } : {}) }
+      }
       if (event.type === 'turn.error') {
         const turnId = typeof payload.turnId === 'string' ? payload.turnId : null
         const turns = (session.turns ?? []).map((turn) => turn.id === turnId
@@ -670,3 +689,7 @@ export interface BoardTaskRun extends JsonRecord {
   endedAt?: string | null
 }
 export interface TaskDispatchResult { task: BoardTask; run?: BoardTaskRun | null; disposition: 'started' | 'queued'; queuePosition?: number | null; reason?: 'bot_busy' | 'global_limit' | 'global_pause' | null; replayed?: boolean }
+
+/** The native frosted-glass backdrop of the main window (Haze), as reported by the shell. */
+export type WindowBackdrop = { effect: 'acrylic' | 'blur' | 'none'; active: boolean; transparencyOff: boolean; reason?: string }
+

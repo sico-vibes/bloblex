@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async () => undefined,
   previewMode: false,
   rpc: h.rpc,
@@ -152,7 +154,7 @@ function configure(snapshotValue = snapshot(), options: { activeSession?: string
     return {}
   })
   const stop = vi.fn()
-  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return stop })
+  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return () => { h.daemonEventHandlers = h.daemonEventHandlers.filter((item) => item !== handler); stop() } })
   h.listenForDaemonConnection.mockResolvedValue(stop)
   h.listenForActiveSession.mockResolvedValue(stop)
   h.listenForActiveRuntime.mockResolvedValue(stop)
@@ -184,6 +186,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
   window.history.replaceState({}, '', '/')
 })
+
+/** Every live listener hears the event, as with the real event bus: App is not the only one. */
+const broadcast = (event: any) => { for (const listener of [...h.daemonEventHandlers]) listener(event) }
 
 describe('App mounted lifecycle', () => {
   it('keeps scanning out of the profile menu and starts it from quick-switcher Agents settings', async () => {
@@ -289,7 +294,7 @@ describe('App mounted lifecycle', () => {
     await view.settle()
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
 
-    const handler = h.daemonEventHandlers.at(-1)!
+    const handler = broadcast
     act(() => handler({ sequence: 21, type: 'session.changed', payload: { session: { ...sessionA, title: 'Alpha updated', state: 'working' } } }))
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('Beta task')
     expect(view.host.querySelector('.context-pane')?.textContent).not.toContain('Alpha updated')
@@ -333,7 +338,7 @@ describe('App mounted lifecycle', () => {
     expect(view.host.querySelector('.inline-error')?.textContent).toContain('No reply was sent')
   })
 
-  it('focuses the approval when the active composer becomes disabled', async () => {
+  it('focuses the approval and keeps the composer open for queueing while it waits', async () => {
     configure(snapshot({ agents: [someBlob, otherBlob] as never }))
     const view = startApp()
     await view.settle()
@@ -342,11 +347,12 @@ describe('App mounted lifecycle', () => {
     expect(document.activeElement).toBe(composer)
 
     const permission = { id: 'permission-focus', sessionId: 'session-a', runtimeId: 'runtime-a', status: 'pending', title: 'Confirm operation', choices: ['allow_once', 'deny'] }
-    act(() => h.daemonEventHandlers.at(-1)!({ sequence: 21, type: 'permission.requested', payload: { sessionId: 'session-a', permission } }))
+    act(() => broadcast({ sequence: 21, type: 'permission.requested', payload: { sessionId: 'session-a', permission } }))
     await view.settle()
 
     const approval = view.host.querySelector<HTMLElement>('[data-permission-card]')
-    expect(composer.disabled).toBe(true)
+    expect(composer.disabled).toBe(false)
+    expect(composer.placeholder).toContain('Answer the request above, or queue a message')
     expect(approval).not.toBeNull()
     expect(document.activeElement).toBe(approval)
   })
@@ -375,7 +381,7 @@ describe('App mounted lifecycle', () => {
 
     latestModel = 'model-after'
     useDeferredSnapshot = true
-    act(() => h.daemonEventHandlers.at(-1)!({ sequence: 21, type: 'exec.options.changed', payload: { sessionId: 'session-a', turnId: 'turn-a' } }))
+    act(() => broadcast({ sequence: 21, type: 'exec.options.changed', payload: { sessionId: 'session-a', turnId: 'turn-a' } }))
     await view.settle()
     expect(modelRow()?.textContent).toContain('model-before')
     expect(view.host.querySelector('.working-indicator')?.textContent).toContain('is working')
@@ -411,7 +417,7 @@ describe('App mounted lifecycle', () => {
     const active = view.host.querySelector('[data-testid="blob-canvas"][data-greeting="false"]')
     expect(active).not.toBeNull()
     const completionEvent = { sequence: 21, type: 'session.changed', payload: { session: { ...sessionA, state: 'completed' } } }
-    act(() => h.daemonEventHandlers.at(-1)!(completionEvent))
+    act(() => broadcast(completionEvent))
     expect(h.playCompanionCue.mock.calls.filter(([cue]) => cue === 'finish')).toHaveLength(1)
   })
 

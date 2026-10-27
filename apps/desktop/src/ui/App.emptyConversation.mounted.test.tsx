@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async (count: number) => { h.approvalBadge(count) },
   previewMode: false,
   rpc: h.rpc,
@@ -187,7 +189,7 @@ function configure(snapshotValue = snapshot()) {
     return {}
   })
   const stop = vi.fn()
-  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return stop })
+  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return () => { h.daemonEventHandlers = h.daemonEventHandlers.filter((item) => item !== handler); stop() } })
   h.listenForDaemonConnection.mockResolvedValue(stop)
   h.listenForActiveSession.mockResolvedValue(stop)
   h.listenForActiveRuntime.mockResolvedValue(stop)

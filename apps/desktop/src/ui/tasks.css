@@ -186,3 +186,18 @@
 .tasks-page .segmented button:hover { color: var(--text-1); }
 .tasks-page .segmented button.on { color: var(--text-1); background: var(--surface-hover, var(--line)); }
 .tasks-page .segmented button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Internal pointer dragging works without WebView2's intercepted HTML drag events. */
+.delegate-draft-main { touch-action: none; user-select: none; -webkit-user-select: none; }
+.delegate-drag-ghost { position: fixed; z-index: 10000; max-width: 300px; padding: 10px 14px; pointer-events: none; color: var(--text-1); background: var(--surface-overlay); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); }
+/* Task details keep their header and actions visible while only the body scrolls. */
+.blob-dialog.task-detail-dialog { width: min(760px, calc(100% - 40px)); max-height: calc(100dvh - 48px); padding: 0; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+.task-detail-dialog > .task-dialog-head { flex: 0 0 auto; padding: 20px 24px 16px; border-bottom: 1px solid var(--line); }
+.task-detail-content { min-height: 0; overflow-y: auto; padding: 20px 24px; display: grid; gap: 16px; }
+.task-detail-content .safe-markdown { color: var(--text-1); font-size: 14px; line-height: 1.6; }
+.task-detail-content .task-text p { font-size: inherit; line-height: inherit; }
+.task-detail-dialog > .task-actions { flex: 0 0 auto; margin: 0; padding: 14px 24px; border-top: 1px solid var(--line); align-items: center; justify-content: space-between; gap: 10px; }
+.task-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; justify-content: flex-end; align-items: center; }
+.task-detail-dialog .task-actions button { height: 34px; border-radius: var(--radius-md); }
+.task-retry-select { margin-right: auto; }
+.task-retry-select .select-trigger { padding: 0 12px; color: var(--text-1); border: 1px solid var(--line-strong); background: transparent; font-size: var(--fs-sm); }

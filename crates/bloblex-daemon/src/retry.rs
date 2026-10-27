@@ -81,6 +81,9 @@ pub enum DeclineReason {
     PendingRetry,
     SessionUnavailable,
     Cancelled,
+    /// The turn ended without evidence that the agent received its prompt. The
+    /// original text is never replayed: only the owner can decide that.
+    DeliveryUnknown,
 }
 
 impl DeclineReason {
@@ -97,6 +100,7 @@ impl DeclineReason {
             Self::PendingRetry => "pending_retry",
             Self::SessionUnavailable => "session_unavailable",
             Self::Cancelled => "cancelled",
+            Self::DeliveryUnknown => "delivery_unknown",
         }
     }
     /// A short human phrase for the transcript notice.
@@ -113,6 +117,7 @@ impl DeclineReason {
             Self::PendingRetry => "a retry is already waiting",
             Self::SessionUnavailable => "the conversation is unavailable",
             Self::Cancelled => "it was cancelled",
+            Self::DeliveryUnknown => "the message may have reached the agent",
         }
     }
 }
@@ -232,11 +237,17 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
             // An explicit expired window must never fall back to a stale snapshot.
             (seconds > 0 && seconds <= MAX_MAX_WAIT_SECS * 365).then(|| Utc::now() + Duration::seconds(seconds))
         } else {
-            let provider = st.db.session_detail(session_id).ok().and_then(|row| row["provider"].as_str().map(str::to_owned));
+            let provider = st.db.session_brief(session_id).ok().and_then(|row| row["provider"].as_str().map(str::to_owned));
             match provider { Some(provider) => latest_blocked_reset(st, &provider).await, None => None }
         };
         let reset = reset.map(|at| at.to_rfc3339_opts(SecondsFormat::Millis, true));
         let _ = st.db.watchdog_limit(session_id, reset.as_deref());
+        record_decision(st, turn_id, "limited", "usage_limit", &now_millis());
+        let _ = st.db.merge_turn_data(turn_id, &json!({"recoveryHandled":true}));
+        // A conversation that has used up its automatic continuations cannot be
+        // picked up by the sweep, so it is settled once into a state the owner
+        // can act on instead of being promised a resume that will never happen.
+        if settle_exhausted(st, session_id).await { return; }
         let row = st.db.session_event_summary(session_id).unwrap_or(Value::Null);
         let reset = row["limitedUntil"].as_str();
         let content = match reset {
@@ -244,8 +255,6 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
             Some(at) => format!("Limited until {at}. Resume when you're ready."),
             None => "Limited. The provider gave no new reset time. Please try again later.".to_owned(),
         };
-        record_decision(st, turn_id, "limited", "usage_limit", &now_millis());
-        let _ = st.db.merge_turn_data(turn_id, &json!({"recoveryHandled":true}));
         crate::team::note(st, session_id, &content, json!({"kind":"usage_limit","resetAt":reset})).await;
         st.emit("session.changed", row).await;
         return;
@@ -258,8 +267,10 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
     let now = Utc::now();
     // A decline notice is only useful for a retryable-class failure.
     let retryable = matches!(hint, Some(HintKind::Overloaded) | Some(HintKind::RateLimited));
+    // The daemon's own record of doubt: the turn ended without `PromptAccepted`.
+    let delivery_unknown = data["delivery"].as_str() == Some("unknown");
 
-    let session = st.db.session_detail(session_id).ok();
+    let session = st.db.session_brief(session_id).ok();
     let session_available = session.as_ref().is_some_and(|row| {
         row["archived"] != true && row["link"]["kind"] != "automation"
     });
@@ -274,7 +285,16 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
         None
     };
 
-    let decision = if !session_available {
+    let decision = if delivery_unknown && retryable {
+        // A retryable-class failure whose delivery is unknown is the one case
+        // that must never be continued automatically: `delivery:"unknown"` means
+        // the turn ended without the adapter ever reporting `PromptAccepted`, so
+        // the agent may already hold this prompt, and "Please continue." on top
+        // of it could pay for the same turn twice. Every other class keeps its
+        // own decline reason, because those are the ones the owner needs to see
+        // (a sign-in that expired, for example).
+        Decision::Decline { reason: DeclineReason::DeliveryUnknown }
+    } else if !session_available {
         Decision::Decline { reason: DeclineReason::SessionUnavailable }
     } else if st.db.queue_pending_retry(session_id).ok().flatten().is_some() {
         Decision::Decline { reason: DeclineReason::PendingRetry }
@@ -430,6 +450,9 @@ pub async fn cancel_pending(
     for item in &removed {
         if let Some(retry_of) = item["retryOf"].as_str() {
             record_decision(st, retry_of, "decline", reason.as_str(), &now_millis());
+            // FIX47: a delegation whose only remaining retry was dropped is not
+            // still running; nothing else will end it.
+            crate::delegations::retry_dropped(st, session_id, retry_of).await;
         }
     }
     if notify {
@@ -585,7 +608,30 @@ pub async fn continue_on_activation(st: &AppState, sid: &str) {
         }
         crate::team::note(st, sid, "Picking up where it left off", json!({"kind":"watchdog_continuation"})).await;
         crate::queue::emit_changed(st, sid).await;
+    } else {
+        // A session whose continuations are used up never enqueues; without
+        // this it would keep a continuation flag that can never fire.
+        settle_exhausted(st, sid).await;
     }
+}
+
+/// Settle a session whose automatic continuations are used up, exactly once.
+///
+/// Every caller goes through here. The storage update is the decision (it
+/// repeats `watchdog_enqueue`'s refusal conditions and the idempotency flag);
+/// this function only speaks for it: one content-free transcript notice and one
+/// `session.changed`. Returns whether this call settled the session.
+async fn settle_exhausted(st: &AppState, session_id: &str) -> bool {
+    if !st.db.watchdog_settle_exhausted(session_id).unwrap_or(false) { return false; }
+    crate::team::note(
+        st,
+        session_id,
+        "Automatic continuation stopped after 3 tries. Send a message to continue.",
+        json!({"kind":"auto_continue","status":"exhausted","tries":3}),
+    )
+    .await;
+    if let Ok(summary) = st.db.session_event_summary(session_id) { st.emit("session.changed", summary).await; }
+    true
 }
 
 pub async fn sweep(st: &AppState) {
@@ -598,6 +644,10 @@ pub async fn sweep(st: &AppState) {
             crate::team::note(st,&id,"Picking up where it left off",json!({"kind":"watchdog_continuation"})).await;
             if let Ok(summary) = st.db.session_event_summary(&id) { st.emit("session.changed",summary).await; }
             crate::queue::emit_changed(st,&id).await;
+        } else {
+            // The cap can be reached between the read and this claim; settling
+            // is a no-op unless the session really is exhausted.
+            settle_exhausted(st,&id).await;
         }
     }
 }

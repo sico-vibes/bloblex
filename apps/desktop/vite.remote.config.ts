@@ -127,6 +127,7 @@ export default defineConfig({
     alias: [
       { find: /^\.\.\/tauri$/, replacement: remote('remoteTauri.ts') },
       { find: /^\.\.\/desktopIntegrations$/, replacement: remote('remoteDesktopIntegrations.ts') },
+      { find: /^\.\/PdfViewer$/, replacement: remote('remotePdfViewer.tsx') },
       { find: /^@tauri-apps\/api\/(event|window|core|webviewWindow)$/, replacement: remote('remoteTauriAppsStub.ts') },
       { find: /^@tauri-apps\/plugin-.*$/, replacement: remote('remoteTauriAppsStub.ts') },
     ],

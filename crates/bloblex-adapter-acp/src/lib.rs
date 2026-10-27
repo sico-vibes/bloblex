@@ -447,12 +447,18 @@ impl AcpAdapter {
                         session.turn_completed.store(true, Ordering::Release);
                         session.active_turn_id.lock().await.take()
                     };
-                    if let Some(turn_id) = turn_id {
+                    if let Some(ref turn_id) = turn_id {
                         let seq = session.usage_seq.fetch_add(1, Ordering::Relaxed) + 1;
                         let report = exec::usage_report(true, &Value::Null, &exec::UsageSnap::default(), seq);
-                        let _ = session.events.enqueue(AgentEvent::UsageReport { turn_id, report });
+                        let _ = session.events.enqueue(AgentEvent::UsageReport { turn_id: turn_id.clone(), report });
                     }
-                    let _ = session.events.enqueue(AgentEvent::Error { message: "OpenCode process exited unexpectedly".into() });
+                    // A process that exits with no turn in flight did not fail a
+                    // turn: the exit is not reported as one, so a finished turn
+                    // is never relabelled as a failure. A running turn keeps its
+                    // terminal error.
+                    if turn_id.is_some() {
+                        let _ = session.events.enqueue(AgentEvent::Error { message: "OpenCode process exited unexpectedly".into() });
+                    }
                 }
             }
             for (_, tx) in std::mem::take(&mut *reader.pending.lock().await) {
@@ -1016,6 +1022,10 @@ impl SharedProcess {
 
 #[async_trait]
 impl AgentAdapter for AcpAdapter {
+    // `apply_options` selects the agent's model config option before each
+    // prompt (836-850), and refuses with ERR_MODEL_MISSING/REJECTED instead of
+    // prompting when the agent does not accept it.
+    fn model_switch(&self) -> ModelSwitch { ModelSwitch::KeepsSession }
     async fn model_catalog(&self, runtime: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {
         catalog::fetch_model_catalog(runtime, self.catalog_timeout()).await
     }

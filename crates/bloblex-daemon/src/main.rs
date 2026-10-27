@@ -12,7 +12,7 @@ use bloblex_adapter_acp::AcpAdapter;
 use bloblex_adapter_claude::ClaudeAdapter;
 use bloblex_adapter_codex::CodexAdapter;
 use bloblex_agent_core::{
-    AgentAdapter, AgentEvent, ApprovalMode, ContextChangeReason, ExecOptions, NewSessionRequest, PromptAttachment, PromptRequest, ResumeSessionRequest, RuntimeSpec,
+    AgentAdapter, AgentEvent, ApprovalMode, ContextChangeReason, ExecOptions, ModelSwitch, NewSessionRequest, PromptAttachment, PromptRequest, ResumeSessionRequest, RuntimeSpec,
     SessionHandle, SteerOutcome, SteerRequest,
 };
 use bloblex_protocol::{
@@ -20,6 +20,7 @@ use bloblex_protocol::{
 };
 use bloblex_security::{capability_matches, is_loopback, new_capability};
 use bloblex_storage::Storage;
+use base64::Engine as _;
 use chrono::{SecondsFormat, Utc};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -43,11 +44,16 @@ mod team;
 mod queue;
 mod retry;
 mod experiments;
+// Authorised media preview and the per-turn checkpoint report.
+mod media;
+mod checkpoints;
 mod quota;
 mod quota_sources;
 mod automations;
 // Durable task board (expansion-v2 slice 1A): owner dispatch, queue and runs.
 mod tasks;
+// FIX47: the durable ledger of Manager assignments into side conversations.
+mod delegations;
 mod backup;
 mod memory;
 mod questions;
@@ -57,6 +63,9 @@ mod skills;
 mod commands;
 // FIX39 P10: linked git worktrees so parallel code tasks in one repo cannot clash.
 mod worktree;
+mod workspace;
+// FIX45: the actual repository changes of a conversation's project folder.
+mod repository;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
 
@@ -823,6 +832,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" | "task.image" => tasks::rpc(st, method, &p).await,
+        "delegation.list" | "delegation.cancel" | "delegation.cancelGroup" => delegations::rpc(st, method, &p).await,
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "skills.list" | "skills.get" | "skills.forAgent" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
@@ -1005,6 +1015,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.broadcast_persisted(vec![event.clone()]);
             Ok(json!({"reactions":event["payload"]["reactions"],"selected":event["payload"]["selected"]}))
         }
+        "message.image" => message_image(st, &p),
+        "media.preview" => media::preview(st, &p).await,
         "search.messages" => {
             let query = p["query"].as_str().filter(|q| q.chars().count() <= 200).ok_or_else(|| derr("invalid_argument", "query must be at most 200 characters", StatusCode::BAD_REQUEST))?;
             st.db.search_messages(query).map(|results| json!({"results":results})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))
@@ -1042,6 +1054,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.db.mark_file_reverted(id, change_id).map_err(|_| derr("internal", "The file was reverted, but its review status could not be saved. Inspect the file before trying again.", StatusCode::INTERNAL_SERVER_ERROR))?;
             Ok(json!({"reverted":true}))
         }
+        "session.checkpoints" => checkpoints::session_checkpoints(st, &p).await,
         "session.delete.schedule" | "session.delete.cancel" => {
             let id = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
             let gate = gate_for_session(st, id).await;
@@ -1114,6 +1127,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 if let Some(deadline) = p["deleteDeadline"].as_i64() {
                     if !st.db.pending_session_delete(id).ok().flatten().is_some_and(|v| v["deadline"] == deadline) { return Ok(json!({"cancelled":true})); }
                 }
+                // The conversation's copied images go with it; read the list
+                // before the messages are removed.
+                let attachment_files = st.db.session_attachment_files(id).unwrap_or_default();
                 st.db.session_delete(id).map_err(|error| match error {
                     bloblex_storage::StorageError::AgentNotFound => derr("not_found", "session not found", StatusCode::NOT_FOUND),
                     bloblex_storage::StorageError::SessionActive => derr("conflict", "cannot delete a session while it is starting, working, cancelling, or waiting for approval", StatusCode::CONFLICT),
@@ -1131,6 +1147,13 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 st.knowledge.forget(id);
                 st.skills.forget(id);
                 st.emit("session.deleted", json!({"sessionId":id})).await;
+                // The conversation's copied images go with it.
+                if let Ok(dir) = message_images_dir(st) {
+                    for file in &attachment_files {
+                        if file.contains('/') || file.contains('\\') || file.contains("..") { continue; }
+                        let _ = std::fs::remove_file(dir.join(file));
+                    }
+                }
                 remove_session_gate(st, id, &gate).await;
                 (active, active_turn)
             };
@@ -1145,9 +1168,17 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             .session_detail(p["sessionId"].as_str().unwrap_or(""))
             .map_err(|e| derr("not_found", &e.to_string(), StatusCode::NOT_FOUND)),
         "session.environment" => session_environment(st,&p).await,
+        // FIX45: the actual working tree against HEAD, read-only. The folder
+        // comes from the conversation, never from the caller.
+        "session.repository" => repository::session_repository(st,&p).await,
+        // DELEGATION item 4: where this conversation is working, read-only.
+        "session.workspace" => workspace::rpc(st, &p).await,
         "session.new" => new_session(st, p).await,
         "session.resume" => resume_session(st, p).await,
         "session.model.update" => update_session_model(st, p).await,
+        // Read-only preview for the composer: no writes, no events, and it is
+        // allowed while a turn is live so the UI can explain the choice first.
+        "session.model.plan" => session_model_plan(st, p).await,
         "session.permissions.set" => set_session_permissions(st, p).await,
         "session.prompt" => {
             // A user-sent prompt supersedes any pending automatic retry.
@@ -1160,38 +1191,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "session.handoff.draft" => handoff_draft(st, &p),
         "turn.retry.cancel" => retry::cancel_rpc(st, &p).await,
         "session.queue.add" | "session.queue.list" | "session.queue.update" | "session.queue.reorder" | "session.queue.delete" | "session.queue.send_now" | "session.queue.resume" => queue::queue_rpc(st, method, &p).await,
-        "session.cancel" => {
-            let id = p["sessionId"].as_str().unwrap_or("");
-            // Stopping never schedules a retry, and it cancels one already waiting.
-            if !id.is_empty() {
-                retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
-            }
-            let gate = gate_for_session(st, id).await;
-            let active = {
-                let _guard = gate.lock().await;
-                if session_is_deleted(st, id).await { return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND)); }
-                let Some(active) = st.sessions.lock().await.get(id).cloned() else {
-                    // The turn is still starting: no provider handle exists yet.
-                    // Record the request; the turn driver checks it after
-                    // activation and before delivering a prompt.
-                    if let Some(turn_id) = st.active_turns.lock().await.get(id).cloned() {
-                        st.starting_cancels.lock().await.insert(turn_id);
-                        st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
-                        if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
-                        return Ok(json!({"cancellationRequested":true}));
-                    }
-                    return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
-                };
-                st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
-                if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
-                active
-            };
-            if let Err(e)=active.adapter.cancel(&active.handle).await {
-                let _ = restore_cancel_state(st, id, &gate).await;
-                return Err(derr("unsupported",&e.to_string(),StatusCode::BAD_REQUEST));
-            }
-            Ok(json!({"cancellationRequested":true}))
-        }
+        "session.cancel" => cancel_session_turn(st, p["sessionId"].as_str().unwrap_or("")).await,
         "session.close" => close_session(st, p["sessionId"].as_str().unwrap_or("")).await,
         "session.warm" => session_warm(st, p).await,
         "permission.reply" => {
@@ -1263,6 +1263,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 if let Some(turn_id) = st.active_turns.lock().await.get(&session_id).cloned() { st.denied_turns.lock().await.insert(turn_id); }
             }
             st.emit("permission.resolved", json!({"permissionId":id,"choice":choice})).await;
+            if is_question { crate::delegations::question_resolved(st, &session_id, id, if choice == "answer" { "answered" } else { "dismissed" }).await; }
             crate::tasks::permission_resolved(st, &session_id).await;
             Ok(json!({"resolved":true}))
         }
@@ -1397,6 +1398,7 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     if k == "claude.enableWorkflows" && !value.is_boolean() { return Err(derr("invalid_argument", "claude.enableWorkflows requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "permissions.default_mode" && !value.as_str().is_some_and(|v| ["ask", "auto"].contains(&v)) { return Err(derr("invalid_argument", "permissions.default_mode must be ask or auto", StatusCode::BAD_REQUEST)); }
     if k == "automations.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "automations.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "delegation.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "delegation.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "companion.focusMode" && !value.is_boolean() { return Err(derr("invalid_argument", "companion.focusMode requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "companion.positions" && !valid_companion_positions(value) { return Err(derr("invalid_argument", "companion.positions must map at most 8 display names to {x,y} numbers", StatusCode::BAD_REQUEST)); }
     if k == "questions.expirySecs" && !value.as_i64().is_some_and(|secs| (1_800..=604_800).contains(&secs)) { return Err(derr("invalid_argument", "questions.expirySecs requires an integer between 1800 and 604800", StatusCode::BAD_REQUEST)); }
@@ -2541,6 +2543,142 @@ async fn finish_turn_cancelled(st: &AppState, sid: &str, turn: &str) {
 /// How many warmed-but-untouched conversations are kept active at once.
 const WARM_MAX: usize = 2;
 
+/// Ask one conversation's provider to stop its turn. Shared by `session.cancel`
+/// and by `delegation.cancel`, so stopping an assignment stops exactly the turn
+/// the `session.cancel` RPC would have stopped. A turn still starting has no
+/// provider handle yet: the request is recorded and the turn driver checks it
+/// after activation and before delivering a prompt.
+///
+/// This is the no-expectation form: `session.cancel` stops whatever is live, in
+/// exactly the order it always has (the pending retry is dropped first).
+pub(crate) async fn cancel_session_turn(st: &AppState, id: &str) -> Result<Value, DispatchError> {
+    // Stopping never schedules a retry, and it cancels one already waiting.
+    if !id.is_empty() {
+        retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+    }
+    cancel_session_turn_matched(st, id, None).await
+}
+
+/// Stop a conversation's turn only while it is still `expected_turn_id`.
+///
+/// `delegation.cancel` uses this: between reading the assignment's turn and
+/// stopping it, another assignment's brief or a retry can make a different turn
+/// live, and stopping that one would stop work the owner did not cancel. The
+/// comparison happens inside the per-session gate, so the live turn cannot change
+/// between the check and the state change that begins the stop. On a mismatch
+/// nothing is cancelled, no state is written and no retry is dropped: the typed
+/// answer `{"cancellationRequested": false, "reason": "turn_changed"}` says why.
+pub(crate) async fn cancel_session_turn_if(st: &AppState, id: &str, expected_turn_id: &str) -> Result<Value, DispatchError> {
+    if expected_turn_id.is_empty() {
+        return Ok(json!({"cancellationRequested": false, "reason": "turn_changed"}));
+    }
+    cancel_session_turn_matched(st, id, Some(expected_turn_id)).await
+}
+
+/// The one body both forms share. A turn that is still starting has no provider
+/// handle, so the stop is recorded instead; `starting_cancels` is keyed by turn
+/// id, and the turn driver checks it before delivering the prompt.
+enum CancelTarget {
+    Starting,
+    Active(Box<ActiveSession>),
+}
+
+async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&str>) -> Result<Value, DispatchError> {
+    let gate = gate_for_session(st, id).await;
+    // A checked assignment stop must keep turn admission excluded until the
+    // provider has received the interrupt. Otherwise a completed turn can be
+    // replaced between the ID check and a provider's session-scoped cancel.
+    if let Some(expected_turn) = expected {
+        let stop = {
+            let _guard = gate.lock().await;
+            if session_is_deleted(st, id).await { return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND)); }
+            if st.active_turns.lock().await.get(id).map(String::as_str) != Some(expected_turn) {
+                return Ok(json!({"cancellationRequested": false, "reason": "turn_changed"}));
+            }
+            let active = st.sessions.lock().await.get(id).cloned();
+            st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
+            if let Some(active) = active {
+                Some(tokio::time::timeout(std::time::Duration::from_secs(6), active.adapter.cancel(&active.handle)).await)
+            } else {
+                st.starting_cancels.lock().await.insert(expected_turn.to_owned());
+                None
+            }
+        };
+        match stop {
+            None | Some(Ok(Ok(()))) => {
+                retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+                return Ok(json!({"cancellationRequested": true}));
+            }
+            Some(Ok(Err(error))) => {
+                restore_cancel_state_for_turn(st, id, &gate, expected_turn).await;
+                return Err(derr("unsupported", &error.to_string(), StatusCode::BAD_REQUEST));
+            }
+            Some(Err(_)) => {
+                // A timeout is ambiguous: do not claim that the provider was
+                // stopped or schedule a retry. The normal turn events settle it.
+                restore_cancel_state_for_turn(st, id, &gate, expected_turn).await;
+                return Err(derr("timeout", "The agent did not confirm the stop. The turn may still be running.", StatusCode::REQUEST_TIMEOUT));
+            }
+        }
+    }
+    let target = {
+        let _guard = gate.lock().await;
+        if session_is_deleted(st, id).await { return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND)); }
+        // One read of the live turn inside the gate. A new turn reservation needs
+        // this same gate, so the map can only lose its entry here, never gain a
+        // different turn: the id below is the one the comparison approved.
+        let live = st.active_turns.lock().await.get(id).cloned();
+        if let Some(expected) = expected {
+            if live.as_deref() != Some(expected) {
+                return Ok(json!({"cancellationRequested": false, "reason": "turn_changed"}));
+            }
+        }
+        match st.sessions.lock().await.get(id).cloned() {
+            Some(active) => {
+                st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+                if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
+                CancelTarget::Active(Box::new(active))
+            }
+            None => {
+                if let Some(turn_id) = live {
+                    st.starting_cancels.lock().await.insert(turn_id);
+                    st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+                    if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
+                    CancelTarget::Starting
+                } else {
+                    return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
+                }
+            }
+        }
+    };
+    // The expectation has matched. The provider is asked to stop before anything
+    // else waits, so the gap in which the turn can end by itself and another one
+    // start is as short as this function can make it; the pending retry is then
+    // dropped, and only because the check passed. A stop meant for another turn
+    // therefore never discards this conversation's retry. The gate is released
+    // first: the retry hook can relay a stopped assignment to another
+    // conversation, and the codebase never does adapter or relay I/O under it.
+    let active = match target {
+        CancelTarget::Starting => {
+            if expected.is_some() && !id.is_empty() {
+                retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+            }
+            return Ok(json!({"cancellationRequested":true}));
+        }
+        CancelTarget::Active(active) => active,
+    };
+    let cancelled = active.adapter.cancel(&active.handle).await;
+    if expected.is_some() && !id.is_empty() {
+        retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+    }
+    if let Err(e) = cancelled {
+        let _ = restore_cancel_state(st, id, &gate).await;
+        return Err(derr("unsupported",&e.to_string(),StatusCode::BAD_REQUEST));
+    }
+    Ok(json!({"cancellationRequested":true}))
+}
+
 /// Close a conversation's adapter process and release its turn. Shared by the
 /// `session.close` RPC and warm-up eviction.
 async fn close_session(st: &AppState, id: &str) -> Result<Value, DispatchError> {
@@ -2601,6 +2739,71 @@ async fn session_warm(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     Ok(json!({"warming":true,"active":false}))
 }
 
+/// The facts both `session.model.plan` previews and `session.model.update`
+/// acts on, read here once so the two RPCs can never disagree. `busy` has no
+/// field of its own: it is `turn_active || !state_ready`, exactly the two
+/// refusals the update already made.
+struct SessionModelFacts {
+    previous_model: Option<String>,
+    model_changed: bool,
+    turn_active: bool,
+    state_ready: bool,
+    locked: bool,
+    has_history: bool,
+    context_at_risk: bool,
+}
+
+async fn session_model_facts(st: &AppState, row: &Value, sid: &str, next_model: Option<&str>) -> Result<SessionModelFacts, DispatchError> {
+    let previous = row["modelLock"].clone();
+    let previous_model = if previous.is_object() {
+        previous["model"].as_str().map(str::to_owned)
+    } else {
+        exec_options_for_session(st, row)?.model
+    };
+    let model_changed = previous_model.as_deref() != next_model;
+    let turn_active = st.active_turns.lock().await.contains_key(sid);
+    let state_ready = matches!(row["state"].as_str(), Some("idle" | "closed" | "error" | "completed"));
+    let locked = row["agentId"].as_str().is_some_and(|agent_id| st.db.agent_get(agent_id).map(|agent| bot_is_locked(&agent)).unwrap_or(false));
+    // Context exists when a provider session took prompts or the conversation
+    // has anything said in it. A first model choice needs no warning.
+    let had_provider_context = row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty())
+        || row["contextUsed"].as_i64().is_some_and(|used| used > 0)
+        || row["contextModel"].as_str().is_some_and(|model| !model.is_empty());
+    let has_history = had_provider_context || st.db.session_had_provider_turns(sid).unwrap_or(false) || st.db.session_has_user_messages(sid).unwrap_or(false);
+    Ok(SessionModelFacts { previous_model, model_changed, turn_active, state_ready, locked, has_history, context_at_risk: model_changed && has_history })
+}
+
+/// Ask the provider's own adapter how it applies a changed model. An adapter
+/// that is not installed cannot be proved to keep the session, so it keeps the
+/// honest default: a fresh provider session.
+fn model_switch_for(st: &AppState, provider: &str) -> ModelSwitch {
+    adapter_for(&st.adapters, provider).map(|adapter| adapter.model_switch()).unwrap_or_default()
+}
+
+/// Whether this change carries on in the same provider session. Only a real
+/// model change on a provider session the adapter proves it can keep counts;
+/// everything else starts a fresh session and says so.
+fn keeps_provider_session(st: &AppState, row: &Value, model_changed: bool) -> bool {
+    model_changed
+        && row["providerSessionId"].as_str().is_some_and(|id| !id.is_empty())
+        && model_switch_for(st, row["provider"].as_str().unwrap_or("")) == ModelSwitch::KeepsSession
+}
+
+/// One plain sentence for the composer, one per honest outcome.
+fn model_continuity_reason(provider: &str, continuity: &str, model_changed: bool) -> &'static str {
+    match continuity {
+        "kept" => match provider {
+            "codex" => "Your next message asks Codex to continue this thread on the new model. If Codex cannot, that message fails with its reason and the model is not changed silently.",
+            "claude" => "Your next message restarts Claude Code and asks it to resume this chat on the new model. If it cannot, that message fails with its reason and nothing falls back silently.",
+            "opencode" => "Before your next message the agent is asked to switch this chat to the new model. If it refuses, that message is not sent and you see why.",
+            _ => "Your next message asks this agent to carry on the chat with the new model. If it cannot, that message fails with its reason.",
+        },
+        "recap" => "This runtime cannot switch models inside a chat, so the new model starts a fresh session and is given a short summary of the conversation; it will not have the full working memory.",
+        _ if !model_changed => "This conversation already uses this model.",
+        _ => "There is no conversation context to lose, so the new model starts a fresh provider session.",
+    }
+}
+
 async fn update_session_model(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
         .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
@@ -2609,21 +2812,12 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     // prevents a prompt from reserving a turn with stale thinking/model options.
     let _guard = gate.lock().await;
     if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-    if st.active_turns.lock().await.contains_key(sid) {
-        return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
-    }
     let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
     // FIX39 item 13: a locked bot's conversation cannot change model, effort,
     // speed or permission either. P5 audit F1: plan mode is a per-conversation
     // work mode, not one of the locked settings, so a request that carries only
     // `planMode` (the Plan pill and "Approve plan") still passes.
     let touches_locked_settings = ["model", "thinking", "serviceTier", "approvalMode"].iter().any(|key| p.get(*key).is_some());
-    if touches_locked_settings && row["agentId"].as_str().is_some_and(|agent_id| st.db.agent_get(agent_id).map(|agent| bot_is_locked(&agent)).unwrap_or(false)) {
-        return Err(locked_bot_error());
-    }
-    if !matches!(row["state"].as_str(), Some("idle" | "closed" | "error" | "completed")) {
-        return Err(derr("conflict", "model can only change between turns", StatusCode::CONFLICT));
-    }
     // Omitted model/thinking keep the conversation's current values so speed
     // and permission changes can be sent on their own.
     let current = exec_options_for_session(st, &row)?;
@@ -2658,16 +2852,31 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
         Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "bypass") => Some(Some(value.clone())),
         _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, bypass or null", StatusCode::BAD_REQUEST)),
     };
-    let previous = row["modelLock"].clone();
-    let previous_model = if previous.is_object() {
-        previous["model"].as_str().map(str::to_owned)
-    } else {
-        exec_options_for_session(st, &row)?.model
-    };
-    let next_model = model.as_deref();
-    let model_changed = previous_model.as_deref() != next_model;
-    if model_changed && p["confirmModelChange"] != true {
-        return Err(derr("confirmation_required", "Changing models may reset provider context and alter response quality or speed. Confirm to continue.", StatusCode::CONFLICT));
+    let facts = session_model_facts(st, &row, sid, model.as_deref()).await?;
+    if facts.turn_active {
+        return Err(derr("conflict", "model cannot change while a turn is active", StatusCode::CONFLICT));
+    }
+    if touches_locked_settings && facts.locked { return Err(locked_bot_error()); }
+    if !facts.state_ready {
+        return Err(derr("conflict", "model can only change between turns", StatusCode::CONFLICT));
+    }
+    // A stale composer is refused before anything is written. `expectedModel`
+    // is the model the UI showed when the user chose; a mismatch means the
+    // conversation changed elsewhere.
+    match p.get("expectedModel") {
+        None => {}
+        Some(Value::Null) if facts.previous_model.is_some() => return Err(stale_model_error()),
+        Some(Value::String(expected)) if facts.previous_model.as_deref() != Some(expected.as_str()) => return Err(stale_model_error()),
+        Some(Value::String(_)) | Some(Value::Null) => {}
+        Some(_) => return Err(derr("invalid_argument", "expectedModel must be a model identifier or null", StatusCode::BAD_REQUEST)),
+    }
+    let model_changed = facts.model_changed;
+    // The adapter's own answer decides whether the provider session survives a
+    // model change; without a saved provider session there is nothing to keep.
+    let keeps_session = keeps_provider_session(st, &row, model_changed);
+    let context_at_risk = facts.context_at_risk && !keeps_session;
+    if context_at_risk && p["confirmModelChange"] != true {
+        return Err(derr("confirmation_required", "This conversation already has context. Changing models starts a new provider session, so the new model begins without the working memory of this chat. Confirm to continue.", StatusCode::CONFLICT));
     }
     let runtime = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == row["runtimeId"]).cloned()
         .ok_or_else(|| derr("provider_unavailable", "runtime is not installed", StatusCode::BAD_GATEWAY))?;
@@ -2675,6 +2884,7 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     options.model = model.clone();
     options.thinking = thinking.clone();
     let mut lock = json!({"model":options.model,"thinking":options.thinking});
+    let previous = row["modelLock"].clone();
     // Workflow eligibility is captured per conversation at creation time.
     // Model, effort, and speed edits must not inherit a later global setting.
     if row["provider"] == "claude" {
@@ -2725,27 +2935,70 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     if let Some((_, error)) = preflight_exec_options(st, &runtime, row["provider"].as_str().unwrap_or(""), &options).await {
         return Err(error);
     }
-    // Persist DB changes before taking the live handle out of the map. A
-    // storage failure must not orphan an adapter process.
-    if model_changed { st.db.clear_session_provider_id(sid).map_err(agent_error)?; }
-    let _ = st.db.set_session_model_lock(sid, &lock).map_err(agent_error)?;
-    let active_to_close = if model_changed { st.sessions.lock().await.remove(sid) } else { None };
+    // A repeated identical request is a no-op: no provider id is cleared, no
+    // reset is emitted and nothing is written when the lock already says this.
+    let lock_changed = lock != previous;
+    let updated = if lock_changed {
+        // The lock and the provider-id clear are one transaction; a failure
+        // leaves both at their old values instead of orphaning a provider handle.
+        st.db.session_apply_model_change(sid, &lock, model_changed && !keeps_session).map_err(agent_error)?
+    } else {
+        st.db.session_event_summary(sid).map_err(agent_error)?
+    };
+    let active_to_close = if model_changed && !keeps_session { st.sessions.lock().await.remove(sid) } else { None };
     // The reset event is persisted before the summary so both the RPC result
     // and subsequent session.changed event report an unknown fresh context.
-    if model_changed { st.emit("session.context.reset", json!({"sessionId":sid})).await; }
-    // FIX36 D3: a model change starts a fresh provider session. For the Manager
-    // that is still the same Manager, so its next prompt carries a handover of
-    // its profile, playbook, workspace and pending work, and the transcript says
-    // so. Ordinary bots keep the plain "fresh session" notice.
-    if model_changed {
+    // A provider that keeps its session loses nothing, so it gets neither.
+    let updated = if model_changed && !keeps_session {
+        st.emit("session.context.reset", json!({"sessionId":sid})).await;
+        st.db.session_event_summary(sid).map_err(agent_error)?
+    } else { updated };
+    // FIX36 D3: a model change that starts a fresh provider session. For the
+    // Manager that is still the same Manager, so its next prompt carries a
+    // handover of its profile, playbook, workspace and pending work, and the
+    // transcript says so. Ordinary bots keep the plain "fresh session" notice.
+    if model_changed && !keeps_session {
         crate::knowledge::announce_model_change(st, sid).await;
     }
-    let updated = st.db.session_event_summary(sid).map_err(agent_error)?;
     if let Some(active) = active_to_close { let _ = active.adapter.close_session(&active.handle).await; }
     st.emit("session.changed", updated.clone()).await;
     // A model or effort change invalidates a pending automatic retry.
     retry::cancel_pending(st, sid, retry::DeclineReason::Superseded, false).await;
-    Ok(json!({"session":updated,"modelChanged":model_changed}))
+    Ok(json!({"session":updated,"modelChanged":model_changed,"contextKept":model_changed && keeps_session}))
+}
+
+fn stale_model_error() -> DispatchError {
+    derr("conflict", "This conversation's model changed elsewhere. Reload it and choose again.", StatusCode::CONFLICT)
+}
+
+/// Read-only preview of what a model change would do, allowed while a turn is
+/// live so the composer can explain itself before the user commits. It reuses
+/// the same facts and capability the update acts on and writes nothing.
+async fn session_model_plan(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
+        .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
+    if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
+    let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    let next_model = p["model"].as_str().map(str::trim).filter(|model| !model.is_empty())
+        .ok_or_else(|| derr("invalid_argument", "Choose a concrete model. Conversation model selections cannot be unset.", StatusCode::BAD_REQUEST))?;
+    let facts = session_model_facts(st, &row, sid, Some(next_model)).await?;
+    let provider = row["provider"].as_str().unwrap_or("").to_owned();
+    let keeps_session = keeps_provider_session(st, &row, facts.model_changed);
+    let continuity = if !facts.model_changed || !facts.has_history { "none" } else if keeps_session { "kept" } else { "recap" };
+    Ok(json!({
+        "ok": true,
+        "sessionId": sid,
+        "provider": provider,
+        "currentModel": facts.previous_model,
+        "nextModel": next_model,
+        "modelChanged": facts.model_changed,
+        "busy": facts.turn_active || !facts.state_ready,
+        "locked": facts.locked,
+        "contextAtRisk": facts.context_at_risk && !keeps_session,
+        "continuity": continuity,
+        "hasHistory": facts.has_history,
+        "reason": model_continuity_reason(&provider, continuity, facts.model_changed),
+    }))
 }
 
 /// FIX39 item 19: set (or clear) a conversation's own permission pin without
@@ -2897,6 +3150,17 @@ enum PromptOrigin {
     Task,
 }
 
+/// An optional client-supplied key that makes a send safe to replay. Eight to
+/// eighty characters of `[A-Za-z0-9_-]`; the UI generates it per composer
+/// message, so a resend after a reconnect carries the same key.
+pub(crate) fn client_message_id(value: &Value) -> Result<Option<String>, DispatchError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(id) if (8..=80).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') => Ok(Some(id.clone())),
+        _ => Err(derr("invalid_argument", "clientMessageId must be 8 to 80 characters of letters, digits, hyphens or underscores.", StatusCode::BAD_REQUEST)),
+    }
+}
+
 /// The prompt path accepts `meta` only from daemon-internal callers, and only
 /// for allowlisted kinds. A user-supplied RPC can never set message meta.
 fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
@@ -2904,7 +3168,7 @@ fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
     let kind = object.get("kind")?.as_str()?;
     match origin {
         PromptOrigin::User => None,
-        PromptOrigin::Team => matches!(kind, "blob_message" | "blob_reply").then(|| Value::Object(object.clone())),
+        PromptOrigin::Team => matches!(kind, "blob_message" | "blob_reply" | "blob_update").then(|| Value::Object(object.clone())),
         PromptOrigin::Queue => {
             if kind != "auto_retry" {
                 return None;
@@ -3003,6 +3267,54 @@ fn auto_titles_enabled(settings: &Value) -> bool {
     }
 }
 
+/// The one error code for a send whose delivery could not be confirmed. It is
+/// HTTP 409 like `confirmation_required`, because the only way forward is the
+/// owner's explicit decision.
+pub(crate) const DELIVERY_UNKNOWN_CODE: &str = "delivery_unknown";
+/// The one sentence for a send whose delivery could not be confirmed. It says
+/// exactly what is known, and nothing about the message's content.
+pub(crate) const DELIVERY_UNKNOWN_MESSAGE: &str = "Bitbots could not confirm that the agent received this message. It may have reached the agent. Check the conversation before sending it again.";
+
+fn delivery_unknown() -> DispatchError {
+    derr(DELIVERY_UNKNOWN_CODE, DELIVERY_UNKNOWN_MESSAGE, StatusCode::CONFLICT)
+}
+
+/// Whether a stored message's turn may never have reached the agent.
+///
+/// `AgentEvent::PromptAccepted` writes `delivery:"acknowledged"` on the turn and
+/// a terminal turn that never saw it is written `delivery:"unknown"` by
+/// `finish_turn_delivery`. A completed turn proves delivery whatever the marker
+/// says, and a turn that is still running is in flight rather than unknown.
+/// Every other terminal ending without that acknowledgement stays ambiguous:
+/// the code cannot tell a pre-delivery failure from a delivered prompt, so it
+/// never claims acceptance (a cancelled turn is in this group on purpose,
+/// because a cancel can race a delivery).
+fn message_delivery_unknown(message: &Value) -> bool {
+    match message["turnState"].as_str().unwrap_or("") {
+        "" | "completed" | "starting" | "working" | "waiting_permission" | "cancelling" => false,
+        _ => message["delivery"].as_str() != Some("acknowledged"),
+    }
+}
+
+/// One rule for both `clientMessageId` replay checks, so they cannot drift.
+/// `Ok(Some(reply))` answers the replay with the turn the first send started;
+/// `Ok(None)` means the stored row is not an acceptance and the send goes ahead
+/// as a new turn (only a confirmed resend of an ambiguous send).
+fn replay_reply(existing: &Value, text: &str, state: &str, confirm_resend: bool) -> Result<Option<Value>, DispatchError> {
+    if existing["content"].as_str() != Some(text) {
+        return Err(derr("conflict", "This message id was already used for a different message.", StatusCode::CONFLICT));
+    }
+    if message_delivery_unknown(existing) {
+        if !confirm_resend { return Err(delivery_unknown()); }
+        // The owner has checked the conversation and asked for it again. The new
+        // turn stores the same key on its own message row, and
+        // `message_by_client_id` answers with the newest row from then on, so a
+        // second replay finds the resend and not the doubtful first send.
+        return Ok(None);
+    }
+    Ok(Some(json!({"turnId":existing["turnId"],"accepted":true,"state":state,"deduplicated":true})))
+}
+
 async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
@@ -3014,9 +3326,16 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
             StatusCode::BAD_REQUEST,
         ));
     }
+    // Optional replay key: a resent (or reconnected) send with the same key
+    // returns its first outcome instead of starting a second turn. It only
+    // overrides a send whose delivery could not be confirmed.
+    let client_message_id = client_message_id(&p["clientMessageId"])?;
+    let confirm_resend = p["confirmResend"].as_bool() == Some(true);
     let session_before = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session_before["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
-    if session_before["link"]["kind"] == "side" && !matches!(origin, PromptOrigin::Team | PromptOrigin::Queue) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    // A question answer is daemon-written, and it is the only way a delegated
+    // bot's pending question can continue its own assignment.
+    if session_before["link"]["kind"] == "side" && !matches!(origin, PromptOrigin::Team | PromptOrigin::Queue | PromptOrigin::QuestionAnswer) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     // A chosen skill or Manager command adds a hidden per-turn directive to the
     // provider prompt; the stored message keeps the text exactly as typed.
     let command_directive = commands::directive(st, &sid, &p["command"])?;
@@ -3036,8 +3355,18 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         if session_is_deleted(st, &sid).await || !session_gate_is_current(st, &sid, &gate).await {
             return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
         }
-        if st.active_turns.lock().await.contains_key(&sid) { return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT)); }
         let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
+        // A replay is answered before the active-turn refusal: the turn the
+        // first send started may still be running, and the resend it caused
+        // must not be treated as a second send.
+        if let Some(client_id) = &client_message_id {
+            if let Some(existing) = st.db.message_by_client_id(&sid, client_id).map_err(agent_error)? {
+                if let Some(reply) = replay_reply(&existing, &text, row["state"].as_str().unwrap_or("idle"), confirm_resend)? {
+                    return Ok(reply);
+                }
+            }
+        }
+        if st.active_turns.lock().await.contains_key(&sid) { return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT)); }
         let state = row["state"].as_str().unwrap_or("idle").to_owned();
         if state == "limited" && origin != PromptOrigin::User {
             return Err(derr("conflict", "this conversation is waiting for its usage limit", StatusCode::CONFLICT));
@@ -3075,6 +3404,17 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         }
         if st.active_turns.lock().await.contains_key(&sid) {
             return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT));
+        }
+        // Two identical sends can both pass the first check while one waits for
+        // the gate during preflight. The message is stored inside this same
+        // gate, so a row that appears here is the winner and this request is
+        // its replay.
+        if let Some(client_id) = &client_message_id {
+            if let Some(existing) = st.db.message_by_client_id(&sid, client_id).map_err(agent_error)? {
+                if let Some(reply) = replay_reply(&existing, &text, &previous_state, confirm_resend)? {
+                    return Ok(reply);
+                }
+            }
         }
         let live_session = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
         if live_session["archived"] == true || live_session["state"] != previous_state
@@ -3119,14 +3459,22 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
             Some((meta["retryOf"].as_str()?.to_owned(), meta["attempt"].as_u64()?))
         });
         let mut message_data = if attachments.is_empty() { json!({}) } else {
-            json!({"attachments": attachments.iter().map(|a| json!({"name":a.name,"mediaType":a.media_type,"path":a.path})).collect::<Vec<_>>()})
+            let stored = persist_message_images(st, &turn, &attachments);
+            json!({"attachments": attachments.iter().enumerate().map(|(index, a)| {
+                let mut value = json!({"name":a.name,"mediaType":a.media_type,"path":a.path});
+                if let Some(file) = stored.get(index).and_then(|file| file.clone()) { value["file"] = json!(file); }
+                value
+            }).collect::<Vec<_>>()})
         };
         if let Some((retry_of, attempt)) = &retry_chain {
             let _ = st.db.merge_turn_data(&turn, &json!({"retryOf":retry_of,"attempt":attempt}));
         }
-        if allowed_meta.is_some() || reply_snapshot.is_some() {
+        if client_message_id.is_some() || allowed_meta.is_some() || reply_snapshot.is_some() {
             let mut meta = allowed_meta.unwrap_or_else(|| json!({}));
             if let Some(snapshot) = &reply_snapshot { meta["replyTo"] = snapshot.clone(); }
+            // The replay key lives with the message it created; it is an id the
+            // UI generated, never message text, so it is safe to store.
+            if let Some(client_id) = &client_message_id { meta["clientMessageId"] = json!(client_id); }
             message_data["meta"] = meta;
         }
         if let Some((_, kept)) = &references { message_data["references"] = kept.clone(); }
@@ -3136,7 +3484,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         // twice or overwrite a user rename.
         if auto_titles_enabled(&st.db.settings().unwrap_or(Value::Null)) {
             if let Some(name) = session["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()).and_then(|a| a["name"].as_str().map(str::to_owned)) {
-                if let Some(title) = experiments::automatic_title(&session, &name, &text) {
+                if let Some(title) = experiments::automatic_title(&session, &name, &text, attachments.len()) {
                     if let Ok(Some(summary)) = st.db.session_auto_title(&sid, &title) { st.emit("session.changed", summary).await; }
                 }
             }
@@ -3182,6 +3530,19 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         }
         next_state.to_owned()
     };
+    // A question's answer starts a turn of its own: the assignment the question
+    // belongs to adopts it, so this turn's ending finishes that assignment and
+    // relays the child's final text, even though the answer waited in the queue.
+    // The id is the one stored on the question, never anything in the request.
+    if origin == PromptOrigin::QuestionAnswer {
+        if let Some(question_id) = p["meta"]["questionId"].as_str().filter(|id| !id.is_empty()) {
+            let delegation_id = st.db.permission_get(question_id).ok()
+                .and_then(|card| card["delegationId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned));
+            if let Some(delegation_id) = delegation_id {
+                crate::delegations::answer_started(st, &delegation_id, &turn, question_id);
+            }
+        }
+    }
     st.denied_turns.lock().await.remove(&turn);
     // A send means this conversation is no longer just "warmed".
     st.warm_lru.lock().await.retain(|id| id != &sid);
@@ -3487,6 +3848,78 @@ fn image_media_type(header: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// Sent images are copied into the daemon's own folder when the prompt is
+/// accepted, so the thumbnail in the transcript survives the staging folder's
+/// clean-up, a reload and a restart. The file name is recorded on the message
+/// and is the only thing a thumbnail read accepts.
+const MESSAGE_IMAGE_DIR: &str = "message-images";
+
+fn message_images_dir(st: &AppState) -> Result<PathBuf, DispatchError> {
+    let base = st.team.data_dir.lock().ok().and_then(|dir| dir.clone());
+    base.map(|dir| dir.join(MESSAGE_IMAGE_DIR)).ok_or_else(|| derr("unavailable", "The image folder is unavailable.", StatusCode::SERVICE_UNAVAILABLE))
+}
+
+fn attachment_extension_for(media_type: &str) -> &'static str {
+    match media_type { "image/png" => "png", "image/jpeg" => "jpg", "image/gif" => "gif", _ => "webp" }
+}
+
+/// Copies every accepted attachment into the daemon's folder and returns the
+/// stored file names in attachment order. A failed copy leaves that attachment
+/// on its staged path, so the message still reaches the provider.
+fn persist_message_images(st: &AppState, turn: &str, attachments: &[PromptAttachment]) -> Vec<Option<String>> {
+    if attachments.is_empty() { return Vec::new(); }
+    let Ok(dir) = message_images_dir(st) else { return attachments.iter().map(|_| None).collect() };
+    if std::fs::create_dir_all(&dir).is_err() { return attachments.iter().map(|_| None).collect() }
+    attachments.iter().enumerate().map(|(index, attachment)| {
+        let file = format!("{turn}-{index}.{}", attachment_extension_for(&attachment.media_type));
+        std::fs::copy(&attachment.path, dir.join(&file)).ok().map(|_| file)
+    }).collect()
+}
+
+/// `message.image`: one image of one message as a data URL. The message must
+/// belong to the conversation, and the image is read from what that message
+/// recorded (a daemon-owned file, or the staged path an older message saved),
+/// never from a path the caller supplies.
+fn message_image(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
+    let session_id = p["sessionId"].as_str().filter(|value| !value.is_empty())
+        .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
+    let message_id = p["messageId"].as_str().filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| derr("invalid_argument", "messageId is invalid", StatusCode::BAD_REQUEST))?;
+    let index = p["index"].as_u64().filter(|index| *index < MAX_PROMPT_ATTACHMENTS as u64)
+        .ok_or_else(|| derr("invalid_argument", "index must be the position of an image in this message", StatusCode::BAD_REQUEST))? as usize;
+    let _session = st.db.session_detail(session_id).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    let attachments = st.db.message_attachments(session_id, message_id)
+        .map_err(|_| derr("not_found", "That image is not part of this conversation.", StatusCode::NOT_FOUND))?;
+    let attachment = attachments.get(index).ok_or_else(|| derr("not_found", "That image is not part of this message.", StatusCode::NOT_FOUND))?;
+    let stored = attachment["file"].as_str().filter(|file| !file.is_empty());
+    let path = match stored {
+        Some(file) => {
+            // A recorded file is a bare name inside the daemon's folder.
+            if file.contains('/') || file.contains('\\') || file.contains("..") {
+                return Err(derr("not_found", "That image is not available.", StatusCode::NOT_FOUND));
+            }
+            message_images_dir(st)?.join(file)
+        }
+        // An older message kept only its staged path; it is still the path that
+        // message recorded, and the signature is checked again below.
+        None => PathBuf::from(attachment["path"].as_str().filter(|path| !path.is_empty())
+            .ok_or_else(|| derr("not_found", "That image is no longer available.", StatusCode::NOT_FOUND))?),
+    };
+    let metadata = std::fs::metadata(&path).map_err(|_| derr("not_found", "The image file is no longer available.", StatusCode::NOT_FOUND))?;
+    if !metadata.is_file() || metadata.len() == 0 { return Err(derr("not_found", "The image file is no longer available.", StatusCode::NOT_FOUND)); }
+    if metadata.len() > MAX_ATTACHMENT_BYTES { return Err(derr("not_found", "The image file is too large to show.", StatusCode::NOT_FOUND)); }
+    let bytes = std::fs::read(&path).map_err(|_| derr("not_found", "The image file is no longer available.", StatusCode::NOT_FOUND))?;
+    let media_type = image_media_type(&bytes[..bytes.len().min(12)])
+        .ok_or_else(|| derr("not_found", "The saved image is damaged.", StatusCode::NOT_FOUND))?;
+    Ok(json!({
+        "messageId": message_id,
+        "index": index,
+        "name": attachment["name"],
+        "mediaType": media_type,
+        "dataUrl": format!("data:{media_type};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)),
+    }))
+}
+
 async fn gate_for_session(st: &AppState, id: &str) -> Arc<Mutex<()>> {
     let mut gates = st.session_gates.lock().await;
     gates.entry(id.to_owned()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
@@ -3508,6 +3941,16 @@ async fn session_is_deleted(st: &AppState, id: &str) -> bool {
 async fn restore_cancel_state(st: &AppState, id: &str, gate: &Arc<Mutex<()>>) {
     let _guard = gate.lock().await;
     if session_is_deleted(st, id).await || st.db.session_state(id).ok().flatten().as_deref() != Some("cancelling") { return; }
+    let _ = st.db.update_session_state(id, "working");
+    if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
+}
+
+/// A delayed cancel result must never change the state of a later turn.
+async fn restore_cancel_state_for_turn(st: &AppState, id: &str, gate: &Arc<Mutex<()>>, expected_turn: &str) {
+    let _guard = gate.lock().await;
+    if session_is_deleted(st, id).await
+        || st.active_turns.lock().await.get(id).map(String::as_str) != Some(expected_turn)
+        || st.db.session_state(id).ok().flatten().as_deref() != Some("cancelling") { return; }
     let _ = st.db.update_session_state(id, "working");
     if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
 }
@@ -3932,6 +4375,17 @@ async fn forward_events_with_timeouts(
                         st.emit("session.changed", summary).await;
                     }
                 }
+                // A side conversation's request that is left pending for the owner
+                // wakes its Manager, once per request and with no authority: the
+                // Manager can neither answer nor approve it. A request a policy
+                // (including policy:team) already answered, and an unattended run's
+                // request, wakes nothing.
+                if inserted.is_ok() && !auto_approved && !is_automation && session["link"]["kind"] == "side" {
+                    let (attention_st, attention_sid, attention_request, attention_title) = (st.clone(), sid.clone(), id.clone(), title.clone());
+                    tokio::spawn(async move {
+                        crate::delegations::attention(&attention_st, &attention_sid, &attention_request, "approval", &attention_title).await;
+                    });
+                }
                 // A board task waiting for this approval is not "running" on
                 // the board until someone answers.
                 crate::tasks::permission_pending(&st, &sid).await;
@@ -4098,13 +4552,19 @@ async fn forward_events_with_timeouts(
                     finish_turn_failed(&st,&sid,t,failure_class,message,detail.clone(),"error").await;
                     after_provider_failure(&st,&sid,t,detail.or_else(|| Some(message.to_owned())));
                 } else {
-                    // An adapter error that arrives with no watched turn (for
-                    // example between turns) still marks the session and tells
-                    // the user, exactly as it did before recovery existed.
-                    let _ = st.db.update_session_state(&sid, "error");
+                    // An adapter error that arrives with no watched turn is not
+                    // a turn outcome: the CLI can exit after its turn ended.
+                    // The latest genuine terminal outcome stands, so a finished
+                    // success or cancellation keeps its state (and is not shown
+                    // as Failed); a session still in flight does fail, exactly as
+                    // it did before recovery existed.
+                    let state = st.db.session_state(&sid).ok().flatten().unwrap_or_default();
+                    let in_flight = matches!(state.as_str(), "starting" | "working" | "waiting_permission" | "cancelling");
+                    if in_flight { let _ = st.db.update_session_state(&sid, "error"); }
                     st.active_turns.lock().await.remove(&sid);
                     if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
-                    st.emit("turn.error", json!({"sessionId":sid,"turnId":turn,"message":message,"failureClass":failure_class,"detail":detail})).await;
+                    let reported_state = if in_flight { "error".to_owned() } else { state };
+                    st.emit("turn.error", json!({"sessionId":sid,"turnId":turn,"message":message,"failureClass":failure_class,"detail":detail,"state":reported_state})).await;
                 }
                 continue;
             }
@@ -4139,6 +4599,21 @@ async fn forward_events_with_timeouts(
                 let id = Uuid::new_v4().to_string();
                 let questions = serde_json::to_value(&questions).unwrap_or(Value::Null);
                 if st.db.insert_question(&id, &sid, &provider_request_id, &title, &questions, None).is_err() { continue; }
+                // The card belongs to the assignment whose turn asked it, exactly
+                // as the `ask_user` tool's card does: the id comes from the
+                // daemon's own ledger lookup, never from the request, and a
+                // question with no owner stays unlinked. A native answer is
+                // delivered to the provider (which continues the same turn), so
+                // no answer hold is created here.
+                if let Some(row) = crate::delegations::question_owner_row(&st, &sid).await {
+                    if let Some(delegation_id) = row["id"].as_str() { let _ = st.db.question_set_delegation(&id, delegation_id); }
+                }
+                // The Manager of a side conversation that asked this is told once,
+                // from its own task so a slow delivery cannot delay the event loop.
+                let (wake_st, wake_sid, wake_id, wake_title) = (st.clone(), sid.clone(), id.clone(), title.clone());
+                tokio::spawn(async move {
+                    crate::delegations::attention(&wake_st, &wake_sid, &wake_id, "question", &wake_title).await;
+                });
                 let _ = st.db.update_session_state(&sid, "waiting_permission");
                 if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
                 crate::tasks::permission_pending(&st, &sid).await;
@@ -4294,7 +4769,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|level| level == "debug")
         .unwrap_or_else(|| "info".to_string());
     let _log_guard = data_dir.as_deref().and_then(|dir| diagnostics::init_logging(dir, &log_level));
-    let recovered_sessions = db.recover_after_restart()?;
+    let recovery = db.recover_restart_state()?;
+    let recovered_sessions = recovery.sessions;
+    let closed_cards = recovery.closed_cards;
+    // A failure saved after its turn had already completed is a stale label,
+    // not a failed turn: the latest genuine terminal outcome wins.
+    let repaired_sessions = db.repair_stale_failed_sessions()?;
     let token = new_capability();
     let (events, _) = broadcast::channel(1024);
     let adapters = Arc::new(Adapters {
@@ -4341,10 +4821,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Durable tasks: ambiguous claims become needs_you (never a duplicate
     // spawn) and queued work is resumed once.
     tasks::startup(&st).await;
+    // FIX47: a lane that was live when the daemon stopped gets its turn's own
+    // outcome or an honest `interrupted`, and waiting briefs go back in the queue
+    // (they are drained once below, after the team address exists).
+    delegations::startup(&st).await;
     // Drop automatic retries that missed their window while the daemon was down.
     retry::reconcile_restart(&st).await;
     tokio::spawn(retry::sweep_loop(st.clone()));
-    for id in recovered_sessions {
+    // Native approval and question cards left pending by the previous process
+    // cannot be answered any more: the adapter that raised them is gone. Each is
+    // announced as expired and its conversation gets one content-free note, so a
+    // card that still looked answerable does not outlive the process that could
+    // act on it.
+    for card in &closed_cards {
+        st.emit("permission.resolved", json!({"permissionId":card["id"],"choice":"expired","status":"expired","reason":"daemon_restarted"})).await;
+    }
+    let mut noted: HashSet<&str> = HashSet::new();
+    for card in &closed_cards {
+        let session_id = card["sessionId"].as_str().unwrap_or("");
+        if session_id.is_empty() || !noted.insert(session_id) { continue; }
+        team::note(&st, session_id, "Bitbots restarted, so this request is no longer waiting. Ask again if it still matters.", json!({"kind":"permission_expired","reason":"daemon_restarted"})).await;
+    }
+    for id in recovered_sessions.into_iter().chain(repaired_sessions) {
         if let Ok(session) = st.db.session_event_summary(&id) {
             st.emit("session.changed", session).await;
         }
@@ -4357,6 +4855,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr = listener.local_addr()?;
     *st.team.address.lock().unwrap() = Some(addr.to_string());
     *st.team.data_dir.lock().unwrap() = data_dir;
+    // FIX47: the deliveries a restart restored have a team address now, so one
+    // drain can start them (the same fast path every turn ending uses).
+    let restored_queue = st.clone();
+    tokio::spawn(async move { team::drain_queued_deliveries(&restored_queue, None).await; });
     let quota_state = st.clone();
     tokio::spawn(quota_poll_loop(quota_state, st.events.subscribe()));
     let queue_state = st.clone();
@@ -4795,13 +5297,12 @@ mod phase2a_tests {
     }
     #[tokio::test]
     async fn manager_delegates_to_a_teammate_and_is_woken_by_the_relayed_reply() {
-        async fn approve_message(st: &AppState, session: &str, mut args: Value) -> Value {
-            args["doneGoal"] = json!("Task complete"); args["reportBack"] = json!("Results and evidence");
+        // A message to a teammate is sent at once, with no approval card.
+        async fn send_message(st: &AppState, session: &str, args: Value) -> Value {
             let response = call_tool(st,session,"message_blob",args).await;
             assert_ne!(response["isError"],true,"{response}");
-            assert!(response["content"][0]["text"].as_str().unwrap().contains("approval"));
-            let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
-            dispatch(st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap()
+            assert!(st.db.proposals_pending().unwrap().is_empty(), "a message creates no proposal");
+            response
         }
         let (mut st, _) = state();
         let runtime_id = "rt-team";
@@ -4830,15 +5331,13 @@ mod phase2a_tests {
         let listed = call_tool(&st, &main, "list_blobs", json!({})).await;
         let roster = listed["content"][0]["text"].as_str().unwrap();
         assert!(roster.contains("- Lead (you) [manager] — CTO") && roster.contains("- Mate"), "{roster}");
-        for (mut args, error) in [(json!({"blob":"Lead","message":"hi"}), "cannot delegate to yourself"), (json!({"blob":"Nobody","message":"hi"}), "No bot matches"), (json!({"blob":"Mate","message":"  "}), "brief cannot be empty")] {
-            args["doneGoal"]=json!("Task complete"); args["reportBack"]=json!("Evidence");
+        for (args, error) in [(json!({"blob":"Lead","message":"hi"}), "You cannot message yourself"), (json!({"blob":"Nobody","message":"hi"}), "No teammate is called that"), (json!({"blob":"Mate","message":"  "}), "message is required")] {
             let result = call_tool(&st, &main, "message_blob", args).await;
             assert_eq!(result["isError"], true);
             assert!(result["content"][0]["text"].as_str().unwrap().contains(error), "{result}");
         }
 
-        let sent = approve_message(&st, &main, json!({"blob":"@mate","message":"Check the build\nDetails follow."})).await;
-        assert_eq!(sent["decision"], "approved");
+        send_message(&st, &main, json!({"blob":"@mate","message":"Check the build\nDetails follow."})).await;
         let side = st.db.side_session(&mate_id, &lead_id).unwrap().expect("side conversation");
         // Without a topic, the conversation is titled from the brief's first words.
         assert_eq!(st.db.session_detail(&side).unwrap()["link"], json!({"kind":"side","peerAgentId":lead_id,"peerName":"Lead","originSessionId":main,"spawnedFromSessionId":main,"topic":"Check the build"}));
@@ -4858,19 +5357,18 @@ mod phase2a_tests {
         assert_eq!(reply["meta"]["fromName"], "Mate");
 
         // A follow-up reuses the same side conversation instead of opening another.
-        approve_message(&st, &main, json!({"blob":"Mate","message":"One more thing"})).await;
+        send_message(&st, &main, json!({"blob":"Mate","message":"One more thing"})).await;
         assert_eq!(st.db.side_session(&mate_id, &lead_id).unwrap().as_deref(), Some(side.as_str()));
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 2).await;
         assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 1);
 
         // A topic starts a separate, titled conversation; an id continues an earlier one.
-        let topical = approve_message(&st, &main, json!({"blob":"Mate","message":"Draft the release notes","topic":"\"Release notes\""})).await;
-        assert_eq!(topical["decision"], "approved");
+        send_message(&st, &main, json!({"blob":"Mate","message":"Draft the release notes","topic":"\"Release notes\""})).await;
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 3).await;
         let notes = st.db.side_session(&mate_id, &lead_id).unwrap().unwrap();
         assert_ne!(notes, side);
         assert_eq!(st.db.session_detail(&notes).unwrap()["title"], "Release notes");
-        approve_message(&st, &main, json!({"blob":"Mate","message":"Back to the build","conversation":side})).await;
+        send_message(&st, &main, json!({"blob":"Mate","message":"Back to the build","conversation":side})).await;
         wait_for_messages(&st, &main, |m| m.iter().filter(|m| m["meta"]["kind"] == "blob_reply").count() == 4).await;
         assert_eq!(st.db.session_list(false).unwrap().iter().filter(|s| s["agentId"] == mate_id.as_str()).count(), 2);
         assert_eq!(st.db.session_detail(&side).unwrap()["link"]["topic"], "Check the build", "continuing keeps the topic");
@@ -4900,7 +5398,7 @@ mod phase2a_tests {
         let sent_prompt = adapter.prompts.lock().unwrap().iter().rev().find(|text| text.starts_with("Follow up on #Check the build")).cloned().expect("referenced prompt");
         assert!(sent_prompt.contains("<bloblex_references>") && sent_prompt.contains(&format!("conversation \"{side}\"")), "{sent_prompt}");
 
-        // A chain that has already hopped too often is refused before a card is shown.
+        // A chain that has already hopped too often is refused before anything is sent.
         st.team.set_depth(&main, 6);
         let refused=call_tool(&st,&main,"message_blob",json!({"blob":"Mate","message":"again","doneGoal":"Done","reportBack":"Evidence"})).await;
         assert_eq!(refused["isError"], true);
@@ -5175,6 +5673,145 @@ mod phase2a_tests {
         assert_eq!(st.db.session_detail(&on_id).unwrap()["title"], "Ship the release");
         let _ = std::fs::remove_dir_all(data_dir);
     }
+
+    #[tokio::test]
+    async fn awkward_first_prompts_get_a_useful_title() {
+        let (mut st, _events) = state();
+        let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter, claude:Arc::new(ClaudeAdapter::default()) });
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        let data_dir = std::env::temp_dir().join(format!("bloblex-odd-titles-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let agent_id = st.db.agent_create(&json!({"name":"Titler","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+
+        // A greeting alone still titles the conversation, without quoting it.
+        let opened = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap();
+        let greeting = opened["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":greeting,"text":"hi"})).await.unwrap();
+        wait_for_messages(&st, &greeting, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&greeting).unwrap()["title"], "Quick hello");
+
+        // A greeting that wraps a real request keeps the request.
+        let wrapped = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":wrapped,"text":"Hello! Can you fix the login redirect?"})).await.unwrap();
+        wait_for_messages(&st, &wrapped, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&wrapped).unwrap()["title"], "fix the login redirect");
+
+        // Code first: the prose after the block names the conversation.
+        let coded = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":coded,"text":"```ts\nconst x = 1;\n```\nMake the export button work"})).await.unwrap();
+        wait_for_messages(&st, &coded, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&coded).unwrap()["title"], "Make the export button work");
+
+        // An image-only message says what was shared.
+        let png = data_dir.join("shot.png");
+        std::fs::write(&png, [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]).unwrap();
+        let shared = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        dispatch(&st, "session.prompt", json!({"sessionId":shared,"text":"","attachments":[{"path":png,"name":"shot.png"}]})).await.unwrap();
+        wait_for_messages(&st, &shared, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        assert_eq!(st.db.session_detail(&shared).unwrap()["title"], "Shared 1 image");
+
+        // A manual rename is never overwritten, and neither is a title_override.
+        dispatch(&st, "session.rename", json!({"sessionId":greeting,"title":"Renamed"})).await.unwrap();
+        assert_eq!(st.db.session_detail(&greeting).unwrap()["title"], "Renamed");
+        assert!(st.db.session_auto_title(&greeting, "Another").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn sent_images_are_served_only_from_their_own_message() {
+        let (mut st, _events) = state();
+        let runtime = json!({"id":"rt-test","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+        st.db.upsert_runtime(&runtime).unwrap();
+        *st.runtimes.write().await = vec![runtime];
+        let adapter = Arc::new(TeamAdapter::default());
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter, claude:Arc::new(ClaudeAdapter::default()) });
+        st.db.set_setting("exec_gate.codex.instructions", &json!(true)).unwrap();
+        let data_dir = std::env::temp_dir().join(format!("bloblex-message-images-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        *st.team.data_dir.lock().unwrap() = Some(data_dir.clone());
+        let agent_id = st.db.agent_create(&json!({"name":"Shooter","runtimeId":"rt-test"})).unwrap().0["id"].as_str().unwrap().to_owned();
+        let sid = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        let png = data_dir.join("shot.png");
+        std::fs::write(&png, [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]).unwrap();
+        dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"","attachments":[{"path":png,"name":"shot.png"}]})).await.unwrap();
+        let messages = wait_for_messages(&st, &sid, |m| m.iter().any(|m| m["role"] == "assistant")).await;
+        let message = messages.iter().find(|m| m["role"] == "user").unwrap().clone();
+        let message_id = message["id"].as_str().unwrap().to_owned();
+        let file = message["attachments"][0]["file"].as_str().expect("the sent image is copied beside the daemon's data").to_owned();
+        let copied = data_dir.join("message-images").join(&file);
+        assert!(copied.exists(), "a durable copy is kept, not only the staged path");
+
+        let served = dispatch(&st, "message.image", json!({"sessionId":sid,"messageId":message_id,"index":0})).await.unwrap();
+        assert!(served["dataUrl"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(served["name"], "shot.png");
+        assert_eq!(served["mediaType"], "image/png");
+
+        // Ownership: the message must be in that conversation, at a real image position.
+        let other = dispatch(&st, "agent.conversation.create", json!({"agentId":agent_id})).await.unwrap()["session"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(dispatch(&st, "message.image", json!({"sessionId":other,"messageId":message_id,"index":0})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "message.image", json!({"sessionId":sid,"messageId":"someone-else","index":0})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "message.image", json!({"sessionId":sid,"messageId":message_id,"index":2})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "message.image", json!({"sessionId":sid,"messageId":message_id})).await.unwrap_err().1.code, "invalid_argument");
+
+        // A missing or unreadable file is reported, so the UI shows a placeholder.
+        std::fs::remove_file(&copied).unwrap();
+        assert_eq!(dispatch(&st, "message.image", json!({"sessionId":sid,"messageId":message_id,"index":0})).await.unwrap_err().1.code, "not_found");
+        std::fs::write(&copied, b"not an image").unwrap();
+        assert_eq!(dispatch(&st, "message.image", json!({"sessionId":sid,"messageId":message_id,"index":0})).await.unwrap_err().1.code, "not_found");
+
+        // Deleting the conversation removes its copies.
+        std::fs::write(&copied, [0x89u8, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
+        for _ in 0..100 {
+            if !matches!(st.db.session_state(&sid).unwrap().as_deref(), Some("starting" | "working" | "cancelling" | "waiting_permission")) { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        dispatch(&st, "session.delete", json!({"sessionId":sid})).await.unwrap();
+        assert!(!copied.exists(), "the conversation's images go with it");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn model_confirmation_is_asked_only_when_context_can_be_lost() {
+        let (mut st, _) = state();
+        let runtime_id = "rt-model-warning";
+        st.db.upsert_runtime(&json!({"id":runtime_id,"provider":"codex","status":"online"})).unwrap();
+        *st.runtimes.write().await = vec![json!({"id":runtime_id,"provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]})];
+        let catalog = bloblex_agent_core::ModelCatalog {
+            models: vec![
+                bloblex_agent_core::ModelInfo { id:"alpha".into(), display_name:"Alpha".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(true), group:None, availability:None, release_date:None, context_window:None },
+                bloblex_agent_core::ModelInfo { id:"beta".into(), display_name:"Beta".into(), provider_id:None, supported_thinking:vec!["low".into()], default_thinking:Some("low".into()), service_tiers:Vec::new(), default_service_tier:None, variants:None, host_dependent:false, is_default:Some(false), group:None, availability:None, release_date:None, context_window:None },
+            ],
+            fetched_at:"2026-10-25T00:00:00Z".into(), expires_at:"2026-10-25T00:01:00Z".into(), fallback:false, source:"fake_test_catalog".into(), validated:true,
+        };
+        let adapter = Arc::new(ModelLockAdapter { catalog, new_calls:std::sync::atomic::AtomicUsize::new(0), resume_calls:std::sync::atomic::AtomicUsize::new(0) });
+        st.adapters = Arc::new(Adapters { acp:Arc::new(AcpAdapter::default()), codex:adapter, claude:Arc::new(ClaudeAdapter::default()) });
+        let agent = st.db.agent_create(&json!({"name":"Fresh","runtimeId":runtime_id,"model":"alpha","thinking":"low"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap().to_owned();
+        dispatch(&st,"runtime.models",json!({"runtimeId":runtime_id,"refresh":true})).await.unwrap();
+
+        // A conversation with nothing said in it takes a model without confirming.
+        st.db.create_session_for_agent_with_model_lock("empty-model-chat",runtime_id,"codex",".","Fresh",Some(&agent_id),Some(&json!({"model":"alpha","thinking":"low"}))).unwrap();
+        st.db.update_session_state("empty-model-chat","idle").unwrap();
+        let changed = dispatch(&st,"session.model.update",json!({"sessionId":"empty-model-chat","model":"beta","thinking":"low"})).await.unwrap();
+        assert_eq!(changed["modelChanged"],true);
+        assert_eq!(changed["session"]["modelLock"]["model"],"beta");
+
+        // Once the user has said something, the change is confirmed first.
+        st.db.create_session_for_agent_with_model_lock("talked-model-chat",runtime_id,"codex",".","Fresh",Some(&agent_id),Some(&json!({"model":"alpha","thinking":"low"}))).unwrap();
+        st.db.update_session_state("talked-model-chat","idle").unwrap();
+        st.db.create_turn("talked-turn","talked-model-chat").unwrap();
+        st.db.append_message_with_data("talked-model-chat","talked-turn","user","Fix the build",&json!({})).unwrap();
+        let refused = dispatch(&st,"session.model.update",json!({"sessionId":"talked-model-chat","model":"beta","thinking":"low"})).await.unwrap_err();
+        assert_eq!(refused.1.code,"confirmation_required");
+        assert_eq!(st.db.session_detail("talked-model-chat").unwrap()["modelLock"]["model"],"alpha");
+        let confirmed = dispatch(&st,"session.model.update",json!({"sessionId":"talked-model-chat","model":"beta","thinking":"low","confirmModelChange":true})).await.unwrap();
+        assert_eq!(confirmed["session"]["modelLock"]["model"],"beta");
+    }
     struct WorkflowCatalogAdapter { seen_args: Arc<StdMutex<Vec<Vec<String>>>> }
     #[async_trait::async_trait]
     impl AgentAdapter for WorkflowCatalogAdapter {
@@ -5422,6 +6059,117 @@ mod phase2a_tests {
         assert_eq!(events.recv().await.unwrap().event_type, "permission.requested");
         drop(approval_tx);
         approval_forwarder.await.unwrap();
+    }
+
+    /// One live session's event stream, exactly as `session.prompt` starts it:
+    /// the session and its turn, the active-turn entry, the handle and the
+    /// forwarder the daemon spawns.
+    async fn live_session_stream(st: &AppState, sid: &str, turn: &str) -> (tokio::sync::mpsc::Sender<AgentEvent>, tokio::task::JoinHandle<()>) {
+        st.db.create_session(sid, "rt-test", "codex", ".", "Live").unwrap();
+        st.db.create_turn(turn, sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(), turn.into());
+        st.sessions.lock().await.insert(sid.into(), ActiveSession {
+            handle: SessionHandle { session_id: sid.into(), provider_session_id: "native-live".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() },
+            runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None },
+            adapter: Arc::new(LifecycleAdapter { reject_resume: false, allow_resume: false, resume_calls: Default::default(), new_calls: Default::default(), close_calls: Default::default() }),
+            launch_approval_mode: ApprovalMode::Ask,
+        });
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let forwarder = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+        (tx, forwarder)
+    }
+
+    async fn next_event(events: &mut broadcast::Receiver<EventEnvelope>, want: &str) -> EventEnvelope {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if event.event_type == want { return event; }
+            }
+        }).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_failed_command_is_tool_history_and_a_completed_turn_stays_completed() {
+        let (st, mut events) = state();
+        let (tx, forwarder) = live_session_stream(&st, "tool-recovery", "tool-recovery-turn").await;
+        // A command that fails is history: it never decides the turn.
+        tx.send(AgentEvent::ToolStarted { tool_call_id: "cmd-1".into(), kind: "commandExecution".into(), title: "Ran the tests".into(), raw: json!({"type":"commandExecution","command":"cargo test","status":"inProgress"}) }).await.unwrap();
+        tx.send(AgentEvent::ToolCompleted { tool_call_id: "cmd-1".into(), raw: json!({"type":"commandExecution","status":"failed","exitCode":1,"aggregatedOutput":"one test failed"}) }).await.unwrap();
+        // The model recovers and finishes with a final answer.
+        tx.send(AgentEvent::AssistantMessage { text: "The first run failed; after the fix it passes.".into() }).await.unwrap();
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        let completed = next_event(&mut events, "turn.completed").await;
+        assert_eq!(completed.payload["state"], "completed");
+        let detail = st.db.session_detail("tool-recovery").unwrap();
+        assert_eq!(detail["state"], "completed");
+        assert_eq!(detail["turns"][0]["state"], "completed");
+        assert!(detail["turns"][0]["failureClass"].is_null());
+        assert_eq!(detail["tools"][0]["state"], "failed", "the failed command stays visible as activity");
+        drop(tx);
+        forwarder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_late_adapter_error_after_a_completed_turn_keeps_the_finished_outcome() {
+        let (st, mut events) = state();
+        let (tx, forwarder) = live_session_stream(&st, "late-adapter-error", "late-adapter-error-turn").await;
+        tx.send(AgentEvent::AssistantMessage { text: "All done.".into() }).await.unwrap();
+        tx.send(AgentEvent::TurnCompleted).await.unwrap();
+        next_event(&mut events, "turn.completed").await;
+        // The CLI exits after its turn ended: an adapter error with no watched
+        // turn. It must not turn a finished answer into a failure.
+        tx.send(AgentEvent::Error { message: "Codex app-server exited unexpectedly".into() }).await.unwrap();
+        let error = next_event(&mut events, "turn.error").await;
+        assert!(error.payload["turnId"].is_null());
+        assert_eq!(error.payload["state"], "completed");
+        assert_eq!(st.db.session_state("late-adapter-error").unwrap().as_deref(), Some("completed"));
+        let detail = st.db.session_detail("late-adapter-error").unwrap();
+        assert_eq!(detail["turns"][0]["state"], "completed");
+        // A reload reads the snapshot, not the event stream.
+        let snapshot = st.db.snapshot().unwrap();
+        let row = snapshot["sessions"].as_array().unwrap().iter().find(|row| row["id"] == "late-adapter-error").unwrap();
+        assert_eq!(row["state"], "completed");
+        drop(tx);
+        forwarder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_genuine_provider_error_still_fails_the_turn_and_the_session() {
+        let (st, mut events) = state();
+        let (tx, forwarder) = live_session_stream(&st, "genuine-error", "genuine-error-turn").await;
+        tx.send(AgentEvent::Error { message: "the provider rejected the request".into() }).await.unwrap();
+        let error = next_event(&mut events, "turn.error").await;
+        assert_eq!(error.payload["state"], "error");
+        assert_eq!(error.payload["failureClass"], "provider_error");
+        assert_eq!(st.db.session_state("genuine-error").unwrap().as_deref(), Some("error"));
+        let detail = st.db.session_detail("genuine-error").unwrap();
+        assert_eq!(detail["turns"][0]["state"], "error");
+        assert_eq!(detail["turns"][0]["failureClass"], "provider_error");
+        drop(tx);
+        forwarder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_adapter_error_with_no_watched_turn_still_fails_a_live_session() {
+        let (st, mut events) = state();
+        let sid = "live-without-turn";
+        st.db.create_session(sid, "rt-test", "codex", ".", "Live").unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.sessions.lock().await.insert(sid.into(), ActiveSession {
+            handle: SessionHandle { session_id: sid.into(), provider_session_id: "native-live".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() },
+            runtime: RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None },
+            adapter: Arc::new(LifecycleAdapter { reject_resume: false, allow_resume: false, resume_calls: Default::default(), new_calls: Default::default(), close_calls: Default::default() }),
+            launch_approval_mode: ApprovalMode::Ask,
+        });
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let forwarder = tokio::spawn(forward_events(st.clone(), sid.into(), "codex".into(), "rt-test".into(), rx));
+        tx.send(AgentEvent::Error { message: "the provider process is unavailable".into() }).await.unwrap();
+        let error = next_event(&mut events, "turn.error").await;
+        assert_eq!(error.payload["state"], "error");
+        assert_eq!(st.db.session_state(sid).unwrap().as_deref(), Some("error"));
+        drop(tx);
+        forwarder.await.unwrap();
     }
     #[tokio::test]
     async fn slow_adapter_preflight_does_not_block_another_sessions_event_stream() {
@@ -6533,8 +7281,9 @@ mod phase2a_tests {
         let (st, mut events) = state();
         let sid = "s-provider-error-no-turn";
         st.db.create_session(sid, "rt-test", "claude", ".", "Provider error between turns").unwrap();
-        st.db.update_session_state(sid, "ready").unwrap();
-        // No active turn: the error arrives between turns.
+        // Still in flight, but no turn is watched: the session fails. (A finished
+        // or idle session keeps its state; only the turn.error is reported.)
+        st.db.update_session_state(sid, "working").unwrap();
         let adapter = Arc::new(PolicyAdapter::default());
         let handle = SessionHandle {
             session_id: sid.into(),
@@ -7218,6 +7967,54 @@ mod phase2a_tests {
         assert_ne!(detached["branch"], Value::Null);
         assert_ne!(detached["branch"], json!("HEAD"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+    #[tokio::test]
+    async fn session_repository_reads_the_conversations_own_folder_and_never_a_client_path() {
+        if !git_is_available() {
+            return; // git is not on PATH; the non-repo case in repository.rs covers the contract.
+        }
+        let (st, _) = state();
+        let dir = std::env::temp_dir().join(format!("bloblex-repo-rpc-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| std::process::Command::new("git")
+            .current_dir(&dir)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(git(&["init", "-q", "-b", "main"]));
+        let _ = git(&["config", "user.email", "test@bitbots.local"]);
+        let _ = git(&["config", "user.name", "Bitbots Test"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        assert!(git(&["add", "."]));
+        assert!(git(&["commit", "-q", "-m", "init"]));
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("new file.txt"), "first\nsecond\n").unwrap();
+        st.db.create_session("repo-session", "rt-test", "codex", &dir.to_string_lossy(), "Saved").unwrap();
+        // A path (or folder) from the caller is ignored: the session decides.
+        let other = std::env::temp_dir().join(format!("bloblex-elsewhere-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&other).unwrap();
+        let view = dispatch(&st, "session.repository", json!({"sessionId":"repo-session","path":other.to_string_lossy(),"projectPath":other.to_string_lossy()})).await.unwrap();
+        let root = view["repoRoot"].as_str().unwrap_or("").replace('\\', "/").to_lowercase();
+        assert_eq!(root, dir.to_string_lossy().replace('\\', "/").to_lowercase());
+        assert_eq!(view["gitRepo"], true);
+        assert_eq!(view["branch"], "main");
+        assert_eq!(view["detached"], false);
+        assert!(view["error"].is_null());
+        let files = view["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(view["addedLines"], 3);
+        assert_eq!(view["removedLines"], 0);
+        let added = files.iter().find(|file| file["repositoryPath"] == "new file.txt").unwrap();
+        assert_eq!(added["change"], "added");
+        assert_eq!(added["addedLines"], 2);
+        assert!(added["path"].as_str().unwrap().ends_with("new file.txt"));
+        assert_eq!(dispatch(&st, "session.repository", json!({"sessionId":"absent"})).await.unwrap_err().1.code, "not_found");
+        assert_eq!(dispatch(&st, "session.repository", json!({})).await.unwrap_err().1.code, "invalid_argument");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&other).ok();
     }
     #[tokio::test]
     async fn simultaneous_refreshes_share_one_discovery_and_a_later_scan_runs_again() {
@@ -9713,8 +10510,12 @@ mod phase2a_tests {
         let messages = wait_for_messages(&st, "codex-main", |m| m.iter().any(|m| m["meta"]["kind"] == "question_answer")).await;
         assert!(messages.iter().any(|m| m["meta"]["questionId"] == codex_id.as_str() && m["content"].as_str().unwrap().contains("h: Blue")));
 
-        // Side conversations and automation runs still never see the tool.
-        for session in ["side-run"] {
+        // A side conversation started from a conversation someone answers may ask;
+        // one whose chain starts at an unattended run never sees the tool.
+        assert!(tools_listed(&team::mcp_rpc(&st, "side-run", "mcp.tools.list", &json!({})).await.unwrap()), "ask_user must be listed for side-run");
+        st.db.create_session_for_agent("side-of-auto", "rt-open", "opencode", ".", "Side of a run", Some(&agent_id)).unwrap();
+        st.db.set_session_link("side-of-auto", &json!({"kind":"side","peerAgentId":"p","originSessionId":"auto-run"})).unwrap();
+        for session in ["side-of-auto"] {
             assert!(!tools_listed(&team::mcp_rpc(&st, session, "mcp.tools.list", &json!({})).await.unwrap()), "ask_user must not be listed for {session}");
             let result = call_tool(&st, session, "ask_user", json!({"questions":[{"header":"h","question":"q","options":[{"label":"a"},{"label":"b"}]}]})).await;
             assert_eq!(result["isError"], true, "ask_user must be rejected for {session}");
@@ -11052,7 +11853,6 @@ mod phase2a_tests {
 mod fix39_p12_tests {
     use super::phase2a_tests::state;
     use super::*;
-    use base64::Engine as _;
     use std::io::Read as _;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -12017,7 +12817,8 @@ mod fix39_p6_tests {
     }
 
     /// FIX39 item 18: the Manager is told the truth — started, or queued behind
-    /// the global limit — and a queued side conversation says it is waiting.
+    /// the global limit — by a message that is delivered at once, with no
+    /// approval card and no task draft.
     #[tokio::test]
     async fn row_message_blob_says_started_or_queued_honestly() {
         // Started: slots are free and the target conversation is idle.
@@ -12027,11 +12828,9 @@ mod fix39_p6_tests {
             install(&mut st, &adapter);
             let boss = manager_session(&st).await;
             st.db.agent_create(&json!({"name":"Worker","runtimeId":"rt-test"})).unwrap();
-            let started = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now","doneGoal":"Task complete","reportBack":"Results"})).await;
-            assert!(started.contains("approval"), "{started}");
-            let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
-            let approved = dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
-            assert_eq!(approved["result"]["started"],true);
+            let started = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now"})).await;
+            assert!(started.contains("They are working on it"), "{started}");
+            assert!(st.db.proposals_pending().unwrap().is_empty(), "a message is not a proposal");
         }
         // Queued: the single global slot is taken.
         {
@@ -12043,11 +12842,9 @@ mod fix39_p6_tests {
             let worker_id = worker["id"].as_str().unwrap().to_owned();
             dispatch(&st, "settings.set", json!({"key":"concurrency.botsAtOnce","value":1})).await.unwrap();
             assert!(st.db.create_reserved_turn("p6-busy", &boss, 1).unwrap(), "the only slot is taken");
-            let queued = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now","doneGoal":"Task complete","reportBack":"Results"})).await;
-            assert!(queued.contains("approval"), "{queued}");
-            let proposal = st.db.proposals_pending().unwrap().last().unwrap().clone();
-            let approved = dispatch(&st,"proposal.decide",json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
-            assert_eq!(approved["result"]["started"],false);
+            let queued = tool_text(&st, &boss, "message_blob", json!({"blob":"Worker","message":"Do it.","topic":"Now"})).await;
+            assert!(queued.contains("queued"), "{queued}");
+            assert!(st.db.proposals_pending().unwrap().is_empty(), "a message is not a proposal");
             // The side conversation says it is waiting instead of looking idle.
             let _ = adapter;
             assert!(wait_until(|| {

@@ -459,6 +459,9 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
     // At most one built-in Manager, enforced by a partial unique index rather
     // than by convention: a second `system_role='manager'` row cannot exist.
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_manager ON agents(system_role) WHERE system_role='manager'", [])?;
+    // Every session summary resolves its project label by folder path, so the
+    // path is indexed rather than scanned per row.
+    c.execute("CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path)", [])?;
     ensure_manager_introduced(c)?;
     Ok(())
 }
@@ -507,6 +510,15 @@ fn ensure_queue_schema(c: &Connection) -> Result<(), StorageError> {
     );
     CREATE INDEX IF NOT EXISTS idx_queued_prompts_session ON queued_prompts(session_id,status,position);
     CREATE INDEX IF NOT EXISTS idx_queued_prompts_due ON queued_prompts(status,due_at);")?;
+    Ok(())
+}
+
+/// Idempotency lookup indexes for client-supplied message ids. Additive and
+/// idempotent so it runs on every open without a version bump; without them a
+/// resend lookup would scan a whole conversation's history.
+fn ensure_client_message_id_indexes(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_client_id ON messages(session_id, json_extract(data,'$.meta.clientMessageId'));
+    CREATE INDEX IF NOT EXISTS idx_queued_prompts_client_id ON queued_prompts(session_id, json_extract(params_json,'$.clientMessageId'));")?;
     Ok(())
 }
 
@@ -959,6 +971,145 @@ fn ensure_tasks_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Durable delegation ledger (FIX47). One row per Manager assignment, so a
+/// conversation can show each assignment's own status instead of borrowing the
+/// side conversation's, and a queued brief survives a restart. Additive and
+/// idempotent like the team/queue/automation/task schemas, so an older database
+/// gains the table on open. `delivery_text` holds the brief only while the row is
+/// `queued`: it is what makes a restart's redelivery possible, and it is cleared
+/// the moment the assignment starts or ends.
+fn ensure_delegation_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch("CREATE TABLE IF NOT EXISTS delegations(
+        id TEXT PRIMARY KEY NOT NULL,
+        origin_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        origin_turn_id TEXT,
+        side_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        side_turn_id TEXT,
+        from_agent_id TEXT NOT NULL,
+        target_agent_id TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        brief_preview TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled','interrupted')),
+        error TEXT,
+        delivery_text TEXT,
+        delivery_depth INTEGER NOT NULL DEFAULT 0,
+        workspace_path TEXT NOT NULL,
+        worktree_json TEXT CHECK(worktree_json IS NULL OR json_valid(worktree_json)),
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_delegations_origin ON delegations(origin_session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_delegations_side ON delegations(side_session_id, status);")?;
+    // The reply back to the Manager is durable too (DELEGATION lane, item 2):
+    // `reply_state` is NULL until an assignment ends, `pending` while that reply
+    // still waits for the Manager's conversation, and `delivered` once it went
+    // out. Guarded, because the table above already exists in older databases.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='reply_state')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN reply_state TEXT;")?; }
+    // A child's pending request wakes its Manager once per request, so the row
+    // records which request it already announced. Never exposed as a DTO.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='wake_request')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN wake_request TEXT;")?; }
+    // Lane V1 (27 October 2026): the wake is durable too. `wake_state` is NULL
+    // until a request is announced, `pending` while the wake has not reached the
+    // Manager, `sent` once its prompt was accepted, and `dropped` when it is no
+    // longer meaningful (the request was answered, the assignment ended, or the
+    // outcome cannot be proved). `wake_title` is the request's short title only
+    // (at most 160 characters, one line) and `wake_kind` is `question` or
+    // `approval`; both are cleared when the wake settles. Never exposed in the DTO.
+    for column in ["wake_state", "wake_title", "wake_kind"] {
+        let present: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name=?1)", [column], |r| r.get(0),
+        )?;
+        if !present { c.execute_batch(&format!("ALTER TABLE delegations ADD COLUMN {column} TEXT;"))?; }
+    }
+    // A provider may replay a `message_blob` tool call (a resume, a retry), so one
+    // brief is recorded once: `dedupe_key` is the hash of the Manager turn, the
+    // target and the brief, and the partial unique index below makes the second
+    // insert a no-op instead of a second assignment. NULL keys (no origin turn)
+    // are never deduped.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='dedupe_key')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN dedupe_key TEXT;")?; }
+    // Why a queued assignment has not started, so the Manager's board can say it:
+    // `busy` (its conversation is mid-turn) or `slots` (every global slot is
+    // taken). Cleared the moment the assignment starts.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='queue_reason')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN queue_reason TEXT;")?; }
+    // Every turn this assignment has used, oldest first: a row's `side_turn_id`
+    // moves to each answer turn, so a late retry of an earlier turn is found here
+    // instead of missing its row.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='turn_ids')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN turn_ids TEXT;")?; }
+    c.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_delegations_dedupe ON delegations(dedupe_key) WHERE dedupe_key IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS idx_delegations_side_turn ON delegations(side_session_id, side_turn_id);
+         CREATE INDEX IF NOT EXISTS idx_delegations_wake_pending ON delegations(wake_state) WHERE wake_state='pending';
+         CREATE INDEX IF NOT EXISTS idx_permission_requests_delegation ON permission_requests(json_extract(data,'$.delegationId'));")?;
+    Ok(())
+}
+
+/// The delegation states the ledger accepts, shared by reads and writes.
+const DELEGATION_STATES: [&str; 6] = ["queued", "running", "completed", "failed", "cancelled", "interrupted"];
+
+/// Stored on a queued send that was already claimed when Bitbots stopped. Such a
+/// send may have reached the agent before the process died, so it is never resent
+/// without the owner confirming, and the wording says exactly that.
+pub const QUEUE_AMBIGUOUS_ERROR: &str =
+    "Bitbots stopped while sending this. It may already have reached the agent. Check the conversation before sending it again.";
+
+/// Stored on a queued send that Bitbots stopped before the daemon could store its
+/// message. No message row exists for it, so nothing can have reached the agent,
+/// and this sentence says exactly that. It is never auto-sent (the drain claims
+/// only `queued` items), but sending it again needs no confirmation. Kept apart
+/// from [`QUEUE_AMBIGUOUS_ERROR`] so the two cases can never share a sentence.
+pub const QUEUE_NOT_SENT_ERROR: &str = "Bitbots stopped before sending this. It was not sent.";
+
+/// The columns of one delegation row as JSON, so the DTO is built in one place.
+/// `delivery_text` is deliberately absent: it is the brief, and it never leaves
+/// this module except for a restart's redelivery. `dedupe_key` and `turn_ids` are
+/// bookkeeping as well: the first is only compared inside an insert, the second
+/// only searched by [`Storage::delegation_open_rows_for_turn`].
+const DELEGATION_COLUMNS: &str = "'id',id,'originSessionId',origin_session_id,'originTurnId',origin_turn_id,'sideSessionId',side_session_id,'sideTurnId',side_turn_id,'fromAgentId',from_agent_id,'targetAgentId',target_agent_id,'topic',topic,'briefPreview',brief_preview,'status',status,'error',error,'workspacePath',workspace_path,'worktree',json(worktree_json),'createdAt',created_at,'startedAt',started_at,'finishedAt',finished_at,'updatedAt',updated_at,'queueReason',queue_reason";
+
+/// One stored row (as built by [`DELEGATION_COLUMNS`]) to the wire DTO: the
+/// workspace becomes one object with its folder and, when the lane was isolated,
+/// the `{repo, branch, path}` worktree record.
+fn delegation_dto(row: Value) -> Value {
+    let mut row = row;
+    let worktree = row["worktree"].as_object().map(|_| json!({"repo":row["worktree"]["repo"],"branch":row["worktree"]["branch"],"path":row["worktree"]["path"]})).unwrap_or(Value::Null);
+    if let Some(object) = row.as_object_mut() {
+        object.remove("worktree");
+        let path = object.remove("workspacePath").unwrap_or(Value::Null);
+        object.insert("workspace".into(), json!({"path":path,"worktree":worktree}));
+    }
+    row
+}
+
+fn delegation_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
+    let raw: Option<String> = c.query_row(&format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE id=?1"), [id], |r| r.get(0)).optional()?;
+    let row: Value = serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?;
+    Ok(delegation_dto(row))
+}
+
+fn delegation_list(c: &Connection, sql: &str, id: &str) -> Result<Vec<Value>, StorageError> {
+    Ok(query_jsons(c, sql, id)?.into_iter().map(delegation_dto).collect())
+}
+
+/// The assignment a replayed brief already recorded, if any. The unique index on
+/// `dedupe_key` makes this the same row the insert would collide with.
+fn delegation_find_by_dedupe(c: &Connection, dedupe_key: &str) -> Result<Option<Value>, StorageError> {
+    let raw: Option<String> = c.query_row(
+        &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE dedupe_key=?1 LIMIT 1"),
+        [dedupe_key], |r| r.get(0),
+    ).optional()?;
+    match raw {
+        Some(raw) => Ok(Some(delegation_dto(serde_json::from_str(&raw)?))),
+        None => Ok(None),
+    }
+}
+
 /// The task states the ledger accepts, shared by reads and writes.
 const TASK_STATES: [&str; 8] = ["unassigned", "queued", "running", "needs_you", "awaiting_review", "done", "failed", "cancelled"];
 
@@ -966,6 +1117,19 @@ const TASK_STATES: [&str; 8] = ["unassigned", "queued", "running", "needs_you", 
 fn task_stamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
+
+/// How long an answered question still holds its assignment open while the
+/// answer waits in a queue or starts its turn. Past this, the assignment takes
+/// its turn's own outcome instead of waiting for an answer that never came.
+const QUESTION_ANSWER_HOLD: Duration = Duration::minutes(30);
+
+/// How long a question card may stay in the `resolving` claim before it is
+/// treated as stuck: the claim is written by `begin_permission_reply` in one
+/// statement and released by `resolve_question` almost immediately after, so a
+/// card older than this lost its reply to a storage error and no answer can
+/// arrive. Short enough that the owner can answer again in the same session,
+/// long enough that no live reply (one transaction) is ever aged out.
+const QUESTION_RESOLVING_HOLD: Duration = Duration::minutes(2);
 
 /// Renumber one bot's queue after a card leaves it, so positions stay dense.
 /// A shifted card gets a version bump: its position changed, so a board row read
@@ -1506,6 +1670,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if matches!(k,"experimental.autoRetry" | "experimental.resumeAfterUsageLimits") && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="retry.maxWaitSecs" && v.as_u64().is_none_or(|secs| secs > 86_400){return Err(StorageError::InvalidAgent)}
     if k=="automations.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="delegation.paused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="automations.maxConcurrent" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
     if k=="task.concurrency.max" && !v.as_u64().is_some_and(|count| (1..=3).contains(&count)){return Err(StorageError::InvalidAgent)}
     if k=="task.globalPaused" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
@@ -1567,6 +1732,47 @@ pub struct Storage {
     conn: Mutex<Connection>,
 }
 
+/// What an unclean exit had to settle, so boot can announce it: the sessions
+/// moved out of a live state, and the native cards that can no longer be
+/// answered because the adapter that raised them is gone.
+pub struct RestartRecovery {
+    pub sessions: Vec<String>,
+    pub closed_cards: Vec<Value>,
+}
+
+/// The rule one send id obeys: 8 to 80 characters of `[A-Za-z0-9_-]`, the same
+/// rule `clientMessageId` follows on the prompt path.
+fn queue_send_id_valid(value: &str) -> bool {
+    (8..=80).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// The stable id one queued send is delivered under, and the key its user message
+/// row carries (`meta.clientMessageId`) once it is sent.
+///
+/// It is the UI's `clientMessageId` when that is valid, otherwise `q-` and the
+/// item id without its hyphens: a UUID item id gives `q-` plus 32 hex characters,
+/// inside the same 8 to 80 rule. Nothing else derives it, so an item that predates
+/// this column still has exactly one id, and it never changes while the item is
+/// queued. Only a confirmed resend of an edited send mints a fresh one
+/// ([`Storage::queue_revise_failed`]).
+fn queue_send_id(item_id: &str, params: &Value) -> String {
+    for key in ["sendId", "clientMessageId"] {
+        if let Some(value) = params.get(key).and_then(Value::as_str).filter(|value| queue_send_id_valid(value)) {
+            return value.to_owned();
+        }
+    }
+    format!("q-{}", item_id.replace('-', ""))
+}
+
+/// `params_json` for an insert, with the item's send id written into it so the
+/// id is durable before the send starts and a restart can look the message row up.
+fn queue_params_with_send_id(item_id: &str, params: &Value) -> String {
+    let send_id = queue_send_id(item_id, params);
+    let mut params = if params.is_object() { params.clone() } else { json!({}) };
+    params["sendId"] = json!(send_id);
+    params.to_string()
+}
+
 /// Shapes one durable queue row into the wire DTO. `params_json` holds only
 /// the allowlisted prompt keys the daemon stored. `lateBySecs` is derived here
 /// and never persisted.
@@ -1585,11 +1791,18 @@ fn queued_prompt_dto(id:&str,session_id:&str,position:i64,params_json:&str,kind:
         "error": error,
         "position": position,
         "createdAt": created_at,
+        // The id this send will be delivered under (see `queue_send_id`). Always
+        // present so the send path never has to invent one.
+        "sendId": queue_send_id(id, &params),
     });
     if let Some(reply) = params.get("replyTo").filter(|value| !value.is_null()) { item["replyTo"] = reply.clone(); }
     // Internal auto-retry items carry daemon-generated meta so the send path can
     // rebuild the allowlisted prompt without re-reading the storage row.
     if let Some(meta) = params.get("meta").filter(|value| value.is_object()) { item["meta"] = meta.clone(); }
+    // A send that was claimed when Bitbots stopped may already have reached the
+    // agent, so it is never resent without the owner confirming. Always present
+    // so a client can read it without checking for the key.
+    item["ambiguous"] = json!(params.get("ambiguous").and_then(Value::as_bool).unwrap_or(false));
     if kind == "send_later" {
         if let Some(due) = due_at.and_then(|value| DateTime::parse_from_rfc3339(value).ok()) {
             let late = now.signed_duration_since(due.with_timezone(&Utc)).num_seconds();
@@ -1739,7 +1952,7 @@ impl Storage {
     /// database from an earlier version failed with `no such table: tasks` (FIX43).
     fn migrate(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         let storage = Self::migrate_versions(conn, path)?;
-        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_tasks_schema(&c)?; }
+        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
         Ok(storage)
     }
     fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
@@ -1866,6 +2079,12 @@ impl Storage {
           CREATE INDEX IF NOT EXISTS idx_usage_session_time ON usage_events(session_id, timestamp);
           CREATE INDEX IF NOT EXISTS idx_permissions_session_status ON permission_requests(session_id, status);
           CREATE INDEX IF NOT EXISTS idx_reservations_policy_status ON budget_reservations(policy_id, status);
+          -- Read-path indexes for the calls the window makes constantly: a
+          -- session's context counters and a turn's failure detail search
+          -- `app_events` by event type, a session list resolves a project by
+          -- path, and message counts and existence checks filter by role.
+          CREATE INDEX IF NOT EXISTS idx_app_events_type_sequence ON app_events(event_type, sequence);
+          CREATE INDEX IF NOT EXISTS idx_messages_session_role ON messages(session_id, role);
           INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, strftime('%Y-%m-%dT%H:%M:%fZ','now'));")?;
         let has_currency: bool = conn.query_row(
             "SELECT COUNT(*)>0 FROM pragma_table_info('budget_policies') WHERE name='currency'",
@@ -2248,6 +2467,15 @@ impl Storage {
         let raw: Option<String> = c.query_row("SELECT data FROM permission_requests WHERE id=?1", [id], |r| r.get(0)).optional()?;
         Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
     }
+    /// The card's own stored status (`pending`, `resolving`, `resolved` or
+    /// `expired`). This is the column every answer path moves; the JSON copy inside
+    /// `data` can lag behind it (a failed reply puts a card back to `pending`
+    /// without rewriting `data.status`), so a caller that must know whether the
+    /// owner can still see a pending card reads this, not `permission_get`.
+    pub fn permission_status(&self, id: &str) -> Result<Option<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT status FROM permission_requests WHERE id=?1", [id], |r| r.get(0)).optional()?)
+    }
     /// Marks a resolving question answered or dismissed. The row must be in the
     /// resolving state set by `begin_permission_reply`.
     pub fn resolve_question(&self, id: &str, status: &str) -> Result<(), StorageError> {
@@ -2256,6 +2484,126 @@ impl Storage {
         let changed = c.execute("UPDATE permission_requests SET status='resolved',data=json_set(data,'$.status',?2) WHERE id=?1 AND status='resolving'", params![id, status])?;
         if changed != 1 { return Err(StorageError::AgentConflict); }
         Ok(())
+    }
+    /// Whether this conversation is waiting for the owner to answer an
+    /// `ask_user` question: a delegated turn that ended this way is not finished
+    /// work, so the assignment stays open until the answer arrives.
+    pub fn pending_question_exists(&self, session_id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM permission_requests WHERE session_id=?1 AND status='pending' AND json_extract(data,'$.kind')='question')", [session_id], |r| r.get(0))?)
+    }
+    /// The pending question cards of one conversation, oldest first, so a caller
+    /// that must close them can work through each id.
+    pub fn pending_questions_for_session(&self, session_id: &str) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT id FROM permission_requests WHERE session_id=?1 AND status='pending' AND json_extract(data,'$.kind')='question' ORDER BY rowid")?;
+        let rows = q.query_map([session_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    /// Associates a question card with the assignment whose turn asked it. The
+    /// daemon resolves the id from its own ledger, never from a caller's
+    /// argument, and the first association stands: a repeated call, or one with
+    /// a different id, leaves the stored one alone.
+    pub fn question_set_delegation(&self, id: &str, delegation_id: &str) -> Result<(), StorageError> {
+        if delegation_id.is_empty() { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "UPDATE permission_requests SET data=json_set(data,'$.delegationId',?2) WHERE id=?1 AND json_extract(data,'$.kind')='question' AND json_extract(data,'$.delegationId') IS NULL",
+            params![id, delegation_id],
+        )?;
+        Ok(())
+    }
+    /// Marks whether the answer to a question is still waiting for (or has not
+    /// finished starting) a turn of its own. `true` records the moment, so the
+    /// hold it creates can be bounded; `false` clears both, so a released
+    /// assignment never reads as still waiting.
+    pub fn question_mark_answer_pending(&self, id: &str, pending: bool) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        if pending {
+            c.execute(
+                "UPDATE permission_requests SET data=json_set(data,'$.answerPending',json('true'),'$.answerPendingAt',?2) WHERE id=?1 AND json_extract(data,'$.kind')='question'",
+                params![id, task_stamp()],
+            )?;
+        } else {
+            c.execute(
+                "UPDATE permission_requests SET data=json_remove(json_set(data,'$.answerPending',json('false')),'$.answerPendingAt') WHERE id=?1 AND json_extract(data,'$.kind')='question'",
+                [id],
+            )?;
+        }
+        Ok(())
+    }
+    /// Every question card of one assignment, whatever its status, oldest first.
+    pub fn question_ids_for_delegation(&self, delegation_id: &str) -> Result<Vec<String>, StorageError> {
+        if delegation_id.is_empty() { return Ok(Vec::new()); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT id FROM permission_requests WHERE json_extract(data,'$.kind')='question' AND json_extract(data,'$.delegationId')=?1 ORDER BY rowid")?;
+        let rows = q.query_map([delegation_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    /// The still-pending question cards of one assignment, oldest first.
+    pub fn pending_questions_for_delegation(&self, delegation_id: &str) -> Result<Vec<String>, StorageError> {
+        if delegation_id.is_empty() { return Ok(Vec::new()); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT id FROM permission_requests WHERE status='pending' AND json_extract(data,'$.kind')='question' AND json_extract(data,'$.delegationId')=?1 ORDER BY rowid")?;
+        let rows = q.query_map([delegation_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+    /// Whether a question of this assignment still holds it open: one of its
+    /// cards is unanswered, or it was answered/dismissed/expired and the answer
+    /// has not started a turn yet. The second kind is bounded, so an answer whose
+    /// queue item was deleted or whose queue stayed paused cannot hold the
+    /// assignment for ever.
+    ///
+    /// A `resolving` card holds only while its claim is young: the claim is one
+    /// transaction, so a card older than the hold lost its reply and must stop
+    /// holding (the sweep expires it). A card with no timestamp was claimed by a
+    /// build that did not record one, so it is treated as old for the same reason.
+    ///
+    /// Only an `ask_user` card (`mcp:` provider id) holds while `pending`: a
+    /// provider's own question is answered through the live provider session, so
+    /// once the turn this is read for has ended no answer can arrive and holding
+    /// would leave the assignment waiting with nothing able to release it.
+    pub fn question_holds_open(&self, delegation_id: &str) -> Result<bool, StorageError> {
+        if delegation_id.is_empty() { return Ok(false); }
+        let now = Utc::now();
+        let cutoff = (now - QUESTION_ANSWER_HOLD).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let resolving_cutoff = (now - QUESTION_RESOLVING_HOLD).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM permission_requests WHERE json_extract(data,'$.kind')='question' AND json_extract(data,'$.delegationId')=?1 AND ((status='pending' AND COALESCE(provider_request_id,'') LIKE 'mcp:%') OR (status='resolving' AND (json_extract(data,'$.resolvingAt') IS NULL OR json_extract(data,'$.resolvingAt')>=?3)) OR (status IN ('resolved','expired') AND json_extract(data,'$.answerPending')=1 AND json_extract(data,'$.answerPendingAt')>=?2)))",
+            params![delegation_id, cutoff, resolving_cutoff], |r| r.get(0),
+        )?)
+    }
+    /// Expires question cards whose `resolving` claim is older than the resolving
+    /// hold, returning `{id,sessionId}` for each so the caller can announce the
+    /// change and let the assignment move on. Only question cards are touched.
+    pub fn question_expire_stalled(&self) -> Result<Vec<Value>, StorageError> {
+        let cutoff = (Utc::now() - QUESTION_RESOLVING_HOLD).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows: Vec<(String, String)> = {
+            let mut q = tx.prepare("SELECT id,session_id FROM permission_requests WHERE status='resolving' AND json_extract(data,'$.kind')='question' AND (json_extract(data,'$.resolvingAt') IS NULL OR json_extract(data,'$.resolvingAt')<=?1)")?;
+            let collected = q.query_map([&cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        for (id, _) in &rows {
+            tx.execute(
+                "UPDATE permission_requests SET status='expired',data=json_remove(json_set(data,'$.status','expired','$.resolution','answer_stalled'),'$.choice') WHERE id=?1 AND status='resolving'",
+                [id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(rows.into_iter().map(|(id, session_id)| json!({"id":id,"sessionId":session_id})).collect())
+    }
+    /// Question cards whose answer is marked pending but has not started a turn,
+    /// older than the caller's bound, oldest first: `{id,sessionId,delegationId}`.
+    /// The caller checks the conversation itself (a queued answer, a live turn) and
+    /// releases the ones nothing can start.
+    pub fn question_pending_answers(&self, before: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        query_jsons(&c,
+            "SELECT json_object('id',id,'sessionId',session_id,'delegationId',json_extract(data,'$.delegationId')) FROM permission_requests WHERE json_extract(data,'$.kind')='question' AND json_extract(data,'$.answerPending')=1 AND json_extract(data,'$.answerPendingAt')<=?1 ORDER BY rowid",
+            before)
     }
     /// Marks every pending card whose expiry has passed as `expired`, returning
     /// `{id,sessionId}` for each so the caller can announce the change. Expired
@@ -2763,6 +3111,33 @@ impl Storage {
         if changed == 0 { return Err(StorageError::AgentNotFound); }
         session_event_summary_locked(&c, id)
     }
+    /// Writes a conversation's new model lock and, when the provider needs a
+    /// fresh context, discards the saved provider handle in the same SQLite
+    /// transaction. Two separate writes could leave the provider id cleared
+    /// while the old lock survived (or the reverse) if the second failed.
+    pub fn session_apply_model_change(&self, id: &str, model_lock: &Value, clear_provider: bool) -> Result<Value, StorageError> {
+        if !model_lock.is_object()
+            || !["model", "thinking"].iter().all(|key| model_lock.get(*key).is_some_and(|value| value.is_null() || value.as_str().is_some()))
+        { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let changed = if clear_provider {
+            tx.execute(
+                "UPDATE sessions SET model_lock_json=?2,provider_session_id=NULL,resumable=0,data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.providerTurns',0),updated_at=?3 WHERE id=?1",
+                params![id, model_lock.to_string(), now],
+            )?
+        } else {
+            tx.execute(
+                "UPDATE sessions SET model_lock_json=?2,updated_at=?3 WHERE id=?1",
+                params![id, model_lock.to_string(), now],
+            )?
+        };
+        if changed == 0 { return Err(StorageError::AgentNotFound); }
+        let summary = session_event_summary_locked(&tx, id)?;
+        tx.commit()?;
+        Ok(summary)
+    }
     pub fn set_session_exec_snapshot(&self,session_id:&str,snapshot_id:&str,first:bool)->Result<(),StorageError>{
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session_id], |r| r.get(0))?;
@@ -2877,6 +3252,19 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT state FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?)
     }
+    /// The few session fields the recovery hooks decide with. Reading them must
+    /// not load the conversation: a turn-end hook asks only what kind of session
+    /// this is, which provider runs it and whether it is archived. The scalar
+    /// columns are included because they cost nothing to read from the same row.
+    pub fn session_brief(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'state',state,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        ).optional()?;
+        Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
+    }
     pub fn session_event_summary(&self, id: &str) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         session_event_summary_locked(&c, id)
@@ -2952,6 +3340,14 @@ impl Storage {
         if !resumable && provider_id.is_none_or(|value| value.is_empty()) { return Ok(false); }
         let has_message: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role IN ('user','assistant'))", [id], |r| r.get(0))?;
         Ok(has_message)
+    }
+    /// Whether the conversation already holds user turns, even if no prompt
+    /// has reached a provider yet. A model change in such a conversation can
+    /// lose the thread of what the user asked, so it is warned about.
+    pub fn session_has_user_messages(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role='user')", [id], |r| r.get(0))?;
+        Ok(exists)
     }
     /// Records that a prompt reached the adapter for the current provider
     /// context and returns the new count.
@@ -3045,9 +3441,13 @@ impl Storage {
     /// The sessions whose usage-limit window is due, for the one-second sweep.
     /// A small read instead of the full session list on every tick; the caller
     /// still re-checks the condition atomically in `watchdog_enqueue`.
+    /// A session that can never be enqueued — its automatic continuations are
+    /// used up, or it is an unattended automation — is not returned at all, so
+    /// the sweep stops re-querying it every second. The conditions are the ones
+    /// `watchdog_enqueue` refuses on, kept in step by hand.
     pub fn watchdog_due_sessions(&self, now: &str) -> Result<Vec<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s = c.prepare("SELECT id FROM sessions WHERE state='limited' AND limited_until IS NOT NULL AND limited_until<=?1 AND archived=0")?;
+        let mut s = c.prepare("SELECT id FROM sessions WHERE state='limited' AND limited_until IS NOT NULL AND limited_until<=?1 AND archived=0 AND recovery_count<3 AND json_extract(data,'$.link.kind') IS NOT 'automation'")?;
         let rows = s.query_map([now], |r| r.get::<_, String>(0))?;
         let mut out = Vec::new();
         for row in rows { out.push(row?); }
@@ -3059,8 +3459,28 @@ impl Storage {
     }
     pub fn watchdog_reset(&self, id: &str) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        c.execute("UPDATE sessions SET limited_until=NULL,continuation_pending=0,recovery_count=0 WHERE id=?1", [id])?;
+        // A user prompt (or a completed turn) starts a fresh recovery budget:
+        // the exhaustion flag belongs to the episode that used the last three
+        // continuations, so it is cleared with the counters.
+        c.execute("UPDATE sessions SET limited_until=NULL,continuation_pending=0,recovery_count=0,data=json_remove(COALESCE(NULLIF(data,''),'{}'),'$.autoContinueExhausted') WHERE id=?1", [id])?;
         Ok(())
+    }
+    /// Settle a session whose automatic continuations are used up, once.
+    ///
+    /// This is the only place that decides an exhausted session is exhausted:
+    /// it repeats the exact conditions `watchdog_enqueue` refuses on, so the two
+    /// cannot disagree, and the `autoContinueExhausted` flag makes a second call
+    /// a no-op. A user prompt that wins the race clears `recovery_count` and
+    /// moves the state on, which makes this update match nothing: the prompt
+    /// wins. Not for automation sessions, whose rules are unchanged.
+    pub fn watchdog_settle_exhausted(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let changed = c.execute(
+            "UPDATE sessions SET state='idle',limited_until=NULL,continuation_pending=0,data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.autoContinueExhausted',json('true')),updated_at=?2 WHERE id=?1 AND archived=0 AND recovery_count>=3 AND json_extract(data,'$.link.kind') IS NOT 'automation' AND json_extract(data,'$.autoContinueExhausted') IS NOT 1 AND (state='limited' OR (continuation_pending=1 AND state NOT IN ('starting','working','cancelling','waiting_permission')))",
+            params![id, now],
+        )?;
+        Ok(changed == 1)
     }
     /// Atomically consume a pending recovery and create exactly one durable
     /// continuation. Neither the original prompt nor a recap is copied here.
@@ -3072,7 +3492,7 @@ impl Storage {
         tx.execute("UPDATE turns SET data=json_set(data,'$.recoveryHandled',json('true')) WHERE session_id=?1 AND json_extract(data,'$.watchdogInterrupted')=1", [id])?;
         let count: i64 = tx.query_row("SELECT recovery_count FROM sessions WHERE id=?1", [id], |r| r.get(0))?;
         let queue_id = Uuid::new_v4().to_string();
-        let params = json!({"text":"Continue where you left off.","attachments":[],"meta":{"kind":"auto_retry","retryOf":format!("watchdog:{id}"),"attempt":count}}).to_string();
+        let params = queue_params_with_send_id(&queue_id, &json!({"text":"Continue where you left off.","attachments":[],"meta":{"kind":"auto_retry","retryOf":format!("watchdog:{id}"),"attempt":count}}));
         tx.execute("INSERT INTO queued_prompts(id,session_id,position,params_json,kind,due_at,status,error,created_at,updated_at) VALUES(?1,?2,-1,?3,'retry',?4,'queued',NULL,?4,?4)", params![queue_id,id,params,now])?;
         tx.commit()?;
         Ok(true)
@@ -3088,7 +3508,7 @@ impl Storage {
         let position: i64 = tx.query_row("SELECT COALESCE(MAX(position)+1,0) FROM queued_prompts WHERE session_id=?1", [session_id], |r| r.get(0))?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-        let params_json = params.to_string();
+        let params_json = queue_params_with_send_id(&id, params);
         tx.execute("INSERT INTO queued_prompts(id,session_id,position,params_json,kind,due_at,status,error,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,'queued',NULL,?7,?7)", params![id,session_id,position,params_json,kind,due_at,now])?;
         tx.commit()?;
         Ok(queued_prompt_dto(&id,session_id,position,&params_json,kind,due_at,"queued",None,&now,Utc::now()))
@@ -3104,7 +3524,7 @@ impl Storage {
         tx.execute("UPDATE queued_prompts SET position=position+1 WHERE session_id=?1", [session_id])?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-        let params_json = params.to_string();
+        let params_json = queue_params_with_send_id(&id, params);
         tx.execute("INSERT INTO queued_prompts(id,session_id,position,params_json,kind,due_at,status,error,created_at,updated_at) VALUES(?1,?2,0,?3,'user',NULL,'queued',NULL,?4,?4)", params![id,session_id,params_json,now])?;
         tx.commit()?;
         Ok(queued_prompt_dto(&id,session_id,0,&params_json,"user",None,"queued",None,&now,Utc::now()))
@@ -3125,6 +3545,15 @@ impl Storage {
         let (position,params,kind,due,status,error,created) = row.ok_or(StorageError::AgentNotFound)?;
         Ok(queued_prompt_dto(id,session_id,position,&params,&kind,due.as_deref(),&status,error.as_deref(),&created,now))
     }
+    /// Finds the queued item a client-supplied id created, so a resent queue add
+    /// returns the first item instead of adding a duplicate. Served by
+    /// `idx_queued_prompts_client_id`, the expression index over params_json.
+    pub fn queue_item_by_client_id(&self, session_id: &str, client_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now();
+        let row = c.query_row("SELECT id,position,params_json,kind,due_at,status,error,created_at FROM queued_prompts WHERE session_id=?1 AND json_extract(params_json,'$.clientMessageId')=?2 ORDER BY created_at,id LIMIT 1", params![session_id,client_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?))).optional()?;
+        Ok(row.map(|(id,position,params,kind,due,status,error,created)| queued_prompt_dto(&id,session_id,position,&params,&kind,due.as_deref(),&status,error.as_deref(),&created,now)))
+    }
     pub fn queue_count_queued(&self, session_id: &str) -> Result<i64, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT COUNT(*) FROM queued_prompts WHERE session_id=?1 AND status='queued'", [session_id], |r| r.get(0))?)
@@ -3132,6 +3561,18 @@ impl Storage {
     pub fn queue_has_queued(&self, session_id: &str) -> Result<bool, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM queued_prompts WHERE session_id=?1 AND status='queued')", [session_id], |r| r.get(0))?)
+    }
+    /// Whether this conversation still holds the queued answer to one question:
+    /// the prompt an `ask_user` answer travels back in. Used by the restart
+    /// reconciliation, so an answer that can still start a turn keeps holding its
+    /// assignment open and one that cannot is released.
+    pub fn queue_has_question_answer(&self, session_id: &str, question_id: &str) -> Result<bool, StorageError> {
+        if question_id.is_empty() { return Ok(false); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM queued_prompts WHERE session_id=?1 AND status IN ('queued','sending') AND json_extract(params_json,'$.meta.kind')='question_answer' AND json_extract(params_json,'$.meta.questionId')=?2)",
+            params![session_id, question_id], |r| r.get(0),
+        )?)
     }
     /// Edit a still-queued item. `text` replaces the text; `due_at` is
     /// `None` to leave scheduling alone, `Some(None)` to convert to a plain
@@ -3157,6 +3598,43 @@ impl Storage {
         tx.execute("UPDATE queued_prompts SET params_json=?2,kind=?3,due_at=?4,updated_at=?5 WHERE id=?1", params![id,&params_json,&kind,&due,&now])?;
         tx.commit()?;
         Ok(queued_prompt_dto(id,session_id,position,&params_json,&kind,due.as_deref(),"queued",None,&now,Utc::now()))
+    }
+    /// Edit an item that failed with an ambiguous outcome (Bitbots stopped while
+    /// sending it). The owner's confirmation is what allows the edit, so the
+    /// `ambiguous` marker is cleared, but the item stays `failed`: editing never
+    /// sends it, and only an explicit `send_now` claims it afterwards.
+    pub fn queue_revise_failed(&self, session_id: &str, id: &str, text: Option<&str>, due_at: Option<Option<&str>>) -> Result<Value, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // position, params_json, status, kind, due_at, error
+        type FailedRow = (i64,String,String,String,Option<String>,Option<String>);
+        let row: Option<FailedRow> = tx.query_row("SELECT position,params_json,status,kind,due_at,error FROM queued_prompts WHERE session_id=?1 AND id=?2", params![session_id,id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+        let (position,params_json,status,mut kind,mut due,error) = row.ok_or(StorageError::AgentNotFound)?;
+        if status != "failed" { return Err(StorageError::AgentConflict); }
+        let mut params: Value = serde_json::from_str(&params_json)?;
+        let previous_text = params.get("text").and_then(Value::as_str).map(str::to_owned);
+        if let Some(text) = text { params["text"] = json!(text); }
+        if let Some(object) = params.as_object_mut() { object.remove("ambiguous"); }
+        // The send id may be reused only while the text is unchanged: the replay
+        // rule answers a stored message under that id by comparing its content,
+        // so an edited resend under the old id would be refused as "already used
+        // for a different message". A changed text is a genuinely new send and
+        // takes a fresh id, leaving the old row's evidence untouched.
+        if text.is_some_and(|text| Some(text) != previous_text.as_deref()) {
+            let fresh = format!("q-{}", Uuid::new_v4().simple());
+            params["sendId"] = json!(fresh);
+        }
+        if let Some(next) = due_at {
+            match next {
+                None => { kind = "user".to_owned(); due = None; }
+                Some(value) => { kind = "send_later".to_owned(); due = Some(value.to_owned()); }
+            }
+        }
+        let params_json = params.to_string();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        tx.execute("UPDATE queued_prompts SET params_json=?2,kind=?3,due_at=?4,updated_at=?5 WHERE id=?1", params![id,&params_json,&kind,&due,&now])?;
+        tx.commit()?;
+        Ok(queued_prompt_dto(id,session_id,position,&params_json,&kind,due.as_deref(),"failed",error.as_deref(),&now,Utc::now()))
     }
     /// Replace the order of a session's queued plain items. `ids` must be
     /// exactly that set, otherwise the request is invalid.
@@ -3229,12 +3707,13 @@ impl Storage {
         Ok(Some(queued_prompt_dto(&id,session_id,position,&params,&kind,due.as_deref(),"sending",None,now,Utc::now())))
     }
     /// Claim one specific queued item (used by `send_now` on an idle session).
-    /// A previously `failed` item can be retried: claiming it clears `error`
-    /// and keeps its position.
+    /// A previously `failed` item can be retried: claiming it clears `error` and
+    /// the `ambiguous` marker (the owner has confirmed the resend) and keeps its
+    /// position.
     pub fn queue_claim(&self, session_id: &str, id: &str, now: &str) -> Result<Option<Value>, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute("UPDATE queued_prompts SET status='sending',error=NULL,updated_at=?3 WHERE session_id=?1 AND id=?2 AND status IN ('queued','failed')", params![session_id,id,now])?;
+        let changed = tx.execute("UPDATE queued_prompts SET status='sending',error=NULL,params_json=json_remove(params_json,'$.ambiguous'),updated_at=?3 WHERE session_id=?1 AND id=?2 AND status IN ('queued','failed')", params![session_id,id,now])?;
         if changed == 0 { tx.commit()?; return Ok(None); }
         let (position,params,kind,due): (i64,String,String,Option<String>) = tx.query_row("SELECT position,params_json,kind,due_at FROM queued_prompts WHERE id=?1", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
         tx.commit()?;
@@ -3249,6 +3728,18 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         c.execute("UPDATE queued_prompts SET status='failed',error=?2,updated_at=?3 WHERE id=?1 AND status='sending'", params![id,error,now])?;
+        Ok(())
+    }
+    /// Mark a claimed send failed because its outcome is unknown: the agent may
+    /// already have received it. The failure and the `ambiguous` marker are one
+    /// statement, so the marker can never be separated from the failure that
+    /// needs it (the boot rewrite at `recover_restart_state` writes the same
+    /// pair). Such an item is never claimed by the drain, and resending it needs
+    /// the owner's `confirmResend`.
+    pub fn queue_mark_failed_ambiguous(&self, id: &str, error: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        c.execute("UPDATE queued_prompts SET status='failed',error=?2,params_json=json_set(params_json,'$.ambiguous',json('true')),updated_at=?3 WHERE id=?1 AND status='sending'", params![id,error,now])?;
         Ok(())
     }
     /// Return a claimed item to the queue without changing its position or
@@ -3336,6 +3827,297 @@ impl Storage {
         c.execute("DELETE FROM queued_prompts WHERE id=?1 AND status IN ('queued','failed')", [id])?;
         Ok(())
     }
+    // ── Durable delegation ledger (FIX47) ──────────────────────────────────
+    /// Record one Manager assignment. It is written before anything is
+    /// delivered, so the record exists even if the provider never starts. Both
+    /// conversations must exist; the row is removed with either of them.
+    ///
+    /// Idempotent per `dedupeKey` when one is supplied: a replayed tool call finds
+    /// the row already recorded and gets it back with `false`, so the caller
+    /// delivers nothing a second time. The unique index makes the check atomic, so
+    /// two concurrent replays cannot both be recorded.
+    pub fn delegation_create(&self, input: &Value) -> Result<(Value, bool), StorageError> {
+        let text = |key: &str, limit: usize| -> Result<String, StorageError> {
+            input[key].as_str().map(str::trim).filter(|text| !text.is_empty() && text.len() <= limit).map(str::to_owned).ok_or(StorageError::InvalidAgent)
+        };
+        let origin = text("originSessionId", 128)?;
+        let side = text("sideSessionId", 128)?;
+        let from_agent = text("fromAgentId", 128)?;
+        let target_agent = text("targetAgentId", 128)?;
+        let topic = text("topic", 200)?;
+        let preview: String = input["briefPreview"].as_str().unwrap_or("").trim().chars().take(280).collect();
+        let workspace = text("workspacePath", 4096)?;
+        // The brief is kept only while the row waits, so a restart can redeliver
+        // it; it is capped like the tool argument that produced it.
+        let delivery = input["deliveryText"].as_str().filter(|text| text.len() <= 200_000).map(str::to_owned);
+        let origin_turn = match input.get("originTurnId") { None | Some(Value::Null) => None, Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or(StorageError::InvalidAgent)?.to_owned()) };
+        let depth = match input.get("deliveryDepth") { None | Some(Value::Null) => 0, Some(value) => value.as_u64().filter(|depth| *depth <= 64).ok_or(StorageError::InvalidAgent)? as i64 };
+        let worktree = match input.get("worktree") { Some(value) if value.is_object() => Some(value.to_string()), _ => None };
+        let dedupe = input["dedupeKey"].as_str().map(str::trim).filter(|key| !key.is_empty()).map(str::to_owned);
+        let queue_reason = match input["queueReason"].as_str() { Some(reason @ ("busy" | "slots")) => Some(reason.to_owned()), _ => None };
+        let id = Uuid::new_v4().to_string();
+        let now = task_stamp();
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        if let Some(key) = &dedupe {
+            if let Some(existing) = delegation_find_by_dedupe(&c, key)? { return Ok((existing, false)); }
+        }
+        for session in [&origin, &side] {
+            if !c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get::<_, bool>(0))? { return Err(StorageError::AgentNotFound); }
+        }
+        let inserted = c.execute(
+            "INSERT OR IGNORE INTO delegations(id,origin_session_id,origin_turn_id,side_session_id,side_turn_id,from_agent_id,target_agent_id,topic,brief_preview,status,error,delivery_text,delivery_depth,workspace_path,worktree_json,created_at,started_at,finished_at,updated_at,dedupe_key,queue_reason) VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,'queued',NULL,?9,?10,?11,?12,?13,NULL,NULL,?13,?14,?15)",
+            params![id, origin, origin_turn, side, from_agent, target_agent, topic, preview, delivery, depth, workspace, worktree, now, dedupe, queue_reason],
+        )?;
+        // A concurrent replay won the unique index between the lookup above and
+        // this insert: return its row instead of a second assignment.
+        if inserted == 0 {
+            if let Some(key) = &dedupe {
+                if let Some(existing) = delegation_find_by_dedupe(&c, key)? { return Ok((existing, false)); }
+            }
+            return Err(StorageError::AgentConflict);
+        }
+        Ok((delegation_read(&c, &id)?, true))
+    }
+
+    pub fn delegation_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        delegation_read(&c, id)
+    }
+
+    /// Every assignment a conversation made, oldest first, so a transcript reads
+    /// in the order the Manager delegated.
+    pub fn delegation_list_for_origin(&self, origin_session_id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        delegation_list(&c, &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE origin_session_id=?1 ORDER BY created_at,rowid"), origin_session_id)
+    }
+
+    /// Every assignment one side conversation carries, oldest first (several
+    /// assignments may share a side conversation).
+    pub fn delegation_list_for_side(&self, side_session_id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        delegation_list(&c, &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE side_session_id=?1 ORDER BY created_at,rowid"), side_session_id)
+    }
+
+    /// The assignment started: its turn id, a start time observed once, and no
+    /// further need for the brief. The turn is added to the row's own turn list,
+    /// so a retry of an earlier turn can still find this assignment after
+    /// `side_turn_id` moved on to an answer turn.
+    pub fn delegation_mark_running(&self, id: &str, side_turn_id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "UPDATE delegations SET status='running',side_turn_id=?2,queue_reason=NULL,started_at=COALESCE(started_at,?3),delivery_text=NULL,updated_at=?3,
+                turn_ids=CASE WHEN turn_ids IS NULL THEN json_array(?2)
+                    WHEN EXISTS(SELECT 1 FROM json_each(turn_ids) WHERE json_each.value=?2) THEN turn_ids
+                    ELSE json_insert(turn_ids,'$[#]',?2) END
+             WHERE id=?1 AND status IN ('queued','running')",
+            params![id, side_turn_id, task_stamp()],
+        )?;
+        delegation_read(&c, id)
+    }
+
+    /// The assignment ended. A terminal row is never rewritten, so a late
+    /// duplicate turn ending cannot move it; the brief is dropped for good.
+    pub fn delegation_mark_terminal(&self, id: &str, status: &str, error: Option<&str>) -> Result<Value, StorageError> {
+        if !matches!(status, "completed" | "failed" | "cancelled" | "interrupted") { return Err(StorageError::InvalidAgent); }
+        let error = match status { "failed" | "interrupted" => error.map(|text| text.chars().take(300).collect::<String>()), _ => None };
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = task_stamp();
+        c.execute(
+            "UPDATE delegations SET status=?2,error=?3,delivery_text=NULL,finished_at=COALESCE(finished_at,?4),updated_at=?4 WHERE id=?1 AND status IN ('queued','running')",
+            params![id, status, error, now],
+        )?;
+        delegation_read(&c, id)
+    }
+
+    pub fn delegation_list_by_status(&self, status: &str) -> Result<Vec<Value>, StorageError> {
+        if !DELEGATION_STATES.contains(&status) { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        delegation_list(&c, &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE status=?1 ORDER BY created_at,rowid"), status)
+    }
+
+    /// The assignment whose turn this was, if any.
+    pub fn delegation_find_for_side_turn(&self, side_session_id: &str, turn_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE side_session_id=?1 AND side_turn_id=?2 ORDER BY created_at DESC,rowid DESC LIMIT 1"),
+            params![side_session_id, turn_id], |r| r.get(0),
+        ).optional()?;
+        match raw {
+            Some(raw) => Ok(Some(delegation_dto(serde_json::from_str(&raw)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Every open assignment of a side conversation that has used this turn: its
+    /// current `side_turn_id`, or any turn it used before that (an answer turn
+    /// moves the current one, a retry still refers to the failed turn). A caller
+    /// that must act on exactly one row checks the length; the daemon never picks
+    /// between two.
+    pub fn delegation_open_rows_for_turn(&self, side_session_id: &str, turn_id: &str) -> Result<Vec<Value>, StorageError> {
+        if turn_id.is_empty() { return Ok(Vec::new()); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare(&format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE side_session_id=?1 AND status IN ('queued','running') AND (side_turn_id=?2 OR EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(turn_ids) THEN turn_ids ELSE '[]' END) WHERE json_each.value=?2)) ORDER BY created_at,rowid"))?;
+        let rows = q.query_map(params![side_session_id, turn_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter().map(|raw| Ok(delegation_dto(serde_json::from_str(&raw)?))).collect()
+    }
+
+    /// The assignment a replayed brief already recorded, if any. The unique index
+    /// on `dedupe_key` makes this the same row the insert would collide with.
+    pub fn delegation_find_by_dedupe(&self, dedupe_key: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        delegation_find_by_dedupe(&c, dedupe_key)
+    }
+
+    /// The one open assignment of a side conversation: the running one when a
+    /// turn is in flight (deliveries start in creation order), else the oldest
+    /// still waiting.
+    pub fn delegation_latest_open_for_side(&self, side_session_id: &str) -> Result<Option<Value>, StorageError> {        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE side_session_id=?1 AND status IN ('queued','running') ORDER BY CASE WHEN status='running' THEN 0 ELSE 1 END, created_at, rowid LIMIT 1"),
+            [side_session_id], |r| r.get(0),
+        ).optional()?;
+        match raw {
+            Some(raw) => Ok(Some(delegation_dto(serde_json::from_str(&raw)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// What a restart needs to put a waiting delivery back in memory: the brief
+    /// it has not sent yet and the hop depth it must carry. Never exposed as a DTO.
+    pub fn delegation_queued_for_recovery(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        query_jsons(&c, "SELECT json_object('id',id,'sideSessionId',side_session_id,'fromAgentId',from_agent_id,'deliveryText',delivery_text,'deliveryDepth',delivery_depth) FROM delegations WHERE status='queued' AND delivery_text IS NOT NULL ORDER BY created_at,rowid", "")
+    }
+
+    /// The reply to the Manager is owed once per terminal outcome, so the first
+    /// caller that finds the slot empty claims it: a duplicate turn ending finds
+    /// it taken and sends nothing. `pending` also outlives a restart, which is
+    /// what lets the next boot offer the reply again.
+    pub fn delegation_reply_claim(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE delegations SET reply_state='pending',updated_at=?2 WHERE id=?1 AND reply_state IS NULL",
+            params![id, task_stamp()],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Records a claimed reply that went out. A reply still waiting in the queue
+    /// keeps `pending`, so the next boot offers it again rather than losing it.
+    pub fn delegation_reply_settle(&self, id: &str, delivered: bool) -> Result<(), StorageError> {
+        if !delivered { return Ok(()); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute(
+            "UPDATE delegations SET reply_state='delivered',updated_at=?2 WHERE id=?1 AND reply_state='pending'",
+            params![id, task_stamp()],
+        )?;
+        Ok(())
+    }
+
+    /// A child's pending approval or question wakes its Manager at most once per
+    /// request (durable, idempotent on replay): the first caller to claim the
+    /// request id wins, a repeat (a resend, a second surface, a retried event)
+    /// finds it taken and sends nothing. One atomic statement, so two racing
+    /// callers cannot both win. Only a running assignment wakes anything.
+    ///
+    /// Lane V1: the claim also stores what the wake will say (`pending` state, the
+    /// already-shortened title and the request kind) in the same statement, so a
+    /// restart can re-offer it. A claim that would replace a wake still `pending`
+    /// is refused (`false`): one row holds one wake at a time, and dropping the
+    /// older pending wake here would lose a notice the Manager never received.
+    /// The older wake is delivered first by the live path or the boot re-offer;
+    /// a later announcement for the newer request can claim once it has settled.
+    pub fn delegation_wake_claim(&self, id: &str, request_id: &str, title: &str, kind: &str) -> Result<bool, StorageError> {
+        if request_id.is_empty() || !matches!(kind, "question" | "approval") { return Ok(false); }
+        let title: String = title.chars().take(160).collect();
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE delegations SET wake_request=?2,wake_state='pending',wake_title=?3,wake_kind=?4,updated_at=?5
+             WHERE id=?1 AND status='running' AND (wake_request IS NULL OR wake_request != ?2)
+               AND (wake_state IS NULL OR wake_state != 'pending')",
+            params![id, request_id, title, kind, task_stamp()],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Whether one request's wake is still waiting to be delivered. The live path
+    /// checks it just before delivering, so a wake dropped between the claim and
+    /// the spawned delivery task (the assignment ended in between) is never sent.
+    pub fn delegation_wake_pending(&self, id: &str, request_id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM delegations WHERE id=?1 AND wake_request=?2 AND wake_state='pending')",
+            params![id, request_id], |r| r.get(0),
+        )?)
+    }
+
+    /// Records that the claimed wake went out (`sent`) or is no longer meaningful
+    /// (`dropped`). Conditional on the same request id and on `pending`, so a late
+    /// ack for an older request can never overwrite a newer wake, and a repeated
+    /// ack changes nothing. The title and kind are dropped with it: once settled,
+    /// nothing needs to know what the request was called.
+    pub fn delegation_wake_settle(&self, id: &str, request_id: &str, state: &str) -> Result<bool, StorageError> {
+        if !matches!(state, "sent" | "dropped") { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE delegations SET wake_state=?3,wake_title=NULL,wake_kind=NULL,updated_at=?4
+             WHERE id=?1 AND wake_request=?2 AND wake_state='pending'",
+            params![id, request_id, state, task_stamp()],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Drops whatever wake one assignment still holds pending, whatever request it
+    /// belongs to: the row has ended, so no re-offer may announce a request of
+    /// finished work. Idempotent, and a no-op on a row with no pending wake.
+    pub fn delegation_drop_pending_wake(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let changed = c.execute(
+            "UPDATE delegations SET wake_state='dropped',wake_title=NULL,wake_kind=NULL,updated_at=?2
+             WHERE id=?1 AND wake_state='pending'",
+            params![id, task_stamp()],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// The wakes a restart must re-offer: one row per assignment whose claim is
+    /// still `pending`. The stored title and kind are all the re-offer composes
+    /// from, so nothing about the question itself is kept.
+    pub fn delegation_pending_wakes(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        query_jsons(&c, "SELECT json_object('id',id,'originSessionId',origin_session_id,'sideSessionId',side_session_id,'requestId',wake_request,'targetAgentId',target_agent_id,'title',wake_title,'kind',wake_kind,'deliveryDepth',delivery_depth,'status',status) FROM delegations WHERE wake_state='pending' ORDER BY created_at,rowid", "")
+    }
+
+    /// Check the exact assignment and request, not the display text: separate
+    /// requests can have identical titles and a teammate can be renamed.
+    pub fn delegation_wake_delivered(&self, origin_session_id: &str, delegation_id: &str, request_id: &str) -> Result<bool, StorageError> {
+        if origin_session_id.is_empty() || delegation_id.is_empty() || request_id.is_empty() { return Ok(false); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row(
+            "SELECT 1 FROM messages WHERE session_id=?1 AND role='user' AND json_extract(data,'$.meta.kind')='blob_update' AND json_extract(data,'$.meta.delegationId')=?2 AND json_extract(data,'$.meta.requestId')=?3 LIMIT 1",
+            params![origin_session_id, delegation_id, request_id], |_| Ok(()),
+        ).optional()?.is_some())
+    }
+
+    /// Whether new Manager assignments are paused. One keyed read, so the
+    /// assignment path never loads the whole settings table. Absent or malformed
+    /// means not paused.
+    pub fn delegation_paused(&self) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row("SELECT value FROM settings WHERE key='delegation.paused'", [], |r| r.get(0)).optional()?;
+        Ok(raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()).is_some_and(|value| value == true))
+    }
+
+    /// What a restart re-offers: an assignment that ended (completed, failed or
+    /// cancelled) while its reply was still waiting for the Manager's conversation.
+    /// An interrupted row is never re-offered: nothing was answered. The reply text
+    /// itself is not stored, except a failure's short error; a completion's reply
+    /// is read from the side turn again.
+    pub fn delegation_pending_replies(&self) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        query_jsons(&c, "SELECT json_object('id',id,'originSessionId',origin_session_id,'sideSessionId',side_session_id,'sideTurnId',side_turn_id,'targetAgentId',target_agent_id,'deliveryDepth',delivery_depth,'status',status,'error',error) FROM delegations WHERE status IN ('completed','failed','cancelled') AND reply_state='pending' ORDER BY created_at,rowid", "")
+    }
+
     // ── Durable board tasks (expansion-v2 slice 1A) ────────────────────────
     /// Create an unassigned draft. There is deliberately no assignment field:
     /// only `task_dispatch_claim` (the owner's drop action) can assign work.
@@ -4481,10 +5263,36 @@ impl Storage {
         )?;
         Ok(())
     }
+    /// A session saved as failed after its turn had already completed is a
+    /// stale label, not a failed turn: the latest genuine terminal outcome
+    /// wins. Only a finished `error`/`failed` row whose newest turn is
+    /// `completed` is repaired; a turn that really failed, was cancelled or is
+    /// still running is left exactly as it is.
+    pub fn repair_stale_failed_sessions(&self) -> Result<Vec<String>, StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let ids = {
+            let mut q = tx.prepare("SELECT s.id FROM sessions s WHERE s.state IN ('error','failed') AND (SELECT t.state FROM turns t WHERE t.session_id=s.id ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1) = 'completed' ORDER BY s.id")?;
+            let rows = q.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute("UPDATE sessions SET state='completed',updated_at=?1 WHERE id IN (SELECT s.id FROM sessions s WHERE s.state IN ('error','failed') AND (SELECT t.state FROM turns t WHERE t.session_id=s.id ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1) = 'completed')", [&now])?;
+        tx.commit()?;
+        Ok(ids)
+    }
     /// Convert volatile running state left by an unclean daemon exit into a
     /// resumable offline session. Partial messages and native IDs are retained.
     /// Historical budget rows remain untouched during session recovery.
+    ///
+    /// Returns the settled session ids only; [`Self::recover_restart_state`] is
+    /// the same recovery and also reports the native cards it closed.
     pub fn recover_after_restart(&self) -> Result<Vec<String>, StorageError> {
+        Ok(self.recover_restart_state()?.sessions)
+    }
+    /// The restart recovery boot runs, including the native approval and question
+    /// cards it had to close because the adapter that raised them is gone.
+    pub fn recover_restart_state(&self) -> Result<RestartRecovery, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = Utc::now().to_rfc3339();
@@ -4497,11 +5305,102 @@ impl Storage {
         };
         tx.execute("UPDATE turns SET state='error',data=json_set(data,'$.watchdogInterrupted',json('true')),started_at=COALESCE(started_at,created_at),completed_at=?1,failure_class='other' WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
         tx.execute("DELETE FROM active_turn_reservations WHERE turn_id IN (SELECT id FROM turns WHERE state IN ('error','cancelled','completed'))", [])?;
-        tx.execute("UPDATE sessions SET state='offline',continuation_pending=1,updated_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
-        tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired','$.resolution','daemon_restarted') WHERE status IN ('pending','resolving')", [])?;
-        tx.execute("UPDATE queued_prompts SET status='failed',error='Interrupted by a restart. Check the conversation before sending again.',updated_at=?1 WHERE status='sending'", [&now])?;
+        // An unattended automation run is never continued automatically
+        // (`watchdog_enqueue` refuses one), so its session must not carry a
+        // continuation flag that can never fire; it simply goes offline.
+        tx.execute("UPDATE sessions SET state='offline',continuation_pending=CASE WHEN json_extract(data,'$.link.kind')='automation' THEN 0 ELSE 1 END,updated_at=?1 WHERE state IN ('starting','working','waiting_permission','cancelling')", [&now])?;
+        // A native approval or question card was answered by calling the adapter
+        // that raised it, and that process and request are gone after a restart.
+        // `mcp:` questions are daemon-owned (answered in-process) and a proposal
+        // card is decided by `proposal.decide`, so both stay answerable and are
+        // left to their own expiry.
+        let closed_cards = {
+            let mut q = tx.prepare("SELECT id,session_id FROM permission_requests WHERE status IN ('pending','resolving') AND (provider_request_id IS NULL OR (provider_request_id NOT LIKE 'mcp:%' AND provider_request_id NOT LIKE 'proposal:%')) ORDER BY rowid")?;
+            let rows = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute("UPDATE permission_requests SET status='expired',data=json_set(data,'$.status','expired','$.resolution','daemon_restarted') WHERE status IN ('pending','resolving') AND (provider_request_id IS NULL OR (provider_request_id NOT LIKE 'mcp:%' AND provider_request_id NOT LIKE 'proposal:%'))", [])?;
+        // A claimed send left `sending` by an unclean exit is resolved from the
+        // evidence the conversation already holds, item by item, in this same
+        // transaction: the user message row carries the item's `sendId` as
+        // `meta.clientMessageId`, and that message's turn carries `data.delivery`.
+        //   - row + (acknowledged or a completed turn): the send reached the agent,
+        //     so the item is deleted rather than failed;
+        //   - row + anything else: it may have arrived, so `failed` + `ambiguous`
+        //     with the sentence that says exactly that;
+        //   - no row: the prompt was never stored, so nothing can have reached the
+        //     agent. `failed` WITHOUT the marker and the fixed "was not sent"
+        //     sentence, so a resend needs no confirmation. It is still never sent
+        //     automatically: the drain only claims `queued` items;
+        //   - no usable id or a failed lookup: treat as ambiguous, never as sent.
+        let claimed = {
+            let mut q = tx.prepare("SELECT id,session_id,params_json FROM queued_prompts WHERE status='sending' ORDER BY id")?;
+            let rows = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (item_id, session_id, params_json) in claimed {
+            let params: Value = serde_json::from_str(&params_json).unwrap_or(Value::Null);
+            // Older queue senders did not forward clientMessageId to the prompt
+            // path. Only an explicitly stored sendId proves this row used the
+            // new protocol; legacy claimed rows must remain ambiguous.
+            let stored_id = params
+                .get("sendId")
+                .and_then(Value::as_str)
+                .filter(|value| queue_send_id_valid(value))
+                .map(str::to_owned);
+            let evidence = match &stored_id {
+                Some(send_id) => tx.query_row(
+                    "SELECT COALESCE(t.state,''),COALESCE(json_extract(t.data,'$.delivery'),'') FROM messages m LEFT JOIN turns t ON t.id=m.turn_id WHERE m.session_id=?1 AND json_extract(m.data,'$.meta.clientMessageId')=?2 ORDER BY m.sequence DESC LIMIT 1",
+                    params![session_id, send_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                ).optional(),
+                None => Ok(None),
+            };
+            match (&stored_id, &evidence) {
+                // The message row is there and its turn proves the provider took
+                // the prompt, so this item was sent and is not a failure.
+                (_, Ok(Some((turn_state, delivery)))) if delivery == "acknowledged" || turn_state == "completed" => {
+                    tx.execute("DELETE FROM queued_prompts WHERE id=?1 AND status='sending'", params![item_id])?;
+                }
+                // The message row is there but delivery is unproven: ambiguous.
+                (_, Ok(Some(_))) => {
+                    tx.execute("UPDATE queued_prompts SET status='failed',error=?2,params_json=json_set(params_json,'$.ambiguous',json('true')),updated_at=?3 WHERE id=?1 AND status='sending'", params![item_id, QUEUE_AMBIGUOUS_ERROR, &now])?;
+                }
+                // The id was known and the lookup ran, and no row exists: the
+                // prompt was never stored, so nothing can have reached the agent.
+                (Some(_), Ok(None)) => {
+                    tx.execute("UPDATE queued_prompts SET status='failed',error=?2,params_json=json_remove(params_json,'$.ambiguous'),updated_at=?3 WHERE id=?1 AND status='sending'", params![item_id, QUEUE_NOT_SENT_ERROR, &now])?;
+                }
+                // No usable id, or the lookup itself failed: never claim "not
+                // sent" on evidence that could not be read.
+                _ => {
+                    tx.execute("UPDATE queued_prompts SET status='failed',error=?2,params_json=json_set(params_json,'$.ambiguous',json('true')),updated_at=?3 WHERE id=?1 AND status='sending'", params![item_id, QUEUE_AMBIGUOUS_ERROR, &now])?;
+                }
+            }
+        }
+        // A conversation shown as "retrying" whose retry item did not survive the
+        // restart will never continue, so it goes back to the truthful idle state.
+        // This runs after the queue rewrite above, which is what makes a claimed
+        // retry `failed` rather than pending.
+        let idle_again = {
+            let mut q = tx.prepare("SELECT id FROM sessions WHERE state='retrying' AND NOT EXISTS(SELECT 1 FROM queued_prompts q WHERE q.session_id=sessions.id AND q.kind='retry' AND q.status IN ('queued','sending')) ORDER BY id")?;
+            let rows = q
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute("UPDATE sessions SET state='idle',updated_at=?1 WHERE state='retrying' AND NOT EXISTS(SELECT 1 FROM queued_prompts q WHERE q.session_id=sessions.id AND q.kind='retry' AND q.status IN ('queued','sending'))", [&now])?;
         tx.commit()?;
-        Ok(ids)
+        let mut sessions = ids;
+        sessions.extend(idle_again);
+        Ok(RestartRecovery {
+            sessions,
+            closed_cards: closed_cards.into_iter().map(|(id, session_id)| json!({"id":id,"sessionId":session_id})).collect(),
+        })
     }
     pub fn append_message(
         &self,
@@ -4511,6 +5410,38 @@ impl Storage {
         content: &str,
     ) -> Result<Value, StorageError> {
         self.append_message_with_data(session, turn, role, content, &json!({}))
+    }
+    /// Finds the user message a client-supplied id created, so a resent prompt
+    /// returns its first outcome instead of starting a second turn. The lookup
+    /// is served by `idx_messages_client_id` (an expression index over the same
+    /// JSON path), so it never scans a conversation's history.
+    ///
+    /// The newest row wins. Only a confirmed resend of a send whose delivery is
+    /// unknown can leave a second row under one id, and after that the later row
+    /// is the message the id means; a first row can never be shadowed otherwise
+    /// because the replay check answers before another row is written.
+    ///
+    /// `turnState` and `delivery` are the stored evidence the replay rule reads:
+    /// `delivery` is `acknowledged` once the adapter reported `PromptAccepted`
+    /// and `unknown` when a terminal turn ended without it. Both are `""` when
+    /// the turn row is missing or the fact was never recorded.
+    pub fn message_by_client_id(&self, session: &str, client_id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row = c.query_row(
+            "SELECT m.id,m.turn_id,m.content,m.role,m.created_at,COALESCE(t.state,''),COALESCE(json_extract(t.data,'$.delivery'),'') FROM messages m LEFT JOIN turns t ON t.id=m.turn_id WHERE m.session_id=?1 AND json_extract(m.data,'$.meta.clientMessageId')=?2 ORDER BY m.sequence DESC LIMIT 1",
+            params![session, client_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?)),
+        ).optional()?;
+        Ok(row.map(|(id, turn, content, role, created_at, turn_state, delivery)| json!({
+            "id": id,
+            "sessionId": session,
+            "turnId": turn.unwrap_or_default(),
+            "content": content,
+            "role": role,
+            "createdAt": created_at,
+            "turnState": turn_state,
+            "delivery": delivery,
+        })))
     }
     /// `data` holds structured message metadata such as attachment names.
     pub fn append_message_with_data(
@@ -4637,6 +5568,36 @@ impl Storage {
         let (id, role, content, created_at) = row.ok_or(StorageError::AgentNotFound)?;
         if !matches!(role.as_str(), "user" | "assistant") { return Err(StorageError::InvalidAgent); }
         Ok(json!({"id":id,"sessionId":session,"role":role,"content":content,"createdAt":created_at}))
+    }
+    /// The image attachments of one message, read only when the message really
+    /// belongs to that conversation. The daemon serves thumbnails from this
+    /// record, so the renderer never names a file path.
+    pub fn message_attachments(&self, session: &str, message_id: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let data: Option<String> = c.query_row(
+            "SELECT data FROM messages WHERE session_id=?1 AND id=?2",
+            params![session, message_id],
+            |r| r.get(0),
+        ).optional()?;
+        let data = data.ok_or(StorageError::AgentNotFound)?;
+        if data.trim().is_empty() { return Ok(Vec::new()); }
+        let parsed: Value = serde_json::from_str(&data)?;
+        Ok(parsed["attachments"].as_array().cloned().unwrap_or_default())
+    }
+    /// The daemon-owned files of a conversation's image attachments, so they can
+    /// be removed with the conversation.
+    pub fn session_attachment_files(&self, session: &str) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT data FROM messages WHERE session_id=?1 AND json_extract(data,'$.attachments') IS NOT NULL")?;
+        let rows = q.query_map([session], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        let mut files = Vec::new();
+        for row in rows {
+            let Ok(data) = serde_json::from_str::<Value>(&row) else { continue };
+            for attachment in data["attachments"].as_array().into_iter().flatten() {
+                if let Some(file) = attachment["file"].as_str().filter(|file| !file.is_empty()) { files.push(file.to_owned()); }
+            }
+        }
+        Ok(files)
     }
     /// The last `limit` user and assistant messages of a session, oldest first,
     /// for a hand-off draft. Thinking, notices, plans and tool output are all
@@ -4921,6 +5882,11 @@ impl Storage {
         }
         data["status"] = json!("resolving");
         data["choice"] = json!(choice);
+        // When the claim happened, so a card a failed reply leaves `resolving`
+        // can be aged out and returned to the owner instead of holding its
+        // assignment open for ever. Stored inside the card's own JSON, so no
+        // table migration and an older database needs no change.
+        data["resolvingAt"] = json!(task_stamp());
         tx.execute(
             "UPDATE permission_requests SET data=?2 WHERE id=?1",
             params![id, data.to_string()],
@@ -5336,7 +6302,7 @@ impl Storage {
         Ok(result)
     }
     fn agent_rows_locked(&self,c:&Connection,include_archived:bool)->Result<Vec<Value>,StorageError>{
-        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
+        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
@@ -5348,7 +6314,7 @@ impl Storage {
         v["contextSize"] = json!(context_size);
         v["contextModel"] = json!(context_model);
         v["contextEstimated"] = json!(context_estimated);
-        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
+        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'delivery',json_extract(t.data,'$.delivery'),'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
         let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta'),'references',json_extract(data,'$.references'),'reactions',json(COALESCE((SELECT json_group_array(emoji) FROM (SELECT emoji FROM message_reactions mr WHERE mr.session_id=messages.session_id AND mr.message_id=messages.id ORDER BY CASE emoji WHEN '👍' THEN 0 WHEN '👎' THEN 1 WHEN '❤️' THEN 2 WHEN '😂' THEN 3 WHEN '🎉' THEN 4 ELSE 5 END)), '[]'))) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
@@ -6214,7 +7180,7 @@ fn valid_look(look: &Value) -> bool {
     const SHAPES: [&str; 13] = ["circle","pebble","squircle","round","organic","boxy","capsule","cloud","droplet","hexagon","sun","triangle","cat"];
     const ARTS: [&str; 6] = ["robot","robot-flat","robot-pop","robot-dot","blob","painted"];
     const PAINTS: [&str; 12] = ["classic","cube","star","flower","pear","peanut","ghost","bunny","kitty","ufo","boxbot","tile"];
-    const ICONS: [&str; 19] = ["logo","logo-tint","logo-mono","px-robot","px-cat","px-ghost","px-alien","px-fox","px-frog","px-owl","px-bunny","px-bear","px-octopus","px-mushroom","px-slime","px-wizard","px-duck","px-rocket","px-bolt"];
+    const ICONS: [&str; 48] = ["logo","logo-tint","logo-mono","px-robot","px-cat","px-ghost","px-alien","px-fox","px-frog","px-owl","px-bunny","px-bear","px-octopus","px-mushroom","px-slime","px-wizard","px-duck","px-rocket","px-bolt","char-albert-einstein","char-nikola-tesla","char-cleopatra","char-superman","char-sherlock-holmes","char-robin-hood","char-thor","char-hulk","char-marie-curie","char-joan-of-arc","char-amelia-earhart","char-sun-wukong","char-frida-kahlo","char-captain-marvel","char-ada-lovelace","char-ludwig-van-beethoven","char-charlie-chaplin","char-william-shakespeare","char-queen-elizabeth-i","char-master-chief","char-sonic","char-anubis","char-wolfgang-amadeus-mozart","char-arthur-morgan","char-count-dracula","char-hua-mulan","char-gandalf","char-benjamin-franklin","char-kratos"];
     let Some(object) = look.as_object() else { return false };
     if object.keys().any(|key| !["shape","seed","traits","bot","art","paint","icon"].contains(&key.as_str())) { return false; }
     if object.get("art").is_some_and(|art| !art.is_null() && !art.as_str().is_some_and(|art| ARTS.contains(&art))) { return false; }
@@ -7260,6 +8226,27 @@ mod tests {
         assert_eq!(c.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)).unwrap(), 12);
     }
 
+    // FIX44: the snapshot is the one place the UI learns a bot's permission mode,
+    // so it must carry it; otherwise a reload shows the global default instead.
+    #[test]
+    fn snapshot_agents_carry_the_permission_mode_and_its_effective_value() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-perm","provider":"codex"})).unwrap();
+        let agent = db.agent_create(&json!({"name":"Perm","runtimeId":"rt-perm"})).unwrap().0;
+        let id = agent["id"].as_str().unwrap();
+        db.agent_update(id, &json!({"approvalMode":"bypass"})).unwrap();
+        let snap = db.snapshot().unwrap();
+        let row = &snap["agents"][0];
+        assert_eq!(row["approvalMode"], "bypass");
+        assert_eq!(row["effectiveApprovalMode"], "bypass");
+        // Clearing the bot's own setting falls back to the global default for display.
+        db.agent_update(id, &json!({"approvalMode":Value::Null})).unwrap();
+        db.set_setting("permissions.default_mode", &json!("auto")).unwrap();
+        let row = &db.snapshot().unwrap()["agents"][0].clone();
+        assert!(row["approvalMode"].is_null());
+        assert_eq!(row["effectiveApprovalMode"], "auto");
+    }
+
     #[test]
     fn outfit_migration_from_six_backs_up_and_defaults_existing_records() {
         let dir = std::env::temp_dir().join(format!("bloblex-outfit-migration-{}", Uuid::new_v4()));
@@ -7932,7 +8919,9 @@ mod tests {
         db.recover_after_restart().unwrap();
         let settled = db.queue_get("s-queue2", &id).unwrap();
         assert_eq!(settled["status"], "failed");
-        assert_eq!(settled["error"], "Interrupted by a restart. Check the conversation before sending again.");
+        // queue_add gave it a send id and no message row carries it, so it was not sent.
+        assert_eq!(settled["error"], QUEUE_NOT_SENT_ERROR);
+        assert_eq!(settled["ambiguous"], false, "{settled}");
         db.update_session_state("s-queue2", "idle").unwrap();
         db.session_delete("s-queue2").unwrap();
         assert!(matches!(db.queue_get("s-queue2", &id), Err(StorageError::AgentNotFound)));
@@ -8840,12 +9829,15 @@ mod fix39_activity_tests {
 
     #[test]
     fn valid_look_accepts_only_known_icons() {
-        for icon in ["logo", "logo-tint", "logo-mono", "px-robot", "px-cat", "px-ghost", "px-alien", "px-fox", "px-frog", "px-owl", "px-bunny", "px-bear", "px-octopus", "px-mushroom", "px-slime", "px-wizard", "px-duck", "px-rocket", "px-bolt"] {
+        for icon in ["logo", "logo-tint", "logo-mono", "px-robot", "px-cat", "px-ghost", "px-alien", "px-fox", "px-frog", "px-owl", "px-bunny", "px-bear", "px-octopus", "px-mushroom", "px-slime", "px-wizard", "px-duck", "px-rocket", "px-bolt", "char-albert-einstein", "char-nikola-tesla", "char-cleopatra", "char-superman", "char-sherlock-holmes", "char-robin-hood", "char-thor", "char-hulk", "char-marie-curie", "char-joan-of-arc", "char-amelia-earhart", "char-sun-wukong", "char-frida-kahlo", "char-captain-marvel", "char-ada-lovelace", "char-ludwig-van-beethoven", "char-charlie-chaplin", "char-william-shakespeare", "char-queen-elizabeth-i", "char-master-chief", "char-sonic", "char-anubis", "char-wolfgang-amadeus-mozart", "char-arthur-morgan", "char-count-dracula", "char-hua-mulan", "char-gandalf", "char-benjamin-franklin", "char-kratos"] {
             assert!(valid_look(&json!({"shape":"circle","icon":icon})), "{icon}");
         }
         assert!(valid_look(&json!({"shape":"circle","icon":null})));
         assert!(valid_look(&json!({"shape":"circle","art":"robot-flat","icon":"logo-tint"})));
         assert!(!valid_look(&json!({"shape":"circle","icon":"px-unknown"})));
+        assert!(!valid_look(&json!({"shape":"circle","icon":"char-lara-croft"})));
+        assert!(!valid_look(&json!({"shape":"circle","icon":"char-samus-aran"})));
+        assert!(!valid_look(&json!({"shape":"circle","icon":"char-unknown"})));
         assert!(!valid_look(&json!({"shape":"circle","icon":7})));
     }
 
@@ -8917,6 +9909,43 @@ mod p8_watchdog_tests {
         assert_eq!(db.queue_list("s").unwrap().len(),1,"recovery survives another restart");
         drop(db);
         fs::remove_dir_all(dir).unwrap();
+    }
+    /// A failure saved after its turn had already completed is a stale label:
+    /// the newest turn is the truth. A turn that really failed, was cancelled
+    /// or is still running keeps its session exactly as it was.
+    #[test]
+    fn a_stale_failed_label_is_repaired_from_the_newest_turn_only() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"r","provider":"codex"})).unwrap();
+        for id in ["recovered", "failed", "cancelled", "no-turns", "unfinished"] {
+            db.create_session(id,"r","codex",".","Chat").unwrap();
+        }
+        // The late adapter error landed after the turn completed.
+        db.create_turn("recovered-1","recovered").unwrap();
+        db.update_turn_state("recovered-1","completed").unwrap();
+        db.update_session_state("recovered","error").unwrap();
+        // A turn that really failed is not a success.
+        db.create_turn("failed-1","failed").unwrap();
+        db.update_turn_outcome("failed-1","error",Some("provider_error")).unwrap();
+        db.update_session_state("failed","error").unwrap();
+        // Cancellation keeps its own outcome.
+        db.create_turn("cancelled-1","cancelled").unwrap();
+        db.update_turn_outcome("cancelled-1","cancelled",Some("cancelled")).unwrap();
+        db.update_session_state("cancelled","cancelled").unwrap();
+        // A conversation with no turn at all has nothing to infer from.
+        db.update_session_state("no-turns","failed").unwrap();
+        // A turn still running is not a finished outcome either.
+        db.create_turn("unfinished-1","unfinished").unwrap();
+        db.update_session_state("unfinished","error").unwrap();
+        assert_eq!(db.repair_stale_failed_sessions().unwrap(), vec!["recovered".to_owned()]);
+        assert_eq!(db.session_state("recovered").unwrap().as_deref(), Some("completed"));
+        assert_eq!(db.session_state("failed").unwrap().as_deref(), Some("error"));
+        assert_eq!(db.session_state("cancelled").unwrap().as_deref(), Some("cancelled"));
+        assert_eq!(db.session_state("no-turns").unwrap().as_deref(), Some("failed"));
+        assert_eq!(db.session_state("unfinished").unwrap().as_deref(), Some("error"));
+        assert_eq!(db.session_detail("recovered").unwrap()["turns"][0]["state"], "completed");
+        // The repair runs once.
+        assert!(db.repair_stale_failed_sessions().unwrap().is_empty());
     }
     #[test]
     fn p8_restart_arms_bounded_continuation_without_changing_saved_context() {

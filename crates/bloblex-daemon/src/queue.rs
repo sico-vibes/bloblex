@@ -72,9 +72,11 @@ fn queue_error(error: StorageError) -> DispatchError {
     }
 }
 
-/// Resolve a writable session for a queue mutation or read.
+/// Resolve a writable session for a queue mutation or read. A queue call only
+/// decides with the provider, the archive flag and the link, so the conversation
+/// itself is never loaded for one.
 fn queue_session(st: &AppState, session_id: &str) -> Result<Value, DispatchError> {
-    let row = st.db.session_detail(session_id).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    let row = st.db.session_brief(session_id).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if row["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
     Ok(row)
 }
@@ -95,9 +97,12 @@ fn validate_due_at(raw: &str) -> Result<String, DispatchError> {
 }
 
 /// Keep only the allowlisted prompt keys the daemon stores for later delivery.
-fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::PromptAttachment]) -> Value {
+/// `client_message_id` is an id the UI generated, never message content, and it
+/// is kept so a replayed add finds the first item instead of duplicating it.
+fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::PromptAttachment], client_message_id: Option<&str>) -> Value {
     let attachments = attachments.iter().map(|attachment| json!({"path":attachment.path.to_string_lossy(),"name":attachment.name})).collect::<Vec<_>>();
     let mut params = json!({"text":text,"attachments":attachments});
+    if let Some(client_id) = client_message_id { params["clientMessageId"] = json!(client_id); }
     if let Some(refs) = p["conversationRefs"].as_array() {
         let refs = refs.iter().filter_map(Value::as_str).take(5).collect::<Vec<_>>();
         if !refs.is_empty() { params["conversationRefs"] = json!(refs); }
@@ -107,8 +112,23 @@ fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::
     params
 }
 
+/// The stable id a stored item is sent under, as [`bloblex_storage`] assigned it
+/// (the UI's `clientMessageId` or `q-` plus the item id). It is checked here only
+/// so a hand-written row can never inject a malformed key into the prompt path.
+fn send_id(item: &Value) -> Option<&str> {
+    item["sendId"].as_str().filter(|id| (8..=80).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
+}
+
 /// Rebuild the `session.prompt` request for a stored item.
-fn prompt_params(session_id: &str, item: &Value) -> Value {
+///
+/// The item's `sendId` travels as `clientMessageId`, so a queue send gets exactly
+/// the prompt path's replay rule: a message row already stored under that id
+/// answers with its first outcome instead of starting a second turn, and a row
+/// whose delivery was never confirmed stops the send with `delivery_unknown`.
+/// `confirm_resend` is the owner's own confirmation, forwarded only for an
+/// explicit resend of a failed item; the drain never sets it, which is what makes
+/// an ambiguous send impossible to replay automatically.
+fn prompt_params(session_id: &str, item: &Value, confirm_resend: bool) -> Value {
     let mut params = json!({"sessionId":session_id,"text":item["text"].clone()});
     if item["attachments"].as_array().is_some_and(|items| !items.is_empty()) { params["attachments"] = item["attachments"].clone(); }
     if item["conversationRefs"].as_array().is_some_and(|items| !items.is_empty()) { params["conversationRefs"] = item["conversationRefs"].clone(); }
@@ -117,6 +137,8 @@ fn prompt_params(session_id: &str, item: &Value) -> Value {
     // Internal auto-retry items carry the daemon-generated meta the prompt path
     // validates against its allowlist. Plain/scheduled items have none.
     if item["meta"].is_object() { params["meta"] = item["meta"].clone(); }
+    if let Some(id) = send_id(item) { params["clientMessageId"] = json!(id); }
+    if confirm_resend { params["confirmResend"] = json!(true); }
     params
 }
 
@@ -154,13 +176,31 @@ pub async fn add(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         Some(Value::String(raw)) => Some(validate_due_at(raw)?),
         _ => return Err(derr("invalid_argument", "dueAt must be an RFC3339 timestamp", StatusCode::BAD_REQUEST)),
     };
-    if st.db.queue_count_queued(session_id).map_err(queue_error)? >= QUEUE_MAX {
-        return Err(derr("conflict", "The queue is full.", StatusCode::CONFLICT));
-    }
     let text = p["text"].as_str().unwrap_or("");
-    let params = allowlisted_params(&p, text, &attachments);
+    let client_message_id = crate::client_message_id(&p["clientMessageId"])?;
     let kind = if due_at.is_some() { "send_later" } else { "user" };
-    let item = st.db.queue_add(session_id, &params, kind, due_at.as_deref()).map_err(queue_error)?;
+    // The replay lookup and the insert share the per-session prompt gate, so
+    // two identical adds cannot both pass the check and store a duplicate.
+    let gate = crate::gate_for_session(st, session_id).await;
+    let item = {
+        let _guard = gate.lock().await;
+        // A replayed add returns the item the first add created, before the full
+        // queue can refuse it, and never adds a second copy. A different text
+        // under the same key is a caller bug, not a new message.
+        if let Some(client_id) = &client_message_id {
+            if let Some(existing) = st.db.queue_item_by_client_id(session_id, client_id).map_err(queue_error)? {
+                if existing["text"].as_str().unwrap_or("") != text {
+                    return Err(derr("conflict", "This message id was already used for a different message.", StatusCode::CONFLICT));
+                }
+                return Ok(json!({"item":existing,"deduplicated":true}));
+            }
+        }
+        if st.db.queue_count_queued(session_id).map_err(queue_error)? >= QUEUE_MAX {
+            return Err(derr("conflict", "The queue is full.", StatusCode::CONFLICT));
+        }
+        let params = allowlisted_params(&p, text, &attachments, client_message_id.as_deref());
+        st.db.queue_add(session_id, &params, kind, due_at.as_deref()).map_err(queue_error)?
+    };
     emit_changed(st, session_id).await;
     Ok(json!({"item":item}))
 }
@@ -177,6 +217,13 @@ pub async fn update(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let id = p["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
     let session = queue_session(st, session_id)?;
     let existing = st.db.queue_get(session_id, id).map_err(queue_error)?;
+    // Editing a send whose outcome is ambiguous is only allowed once the owner
+    // has checked the conversation: the confirmation is what clears the marker.
+    // The edit never sends the item; it stays failed until it is sent explicitly.
+    let ambiguous = existing["ambiguous"] == true;
+    if ambiguous && !confirmed_resend(&p) {
+        return Err(derr("confirmation_required", bloblex_storage::QUEUE_AMBIGUOUS_ERROR, StatusCode::CONFLICT));
+    }
     let text = match p.get("text") {
         None => None,
         Some(Value::String(value)) => Some(value.as_str()),
@@ -198,7 +245,11 @@ pub async fn update(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         Some(Value::String(raw)) => Some(Some(validate_due_at(raw)?)),
         _ => return Err(derr("invalid_argument", "dueAt must be an RFC3339 timestamp", StatusCode::BAD_REQUEST)),
     };
-    let item = st.db.queue_update(session_id, id, text, due_at.as_ref().map(|value| value.as_deref())).map_err(queue_error)?;
+    let item = if ambiguous {
+        st.db.queue_revise_failed(session_id, id, text, due_at.as_ref().map(|value| value.as_deref())).map_err(queue_error)?
+    } else {
+        st.db.queue_update(session_id, id, text, due_at.as_ref().map(|value| value.as_deref())).map_err(queue_error)?
+    };
     emit_changed(st, session_id).await;
     Ok(json!({"item":item}))
 }
@@ -221,17 +272,35 @@ pub async fn delete(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     Ok(json!({"deleted":true}))
 }
 
+/// Whether the caller explicitly confirmed resending a send whose outcome is
+/// ambiguous (it may already have reached the agent before a restart).
+fn confirmed_resend(p: &Value) -> bool {
+    p["confirmResend"].as_bool() == Some(true)
+}
+
 pub async fn send_now(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let session_id = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     let id = p["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
     queue_session(st, session_id)?;
-    st.db.queue_get(session_id, id).map_err(queue_error)?;
+    let existing = st.db.queue_get(session_id, id).map_err(queue_error)?;
+    // A send that was being delivered when Bitbots stopped may already have
+    // reached the agent: it is never sent again without the owner confirming,
+    // and never moved to the front of the queue to fire by itself.
+    if existing["ambiguous"] == true && !confirmed_resend(&p) {
+        return Err(derr("confirmation_required", bloblex_storage::QUEUE_AMBIGUOUS_ERROR, StatusCode::CONFLICT));
+    }
     if crate::team::session_busy(st, session_id).await {
+        // Only an item that is still queued can wait its turn. A failed one has
+        // no place in the drain order, so promising a send it cannot make would
+        // be a lie: the owner is told to wait for the turn to end instead.
+        if existing["status"] != "queued" {
+            return Err(derr("conflict", "Wait for the current turn to finish, then send this again.", StatusCode::CONFLICT));
+        }
         st.db.queue_move_to_front(session_id, id).map_err(queue_error)?;
         emit_changed(st, session_id).await;
         return Ok(json!({"queued":true}));
     }
-    send_specific(st, session_id, id).await?;
+    send_specific(st, session_id, id, confirmed_resend(&p)).await?;
     Ok(json!({"queued":false,"sent":true}))
 }
 
@@ -246,13 +315,15 @@ pub async fn resume(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     Ok(json!({"paused":false}))
 }
 
-/// Send one specific queued item immediately (idle session only).
-async fn send_specific(st: &AppState, session_id: &str, id: &str) -> Result<(), DispatchError> {
+/// Send one specific queued item immediately (idle session only). `confirm`
+/// carries the owner's explicit `confirmResend`, and only a claimed item is sent,
+/// so a second claim of the same item cannot happen twice.
+async fn send_specific(st: &AppState, session_id: &str, id: &str, confirm: bool) -> Result<(), DispatchError> {
     let lock = st.queue.lock_for(session_id);
     let _guard = lock.lock().await;
     let item = st.db.queue_claim(session_id, id, &now_utc()).map_err(queue_error)?;
     match item {
-        Some(item) => { send_claimed(st, session_id, &item).await; Ok(()) }
+        Some(item) => send_claimed(st, session_id, &item, confirm).await,
         None => Err(derr("conflict", "That item is no longer queued.", StatusCode::CONFLICT)),
     }
 }
@@ -268,12 +339,14 @@ pub(crate) async fn drain_next(st: &AppState, session_id: &str, allow_plain: boo
         Ok(None) => return,
         Err(_) => return,
     };
-    send_claimed(st, session_id, &item).await;
+    let _ = send_claimed(st, session_id, &item, false).await;
 }
 
-async fn send_claimed(st: &AppState, session_id: &str, item: &Value) {
+/// Send one claimed item. `confirm` is false for every automatic send (the drain,
+/// a due tick): an ambiguous outcome must then stop and ask, never replay.
+async fn send_claimed(st: &AppState, session_id: &str, item: &Value, confirm: bool) -> Result<(), DispatchError> {
     let id = item["id"].as_str().unwrap_or("").to_owned();
-    let request = prompt_params(session_id, item);
+    let request = prompt_params(session_id, item, confirm);
     let result = if item["kind"] == "retry" {
         crate::session_prompt_queued(st, request).await
     } else if item["meta"]["kind"] == "question_answer" {
@@ -283,7 +356,15 @@ async fn send_claimed(st: &AppState, session_id: &str, item: &Value) {
     };
     match result {
         Ok(_) => {
-            let _ = st.db.queue_mark_sent(&id);
+            // Accepted: either a new turn was reserved, or the prompt path
+            // answered with the turn an earlier send under this same id started
+            // (`deduplicated`). Both mean the message is in the conversation, so
+            // the item has been sent and is removed.
+            if st.db.queue_mark_sent(&id).is_err() {
+                st.queue.mark_paused(session_id);
+                emit_changed(st, session_id).await;
+                return Err(derr("internal", "The message was accepted, but its queue entry could not be cleared. Check the conversation before retrying.", StatusCode::INTERNAL_SERVER_ERROR));
+            }
             if item["kind"] == "send_later" {
                 if let Some(late) = item["lateBySecs"].as_i64().filter(|late| *late > LATE_NOTICE_SECS) {
                     let minutes = ((late + 30) / 60).max(1);
@@ -291,18 +372,27 @@ async fn send_claimed(st: &AppState, session_id: &str, item: &Value) {
                 }
             }
             emit_changed(st, session_id).await;
+            Ok(())
         }
         Err(error) => {
-            // A turn that started between the idle check and this send is a
-            // transient conflict: keep the item queued and let it fire after
-            // that turn instead of failing it or pausing the queue.
-            if error.1.code == "conflict" {
+            // A send the daemon could not confirm is never replayed and never
+            // auto-sent: it becomes a failed item carrying the same marker the
+            // boot rewrite writes, so the drain skips it and only an explicit
+            // `send_now`/`update` with `confirmResend` can send it again.
+            if error.1.code == crate::DELIVERY_UNKNOWN_CODE {
+                let _ = st.db.queue_mark_failed_ambiguous(&id, bloblex_storage::QUEUE_AMBIGUOUS_ERROR);
+                st.queue.mark_paused(session_id);
+            } else if error.1.code == "conflict" {
+                // A turn that started between the idle check and this send is a
+                // transient conflict: keep the item queued and let it fire after
+                // that turn instead of failing it or pausing the queue.
                 let _ = st.db.queue_requeue(&id);
             } else {
                 let _ = st.db.queue_mark_failed(&id, &error.1.message);
                 st.queue.mark_paused(session_id);
             }
             emit_changed(st, session_id).await;
+            Err(error)
         }
     }
 }

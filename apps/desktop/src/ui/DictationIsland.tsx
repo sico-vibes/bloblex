@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, CircleAlert } from 'lucide-react'
-import { friendlyDictationError, type DictationEngineInfo } from './dictation'
+import { friendlyDictationError } from './dictation'
 
 // The dictation island: a red recording dot and timer on the left, level bars
-// on the right, and the words so far underneath. The bars follow the
+// on the right. It shows no words, while you speak or after you stop: the
+// transcript goes to the message box. The bars follow the
 // microphone while listening, then keep moving to show what is happening:
 // breathing while the model loads, a travelling wave while transcribing, flat
 // dots when nothing was heard. Layout and wave motion adapted from Kaze's
@@ -14,7 +15,7 @@ type WaveMode = 'live' | 'loading' | 'transcribing' | 'silent'
 
 const BARS = 11
 
-export function DictationIsland({ phase, level, since, stoppedAt, text, warming = false, errorText = '', variant = 'bubble', engine = null }: {
+export function DictationIsland({ phase, level, since, stoppedAt, warming = false, errorText = '', variant = 'bubble' }: {
   phase: IslandPhase
   /** Latest microphone level from the engine (0 to about 0.3). */
   level: number
@@ -22,20 +23,15 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
   since: number | null
   /** When listening stopped; the timer freezes there. */
   stoppedAt?: number | null
-  /** The words so far: finished segments plus the current partial. */
-  text: string
   /** The model is still loading; audio is queued meanwhile. */
   warming?: boolean
   errorText?: string
   variant?: 'bubble' | 'companion'
-  /** Used only to say plainly when an engine cannot show words while you speak (ChatGPT sends the whole recording at the end). The island never names the engine. */
-  engine?: DictationEngineInfo | null
 }) {
   const mode: WaveMode = phase === 'processing' ? 'transcribing' : phase === 'silent' ? 'silent' : warming ? 'loading' : 'live'
-  const shown = phase === 'error' ? friendlyDictationError(errorText) : lastWords(text)
-  // The on-device models show words as you speak. ChatGPT transcription works on the finished recording, so say so instead of showing nothing.
-  const waitsForStop = phase === 'listening' && !shown && !warming && engine?.engine === 'chatgpt'
-  const expanded = (!!shown || waitsForStop) && phase !== 'done'
+  // The only text the island ever shows is what went wrong, with what to do about it.
+  const shown = phase === 'error' ? friendlyDictationError(errorText) : ''
+  const expanded = !!shown
   return <div className={`dictation-island on-${variant} is-${phase} ${expanded ? 'is-expanded' : ''}`} role="status" aria-live="polite" aria-label={label(phase, warming)}>
     <div className="dictation-island-row">
       <span className="dictation-island-lead">
@@ -48,7 +44,7 @@ export function DictationIsland({ phase, level, since, stoppedAt, text, warming 
       </span>
       {phase !== 'error' && phase !== 'done' && <Wave mode={mode} level={level} />}
     </div>
-    {expanded && <p className={`dictation-island-text ${phase === 'error' ? 'error' : ''} ${waitsForStop ? 'note' : ''}`}>{waitsForStop ? 'Words appear when you stop.' : shown}</p>}
+    {expanded && <p className="dictation-island-text error">{shown}</p>}
   </div>
 }
 
@@ -58,12 +54,6 @@ function label(phase: IslandPhase, warming: boolean) {
   if (phase === 'silent') return 'Nothing was heard'
   if (phase === 'error') return 'Dictation stopped'
   return warming ? 'Listening, the speech model is loading' : 'Listening'
-}
-
-/** Keeps the end of what was said: the newest words matter most. */
-export function lastWords(text: string, limit = 150) {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > limit ? `…${flat.slice(flat.length - limit + 1).replace(/^\S*\s/, '')}` : flat
 }
 
 function Elapsed({ since, until }: { since: number | null; until: number | null }) {

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Check, ChevronDown, Flame, Gauge, LoaderCircle, Search, Signal, SignalHigh, SignalLow, SignalMedium, SignalZero, Zap, type LucideIcon } from 'lucide-react'
-import type { Agent, Session, SessionModelLock } from '../types'
+import { Check, ChevronDown, Flame, Gauge, LoaderCircle, RotateCw, Search, Signal, SignalHigh, SignalLow, SignalMedium, SignalZero, Zap, type LucideIcon } from 'lucide-react'
+import type { Agent, ModelChangePlan, Session, SessionModelLock } from '../types'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
 import { ConfirmDialog } from './BlobPage'
-import { useCachedRpc } from './catalogCache'
+import { fetchCached, useCachedRpc } from './catalogCache'
 import { LOCKED_CONTROL_TOOLTIP, moveMenuFocus, usePopoverDismiss } from './ComposerControls'
 import { ProviderLogo, providerBrand } from './providerBrand'
 import { positionFromPointer, SessionEffortMeter, type EffortMeterStyle } from './SessionEffortMeter'
@@ -18,12 +18,63 @@ import { Skeleton } from './Skeleton'
 export { labelizeEffort } from './effortLabels'
 
 type Lock = SessionModelLock
-type PendingModel = { sessionId: string; model: string | null }
+type PendingModel = { sessionId: string; model: string | null; plan: ModelChangePlan | null }
 type EffortDraft = { sessionId: string; model: string | null; value: string | null }
 
 /** The label and greying reason while the conversation has no model yet. */
 export const MODEL_FIRST_REASON = 'Available after you pick a model'
 export const PICK_MODEL_LABEL = 'Pick a model'
+
+/**
+ * A model change starts a new provider session, which only costs the user
+ * something when the conversation already has user turns or a provider context.
+ * A first model choice, or a conversation nothing has been said in, is free, so
+ * it is applied without a dialog.
+ */
+export function modelChangeNeedsWarning(session: Pick<Session, 'messages' | 'contextUsed' | 'contextModel'>, nextModel: string | null, currentModel: string | null): boolean {
+  if (!nextModel || nextModel === currentModel) return false
+  const messages = Array.isArray(session.messages) ? session.messages : []
+  if (messages.some((message) => message.role === 'user')) return true
+  if (typeof session.contextUsed === 'number' && session.contextUsed > 0) return true
+  return typeof session.contextModel === 'string' && session.contextModel.length > 0
+}
+
+/** Whether a daemon failure is its own "confirm the model change" answer. */
+export function confirmationRequired(reason: unknown): boolean {
+  const text = typeof reason === 'string' ? reason
+    : reason && typeof reason === 'object' ? String((reason as { code?: unknown }).code ?? (reason as { message?: unknown }).message ?? '')
+      : ''
+  return text === 'confirmation_required' || text.startsWith('confirmation_required:')
+}
+
+/** Why the model pill cannot be used while a turn runs, in words the owner can act on. */
+export const MODEL_BUSY_REASON = 'The model can change once this turn ends. Your message and the queue are not affected.'
+
+/**
+ * Asks the daemon what a model change would do. It is the daemon's answer, not a guess: it knows
+ * whether this provider carries the chat over to the new model. `null` means the daemon could not
+ * say (an older daemon, or a failed call), and the caller falls back to the cautious local rule.
+ */
+export async function planModelChange(sessionId: string, model: string): Promise<ModelChangePlan | null> {
+  try {
+    const plan = await rpc<Partial<ModelChangePlan>>('session.model.plan', { sessionId, model })
+    if (!plan || typeof plan !== 'object' || typeof plan.reason !== 'string' || !['kept', 'recap', 'none'].includes(String(plan.continuity))) return null
+    return { modelChanged: plan.modelChanged !== false, busy: plan.busy === true, locked: plan.locked === true, contextAtRisk: plan.contextAtRisk === true, continuity: plan.continuity as ModelChangePlan['continuity'], reason: plan.reason }
+  } catch { return null }
+}
+
+/** Whether the owner must agree first: the daemon's plan when there is one, else the cautious local rule. */
+export function modelChangeNeedsConfirmation(plan: ModelChangePlan | null, session: Pick<Session, 'messages' | 'contextUsed' | 'contextModel'>, nextModel: string | null, currentModel: string | null): boolean {
+  if (!nextModel || nextModel === currentModel) return false
+  if (plan) return plan.continuity === 'recap' && plan.contextAtRisk
+  return modelChangeNeedsWarning(session, nextModel, currentModel)
+}
+
+/** The text under the confirmation title: what the daemon said will happen, then what stays. */
+export function modelChangeBody(plan: ModelChangePlan | null, brand: string): string {
+  const what = plan?.reason || `${brand || 'The new model'} starts a new provider session without the working memory of this chat, so its replies can drift until it catches up.`
+  return `${what} Your saved messages, drafts, attachments and project stay as they are.`
+}
 
 export function SessionExecutionControls({ session, agent, locked = false, onSessionUpdated, onAgentUpdated, onError }: {
   session: Session
@@ -87,28 +138,54 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
     savingRef.current.add(sessionId)
     const generation = sessionGeneration.current
     setSavingSessionIds((current) => new Set(current).add(sessionId))
-    try {
-      // FIX39 item 16: the composer always writes the bot, so the choice holds
-      // for every later conversation.
+    // FIX39 item 16: the composer always writes the bot, so the choice holds
+    // for every later conversation.
+    const writeBot = async () => {
       const bot = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, model: nextModel, thinking: nextThinking })
       if (bot.agent?.id) onAgentUpdated?.(bot.agent)
+    }
+    let askedToConfirm = false
+    try {
       if (isDraftSession(session)) {
+        await writeBot()
         return mounted.current && currentSessionId.current === sessionId && sessionGeneration.current === generation
       }
-      // An open conversation is additionally brought in line, as today.
-      const result = await rpc<{ session?: Session }>('session.model.update', {
-        sessionId, model: nextModel, thinking: nextThinking, confirmModelChange,
-      })
+      // A model change is written to the conversation first: the daemon refuses
+      // an unconfirmed change before it stores anything, so a cancel leaves both
+      // the conversation and the bot untouched. Effort and speed keep writing
+      // the bot first, which the picker relies on while its menu stays open.
+      const modelChanging = nextModel !== (model ?? null)
+      let result: { session?: Session }
+      if (modelChanging) {
+        // `expectedModel` makes the daemon refuse a choice made against a model this view no longer shows.
+        result = await rpc<{ session?: Session }>('session.model.update', { sessionId, model: nextModel, thinking: nextThinking, confirmModelChange, expectedModel: model ?? null })
+        const applied = currentSessionId.current === sessionId && sessionGeneration.current === generation && result.session?.id === sessionId
+        // The conversation has the new model by now, so show that first. Saving it as the bot's default for
+        // new conversations is a second step, and its failure must not turn this success into an error.
+        if (applied && mounted.current) onSessionUpdated(result.session!)
+        try { await writeBot() } catch { if (applied && mounted.current) onError('The model changed for this conversation, but Bitbots could not save it as the default for new ones.') }
+        return applied
+      } else {
+        await writeBot()
+        result = await rpc<{ session?: Session }>('session.model.update', { sessionId, model: nextModel, thinking: nextThinking, confirmModelChange })
+      }
       const current = currentSessionId.current === sessionId && sessionGeneration.current === generation && result.session?.id === sessionId
       if (current && mounted.current) onSessionUpdated(result.session!)
       return current
     } catch (reason) {
+      // The daemon saw context this view had not: ask before retrying with the
+      // confirmation it requires, instead of reporting a failure.
+      if (confirmationRequired(reason) && !confirmModelChange) {
+        askedToConfirm = true
+        setPendingModel({ sessionId, model: nextModel, plan: null })
+        return false
+      }
       if (mounted.current && currentSessionId.current === sessionId && sessionGeneration.current === generation) onError(reason)
       return false
     } finally {
       savingRef.current.delete(sessionId)
       if (mounted.current) setSavingSessionIds((current) => { const next = new Set(current); next.delete(sessionId); return next })
-      setPendingModel((current) => current?.sessionId === sessionId && currentSessionId.current === sessionId && sessionGeneration.current === generation ? null : current)
+      if (!askedToConfirm) setPendingModel((current) => current?.sessionId === sessionId && currentSessionId.current === sessionId && sessionGeneration.current === generation ? null : current)
     }
   }
 
@@ -124,6 +201,31 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
   const modelAriaLabel = modelLabel
   const fastTier = fastTierFor(selectedModel)
   const fastOn = !!fastTier && serviceTier === fastTier.id
+  const retryCatalog = () => {
+    const params = draftTarget ? { runtimeId: session.runtimeId } : { runtimeId: session.runtimeId, sessionId: session.id }
+    void fetchCached('runtime.models', params, { force: true }).catch(() => undefined)
+  }
+  // Picking a model first asks the daemon what the change would do, so the owner is only asked to
+  // agree to a context loss that really happens for this provider. The pill shows its busy spinner meanwhile.
+  const chooseModel = async (next: string) => {
+    if (next === model) return
+    setEffortDraft(null)
+    const sessionId = session.id
+    if (draftTarget) { void save(sessionId, next, null, false); return }
+    if (savingRef.current.has(sessionId)) return
+    savingRef.current.add(sessionId)
+    setSavingSessionIds((current) => new Set(current).add(sessionId))
+    let plan: ModelChangePlan | null = null
+    try { plan = await planModelChange(sessionId, next) } finally {
+      savingRef.current.delete(sessionId)
+      if (mounted.current) setSavingSessionIds((current) => { const copy = new Set(current); copy.delete(sessionId); return copy })
+    }
+    if (!mounted.current || currentSessionId.current !== sessionId) return
+    if (plan?.locked) { onError(LOCKED_CONTROL_TOOLTIP); return }
+    if (plan?.busy) { onError(MODEL_BUSY_REASON); return }
+    if (modelChangeNeedsConfirmation(plan, session, next, model ?? null)) setPendingModel({ sessionId, model: next, plan })
+    else void save(sessionId, next, null, false)
+  }
   const setFast = async (enabled: boolean) => {
     if (!fastTier || savingRef.current.has(session.id)) return
     const sessionId = session.id
@@ -144,11 +246,9 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
 
   return <div className="session-execution-controls" aria-label="Conversation model controls">
     {catalog && catalog.models.length > 0
-      ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} locked={locked} disabled={sessionBusy || locked} saving={saving} onSelect={(next) => {
-        if (next !== model) { setEffortDraft(null); if (draftTarget) void save(session.id, next, null, false); else setPendingModel({ sessionId:session.id, model:next }) }
-      }} onFast={(enabled) => void setFast(enabled)} />
+      ? <ModelMenu provider={catalog.provider} models={catalog.models} model={model ?? null} label={modelLabel} ariaLabel={modelAriaLabel} fastTier={fastTier} fastOn={fastOn} locked={locked} disabled={sessionBusy || locked} busyReason={sessionBusy && !locked ? MODEL_BUSY_REASON : null} botName={agent.name} effortLabel={model && thinking ? labelizeEffort(thinking, catalog.provider) : null} saving={saving} onSelect={(next) => void chooseModel(next)} onFast={(enabled) => void setFast(enabled)} />
       : catalogUnavailable
-        ? <button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; model catalog unavailable`} title="Model choices are unavailable until the runtime reports a catalog." disabled><span>{modelLabel}</span></button>
+        ? <span className="model-pill-unavailable"><button type="button" className="composer-pill model-pill unavailable" aria-label={`Conversation model, ${modelLabel}; the model list is unavailable`} title="The runtime has not reported its models yet, so the model cannot be changed from here." disabled><span>{modelLabel}</span></button><button type="button" className="composer-icon-button model-retry" aria-label="Try loading the model list again" title="Try loading the model list again" onClick={retryCatalog}><RotateCw size={13} aria-hidden="true" /></button></span>
         : <span className="model-pill-loading" role="status" aria-busy="true" aria-label="Loading models"><Skeleton variant="pill" /><span className="sr-only">Loading models…</span></span>}
     <EffortControl
       provider={catalog?.provider ?? ''}
@@ -168,7 +268,7 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
       onCancel={() => setEffortDraft(null)}
       onCommit={requestEffort}
     />
-    {pendingForSession && !draftTarget && <ConfirmDialog title="Change this conversation's model?" body="Switching models mid-conversation can significantly degrade performance and continuity. The provider may reset its context. Your saved messages stay in Bitbots." confirmLabel="Change model" cancelLabel="Keep current model" confirmDisabled={controlsDisabled} onConfirm={() => { void save(session.id, pendingForSession.model, pendingForSession.model === model ? thinking ?? null : null, true) }} onCancel={() => setPendingModel(null)} />}
+    {pendingForSession && !draftTarget && <ConfirmDialog title="Switch model and start fresh?" body={modelChangeBody(pendingForSession.plan, providerBrand(catalog?.provider ?? '').name)} confirmLabel="Switch model" cancelLabel="Keep current model" confirmDisabled={controlsDisabled} onConfirm={() => { void save(session.id, pendingForSession.model, pendingForSession.model === model ? thinking ?? null : null, true) }} onCancel={() => setPendingModel(null)} />}
   </div>
 }
 
@@ -388,7 +488,7 @@ export function shortModelName(name: string) {
   return name.replace(/^claude\s+(?=\S)/i, '')
 }
 
-function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn, locked = false, disabled, saving, onSelect, onFast }: {
+function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn, locked = false, disabled, busyReason = null, botName = '', effortLabel = null, saving, onSelect, onFast }: {
   provider: string
   models: CatalogModel[]
   model: string | null
@@ -399,6 +499,11 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   /** FIX39 item 13: the bot is locked, so the disabled pill explains why. */
   locked?: boolean
   disabled: boolean
+  /** Set while a turn runs: the pill stays focusable and says when the model can change. */
+  busyReason?: string | null
+  botName?: string
+  /** The effort that applies with this model, shown in the pill's description. */
+  effortLabel?: string | null
   saving: boolean
   onSelect: (model: string) => void
   onFast: (enabled: boolean) => void
@@ -432,15 +537,19 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
     return () => window.removeEventListener(EXECUTION_PICKER_EVENT, openFor)
   }, [disabled])
   const choose = (next: string) => { close(true); onSelect(next) }
+  // A running turn keeps the pill focusable (aria-disabled, not disabled) so it can say why it waits.
+  const waiting = !!busyReason
+  const description = locked ? LOCKED_CONTROL_TOOLTIP : busyReason ?? `${label}${effortLabel ? ` · ${effortLabel} effort` : ''}. Choose which model this conversation uses; it applies from your next message.`
+  const trigger = <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''} ${waiting ? 'waiting' : ''}`} title={waiting ? undefined : description} aria-haspopup="menu" aria-expanded={open} aria-disabled={waiting ? true : undefined} aria-label={`Conversation model: ${ariaLabel}${effortLabel ? `, ${effortLabel} effort` : ''}${fastOn ? ', fast mode on' : ''}${waiting ? `. ${busyReason}` : ''}`} disabled={(disabled && !waiting) || (saving && !open)} onClick={() => { if (!waiting) setOpen((value) => !value) }}>
+    {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
+    <ProviderLogo provider={provider} size={14} />
+    <i className="model-pill-divider" aria-hidden="true" />
+    <span>{label}</span>
+    <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
+  </button>
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''}`} title={locked ? LOCKED_CONTROL_TOOLTIP : 'Choose which model this conversation uses'} aria-haspopup="menu" aria-expanded={open} aria-label={`Conversation model: ${ariaLabel}${fastOn ? ', fast mode on' : ''}`} disabled={disabled || (saving && !open)} onClick={() => setOpen((value) => !value)}>
-      {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
-      <ProviderLogo provider={provider} size={14} />
-      <i className="model-pill-divider" aria-hidden="true" />
-      <span>{label}</span>
-      <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
-    </button>
-    {open && <div ref={menuRef} className="composer-menu model-menu align-right" role="menu" aria-label="Conversation model" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
+    {waiting ? <Tip text={description}>{trigger}</Tip> : trigger}
+    {open &&<div ref={menuRef} className="composer-menu model-menu align-right" role="menu" aria-label="Conversation model" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
       {searchable
         ? <label className="composer-menu-search"><Search size={13} aria-hidden="true" /><input ref={searchRef} type="text" value={query} placeholder={`Search ${brand} models`} aria-label="Search models" spellCheck={false}
             onChange={(event) => setQuery(event.target.value)}
@@ -461,6 +570,7 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
           </button>
         </div>)}
       </div>
+      {botName && <p className="composer-menu-note model-menu-scope">For this conversation. New ones with {botName} start on the model you pick here.</p>}
       {fastTier && <>
         <div className="composer-menu-separator" role="separator" />
         <button type="button" role="menuitemcheckbox" aria-checked={fastOn} className="composer-menu-item toggle-row" disabled={saving} onClick={() => onFast(!fastOn)}>

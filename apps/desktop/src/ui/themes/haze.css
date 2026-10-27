@@ -3,10 +3,10 @@
    status is the soft gradient in their row (blob/haze/). */
 
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) {
-  --haze-glass: rgb(30 31 33 / .58);
-  --haze-desk: #2a2b2c; --haze-d1: #6b6f73; --haze-d2: #8a7766; --haze-d3: #3d4a52; --haze-d4: rgb(201 185 166 / .5);
+  --haze-base: #1a1b1d;
+  --haze-d1: #8794a3; --haze-d2: #b48d68; --haze-d3: #5f8196; --haze-d4: #d8c4a6;
   --surface-app: transparent;
-  --surface-sidebar: rgb(16 17 19 / .3);
+  --surface-sidebar: rgb(16 17 19 / .08);
   --surface-panel: rgb(34 35 38 / .97);
   --surface-raised: rgb(255 255 255 / .055);
   --surface-overlay: rgb(36 37 40 / .96);
@@ -30,13 +30,13 @@
   --shadow-pop: 0 18px 40px -14px rgb(0 0 0 / .5);
   --font-ui: Inter, "Segoe UI", system-ui, sans-serif;
   color: var(--text-1);
-  background: var(--haze-desk);
+  background: transparent;
 }
 :root[data-style="haze"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) {
   color-scheme: light;
-  --haze-glass: rgb(250 249 247 / .58);
-  --haze-desk: #e9e6e1; --haze-d1: #c9c3bb; --haze-d2: #e0c6ad; --haze-d3: #b9c6cc; --haze-d4: rgb(245 239 230 / .6);
-  --surface-sidebar: rgb(255 255 255 / .32);
+  --haze-base: #f1efeb;
+  --haze-d1: #a9b4c0; --haze-d2: #d9b48f; --haze-d3: #8fb0c0; --haze-d4: #e6d3b6;
+  --surface-sidebar: rgb(255 255 255 / .08);
   --surface-panel: rgb(250 249 247 / .97);
   --surface-raised: rgb(255 255 255 / .55);
   --surface-overlay: rgb(252 251 250 / .97);
@@ -61,19 +61,39 @@
   --shadow-pop: 0 18px 40px -16px rgb(40 40 40 / .28);
 }
 
-/* The misty backdrop, with the glass tint baked in: smooth gradients need no
-   backdrop blur, so the shell costs nothing to composite. */
+/* The misty backdrop (owner, 26 October 2026, corrected: the background is about 80% OPAQUE, 20% transparent; blobs large and blended).
+   .haze-backdrop is non-interactive and paints an opaque composition: a neutral dark or light base (--haze-base)
+   under four broad blended colour blobs, and `opacity: .8` on this element only, so the whole backdrop composes to
+   about 0.8 and the native transparent window (tauri.conf.json) lets about 20% of the desktop through. Text,
+   controls, menus and dialogs are separate elements with their own surfaces and are not affected. No backdrop
+   CSS blur (backdrop-filter): it cannot reach the desktop; see the frosted-glass rule below for the native blur. */
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .haze-backdrop {
-  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .8;
   background:
-    linear-gradient(var(--haze-glass), var(--haze-glass)),
-    radial-gradient(60vw 60vh at 18% 14%, var(--haze-d1), transparent 72%),
-    radial-gradient(50vw 70vh at 92% 58%, var(--haze-d2), transparent 72%),
-    radial-gradient(70vw 42vh at 42% 108%, var(--haze-d3), transparent 72%),
-    radial-gradient(24vw 28vh at 50% 30%, var(--haze-d4), transparent 72%),
-    var(--haze-desk);
+    radial-gradient(110vw 105vh at 10% 6%, color-mix(in srgb, var(--haze-d1) 46%, transparent), color-mix(in srgb, var(--haze-d1) 30%, transparent) 38%, color-mix(in srgb, var(--haze-d1) 12%, transparent) 66%, transparent 100%),
+    radial-gradient(100vw 110vh at 100% 62%, color-mix(in srgb, var(--haze-d2) 46%, transparent), color-mix(in srgb, var(--haze-d2) 30%, transparent) 38%, color-mix(in srgb, var(--haze-d2) 12%, transparent) 66%, transparent 100%),
+    radial-gradient(125vw 90vh at 38% 114%, color-mix(in srgb, var(--haze-d3) 46%, transparent), color-mix(in srgb, var(--haze-d3) 30%, transparent) 38%, color-mix(in srgb, var(--haze-d3) 12%, transparent) 66%, transparent 100%),
+    radial-gradient(80vw 75vh at 54% 32%, color-mix(in srgb, var(--haze-d4) 36%, transparent), color-mix(in srgb, var(--haze-d4) 18%, transparent) 45%, transparent 100%),
+    linear-gradient(var(--haze-base), var(--haze-base));
 }
-:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) body { background: var(--haze-desk); }
+/* Frosted glass (owner, 27 October 2026): transparency alone is not frost. CSS backdrop-filter cannot blur the desktop,
+   so the shell asks Windows to blur it (acrylic, or plain blur on older builds; src-tauri/src/backdrop.rs) and sets
+   data-backdrop on <html> only while that blur is really drawn (ui/windowBackdrop.ts). Then the backdrop stops being
+   an opaque composition: a thin neutral veil plus the same large blended blobs sit OVER the native blur as a
+   translucent tint, so the blurred desktop stays visible and legible. If the effect is unavailable, refused or
+   switched off by Windows, data-backdrop is absent and the opaque 80% composition above applies unchanged. The values
+   below are a starting point toward the old 80% visual density (system acrylic plus this tint); they were not measured. */
+:root[data-style="haze"][data-backdrop]:not(.companion-surface):not(.dictation-surface) .haze-backdrop {
+  --haze-veil: color-mix(in srgb, var(--haze-base) 34%, transparent);
+  opacity: .85;
+  background:
+    radial-gradient(110vw 105vh at 10% 6%, color-mix(in srgb, var(--haze-d1) 46%, transparent), color-mix(in srgb, var(--haze-d1) 30%, transparent) 38%, color-mix(in srgb, var(--haze-d1) 12%, transparent) 66%, transparent 100%),
+    radial-gradient(100vw 110vh at 100% 62%, color-mix(in srgb, var(--haze-d2) 46%, transparent), color-mix(in srgb, var(--haze-d2) 30%, transparent) 38%, color-mix(in srgb, var(--haze-d2) 12%, transparent) 66%, transparent 100%),
+    radial-gradient(125vw 90vh at 38% 114%, color-mix(in srgb, var(--haze-d3) 46%, transparent), color-mix(in srgb, var(--haze-d3) 30%, transparent) 38%, color-mix(in srgb, var(--haze-d3) 12%, transparent) 66%, transparent 100%),
+    radial-gradient(80vw 75vh at 54% 32%, color-mix(in srgb, var(--haze-d4) 36%, transparent), color-mix(in srgb, var(--haze-d4) 18%, transparent) 45%, transparent 100%),
+    linear-gradient(var(--haze-veil), var(--haze-veil));
+}
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) body { background: transparent; }
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .app-shell { position: relative; z-index: 1; background: transparent; }
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .sidebar { background: var(--surface-sidebar); border-right: 1px solid var(--line); }
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .session-first-state .haze-mark { width: 72px !important; height: 72px !important; }
@@ -219,3 +239,15 @@
 :root[data-style="haze"].companion-surface .companion-compact .mini-grid > :nth-child(n+4) { display: none; }
 :root[data-style="haze"].companion-surface .compact-status.shimmer { animation: none; background: none; -webkit-text-fill-color: currentColor; color: var(--text-2); }
 :root[data-style="haze"].companion-surface .cs-brand .needs-you { height: 20px; padding: 0 6px; font-size: 10.5px; }
+
+/* Size the OUTER layout, not its already-constrained inner column. */
+:root[data-style="haze"] .blob-page-layout { width: min(880px, calc(100% - 48px)); max-width: none; }
+:root[data-style="haze"] .blob-page-layout .blob-page-column { width: 100%; max-width: none; }
+:root[data-style="haze"] .haze-look-editor { grid-template-columns: 320px minmax(0, 1fr); }
+:root[data-style="haze"] .team-row { min-height: 36px; }
+:root[data-style="haze"] .team-row-avatar > .haze-mark.is-character { width: 26px !important; height: 26px !important; }
+:root[data-style="haze"] .chat-header .haze-mark.is-character { width: 26px !important; height: 26px !important; }
+@media (max-width: 760px) {
+  :root[data-style="haze"] .blob-page-layout { width: calc(100% - 32px); }
+  :root[data-style="haze"] .haze-look-editor { grid-template-columns: 1fr; }
+}

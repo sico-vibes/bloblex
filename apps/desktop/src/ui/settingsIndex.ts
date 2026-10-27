@@ -76,6 +76,7 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Agents', group: 'Coding agents', label: 'Coding agents', keywords: 'claude codex opencode runtime scan sign in' },
   { page: 'Agents', group: 'Custom launchers', label: 'Custom launchers', keywords: 'profile command arguments' },
   { page: 'Manager', group: 'Manager', label: 'Manager', keywords: 'chief of staff model personality name look' },
+  { page: 'Manager', group: 'Hand-offs', label: 'Pause new hand-offs', keywords: 'manager delegate assign teammate pause stop new work' },
   { page: 'Manager', group: 'What it knows about you', label: 'What the Manager knows', keywords: 'profile preferences facts lock learned' },
   { page: 'Manager', group: 'Playbook', label: 'Manager playbook', keywords: 'interview plan team guide history restore' },
   { page: 'Memory', group: 'Memory', label: 'Memory', keywords: 'remember notes shared' },

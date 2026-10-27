@@ -50,3 +50,43 @@
 .rail-remote .toggle.small { width: 28px; height: 16px; }
 .rail-remote .toggle.small i { width: 12px; height: 12px; }
 .rail-remote .toggle.small.on i { transform: translateX(12px); }
+
+/* Changes card: the repository's own state (FIX45). */
+.rail-card-aside { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.rail-pr { height: 24px; padding: 0 10px; flex: 0 0 auto; color: var(--text-1); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-selected); font-size: var(--fs-2xs); font-weight: 600; cursor: pointer; transition: background 120ms ease, border-color 120ms ease; }
+.rail-pr:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-selected-strong); }
+.rail-pr:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.rail-pr:disabled { color: var(--text-3); cursor: default; opacity: .7; }
+.rail-context { margin: 0; display: flex; align-items: flex-start; gap: 6px; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.45; }
+.rail-context > svg { flex: 0 0 auto; margin-top: 2px; }
+.rail-context b { color: var(--text-1); font-weight: 600; overflow-wrap: anywhere; }
+.rail-problem { display: flex; align-items: flex-start; gap: 6px; color: var(--text-2); }
+.rail-problem > svg { flex: 0 0 auto; margin-top: 3px; color: var(--status-danger-text); }
+.rail-subhead { margin: 6px 0 0; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 600; }
+.rail-loading { min-width: 0; }
+.rail-file-open .rail-tag { flex: 0 0 auto; }
+.rail-file-open:disabled .rail-file-name { color: var(--text-2); }
+/* The pull request review sits in the shared dialog frame; its facts line up under the heading. */
+.blob-dialog.pr-dialog > .pr-dialog-facts { grid-column: 2; margin: 4px 0 0; display: grid; gap: 4px; }
+.pr-dialog-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: var(--fs-sm); }
+.pr-dialog-facts dt { color: var(--text-3); }
+.pr-dialog-facts dd { min-width: 0; margin: 0; overflow: hidden; color: var(--text-1); text-align: right; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.blob-dialog.pr-dialog > .pr-dialog-note { font-size: var(--fs-xs); color: var(--text-3); }
+@media (prefers-reduced-motion: reduce) { .rail-pr { transition: none; } }
+
+/* Workspace and changes by turn (daemon-reported only). */
+.rail-turns { margin: 0; padding: 0; display: grid; gap: 10px; list-style: none; }
+.rail-turn { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+.rail-turn:first-child { padding-top: 0; border-top: 0; }
+.rail-turn-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.rail-turn-title { display: grid; min-width: 0; color: var(--text-1); font-size: var(--fs-xs); font-weight: 600; }
+.rail-turn-title small { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.rail-file-open.static { cursor: default; }
+.rail-file[data-state="reverted"] .rail-file-name, .rail-file[data-state="blocked"] .rail-file-name { color: var(--text-3); }
+.rail-block-reasons { margin: 0; padding: 0 0 0 4px; list-style: none; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.45; }
+.rail-undo { display: inline-flex; align-items: center; gap: 5px; margin-top: 2px; }
+.rail-confirm { display: grid; gap: 8px; padding: 8px 10px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font-size: var(--fs-xs); line-height: 1.45; }
+.rail-confirm-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.rail-turn .rail-file { flex-wrap: wrap; }
+.rail-turn .rail-file .rail-confirm { flex: 1 0 100%; margin-bottom: 4px; }
+.rail-turn .rail-file .rail-undo { margin: 0 4px 0 auto; }

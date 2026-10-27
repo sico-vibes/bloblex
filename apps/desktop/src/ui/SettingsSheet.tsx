@@ -68,7 +68,7 @@ export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, claudeWorkflowsEnabled = false, onClaudeWorkflowsChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
+export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onOpenSession, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, claudeWorkflowsEnabled = false, onClaudeWorkflowsChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
   snapshot: Snapshot | null
   scanStatus?: DiscoveryStatus
   initialPage: SettingsPageId
@@ -76,6 +76,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   onRefresh: () => void | Promise<void>
   onError: (error: string | null) => void
   onOpenAgent: (agentId: string) => void
+  /** Opens a conversation (the last run of a schedule) and leaves Settings. */
+  onOpenSession?: (sessionId: string) => void
   onRunSetup?: () => void
   focusUpdates?: boolean
   /** Experimental: the plan-usage bar along the bottom of the main window. */
@@ -674,7 +676,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
             </SettingsGroup>
           </>}
 
-          {!loading && page === 'Manager' && <ManagerPage manager={managerOf(snapshot?.agents ?? [])} connected={!!snapshot} onOpenManager={onOpenAgent} />}
+          {!loading && page === 'Manager' && <ManagerPage manager={managerOf(snapshot?.agents ?? [])} connected={!!snapshot} onOpenManager={onOpenAgent} agents={snapshot?.agents ?? []} onOpenSession={onOpenSession} />}
 
           {!loading && page === 'Memory' && <MemoryPage
             agents={snapshot?.agents ?? []}

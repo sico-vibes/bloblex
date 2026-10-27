@@ -995,6 +995,52 @@ async fn crash_notifies_all_sessions_and_next_prompt_restarts_with_resume() {
 }
 
 #[tokio::test]
+async fn a_crash_after_a_finished_turn_does_not_fail_that_session() {
+    let (runtime, record) = setup(Some("crash-mixed"));
+    let adapter = std::sync::Arc::new(CodexAdapter::with_idle_shutdown(Duration::from_secs(2)));
+    let cwd = runtime.cwd.clone().unwrap();
+    let (tx_a, mut rx_a) = tokio::sync::mpsc::channel(32);
+    let (tx_b, mut rx_b) = tokio::sync::mpsc::channel(32);
+    let a = adapter.new_session(&runtime, new_request("quiet-a", cwd.clone(), opts()), tx_a).await.unwrap();
+    let b = adapter.new_session(&runtime, new_request("quiet-b", cwd.clone(), opts()), tx_b).await.unwrap();
+    // Session A finishes its turn, final answer and all.
+    start_prompt(adapter.clone(), a.clone(), "quiet-turn", "plain").await.unwrap().unwrap();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(3), rx_a.recv()).await.unwrap() {
+            Some(AgentEvent::TurnCompleted) => break,
+            Some(AgentEvent::Error { .. }) => panic!("a plain turn must not report an error"),
+            Some(_) => {}
+            None => panic!("the finished session's event stream closed"),
+        }
+    }
+    // Session B crashes the shared app-server process.
+    start_prompt(adapter.clone(), b.clone(), "crashing-turn", "crash").await.unwrap().unwrap();
+    let mut running_lost_its_turn = false;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(3), rx_b.recv()).await.unwrap() {
+            Some(AgentEvent::Error { .. }) => { running_lost_its_turn = true; break }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(running_lost_its_turn, "the session that was running lost its turn");
+    // The finished session is told nothing: its terminal outcome stands.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1200);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(150), rx_a.recv()).await {
+            Ok(Some(AgentEvent::Error { .. })) => panic!("a process exit must not fail a finished turn"),
+            Ok(Some(_)) | Err(_) => {}
+            Ok(None) => break,
+        }
+    }
+    adapter.close_session(&a).await.unwrap();
+    adapter.close_session(&b).await.unwrap();
+    adapter.shutdown().await;
+    let _ = std::fs::remove_dir_all(cwd);
+    let _ = std::fs::remove_dir_all(record.parent().unwrap());
+}
+
+#[tokio::test]
 async fn rejected_crash_resume_starts_fresh_and_updates_daemon_provider_pointer() {
     let (runtime, record) = setup(Some("crash-reject"));
     let adapter = std::sync::Arc::new(CodexAdapter::with_idle_shutdown(Duration::from_secs(2)));

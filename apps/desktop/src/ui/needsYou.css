@@ -1,0 +1,13 @@
+/* Requests in the main sidebar. The companion badge has its own .needs-you class. */
+.sidebar-attention { display: grid; gap: 2px; min-width: 0; margin: 0 8px 8px; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.sidebar-attention ul { display: grid; gap: 1px; max-height: 240px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.sidebar-attention-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 2px 6px 4px; color: var(--text-2); font-size: var(--fs-2xs); font-weight: 600; text-align: left; }
+.sidebar-attention-head b { min-width: 18px; padding: 0 5px; color: var(--status-working-text, var(--status-working)); border-radius: var(--radius-sm); background: var(--surface-hover); font-size: var(--fs-2xs); font-weight: 600; text-align: center; }
+.sidebar-attention-row { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 40px; padding: 5px 6px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.sidebar-attention-row:hover { color: var(--text-1); background: var(--surface-hover); }
+.sidebar-attention-row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.sidebar-attention-row > svg, .sidebar-attention-row time { flex: none; color: var(--text-3); font-size: var(--fs-2xs); white-space: nowrap; }
+.sidebar-attention-copy { display: grid; flex: 1 1 0; gap: 2px; min-width: 0; }
+.sidebar-attention-copy strong, .sidebar-attention-copy span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-attention-copy strong { color: var(--text-1); font-size: var(--fs-xs); font-weight: 500; }
+.sidebar-attention-copy span { color: var(--text-3); font-size: var(--fs-2xs); }

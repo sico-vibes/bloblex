@@ -161,3 +161,30 @@ describe('destructive hold confirmation', () => {
     expect(panel.cancel).toHaveBeenCalled()
   })
 })
+
+describe('hold button keeps one footprint', () => {
+  it('sizes every state against the longest label, which is the idle one for a long action, and never scales the button', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    vi.spyOn(HTMLButtonElement.prototype, 'setPointerCapture').mockImplementation(() => undefined)
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host); mounted.push({ root, host })
+    act(() => root.render(<ConfirmDialog title="Permanently delete Vex?" body="x" confirmLabel="Delete bot and conversations" cancelLabel="Keep bot" holdToConfirm onConfirm={() => undefined} onCancel={vi.fn()} />))
+    const label = () => host.querySelector<HTMLElement>('.hold-confirm-label')!
+    const idle = label().dataset.sizer
+    expect(idle).toBe('Hold to delete bot and conversations')
+    expect(label().textContent).toBe(idle)
+    const button = host.querySelector<HTMLButtonElement>('.hold-confirm-button')!
+    const pointer = (type: string) => { const event = new Event(type, { bubbles: true }); Object.defineProperty(event, 'pointerId', { value: 2 }); return event }
+    await act(async () => { button.dispatchEvent(pointer('pointerdown')); await vi.advanceTimersByTimeAsync(300) })
+    expect(label().textContent).toBe('Keep holding…')
+    expect(label().dataset.sizer).toBe(idle)
+    await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+    expect(label().textContent).toBe('Release to delete') // short, so the armed state is never wider than the idle label
+    expect(label().dataset.sizer).toBe(idle)
+    await act(async () => { button.dispatchEvent(pointer('pointercancel')) })
+    expect(label().textContent).toBe(idle)
+    const css = (await import('./blobPage.css?raw')).default
+    expect(css).not.toMatch(/\.hold-confirm-button\.holding[^}]*transform/)
+  })
+})

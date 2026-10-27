@@ -6,6 +6,7 @@ import claudeSvg from '../../assets/providers/claude.svg?raw'
 import { ProviderLogo } from '../../ui/providerBrand'
 import type { BlobCanvasProps } from '../BlobCanvas'
 import { PIXEL_ART, isHazeIcon, isPixelIcon, type HazeIcon, type PixelIcon } from './icons'
+import { CHARACTER_ASSETS, isHazeCharacter } from './characters'
 import { useLookProvider } from './runtimeRegistry'
 import './haze.css'
 
@@ -23,7 +24,7 @@ function logoFamily(provider: string | null): LogoFamily | null {
 /** The icon a bot shows: its choice, else its runtime's logo, else a pixel robot. */
 export function resolveHazeIcon(look: { icon?: unknown } | null | undefined, provider: string | null): HazeIcon {
   const chosen = isHazeIcon(look?.icon) ? look.icon : 'logo'
-  if (!isPixelIcon(chosen) && !logoFamily(provider)) return 'px-robot'
+  if (!isPixelIcon(chosen) && !isHazeCharacter(chosen) && !logoFamily(provider)) return 'px-robot'
   return chosen
 }
 
@@ -43,10 +44,12 @@ export function HazeMark({ color, size = 24, mood = 'idle', look, label = 'Bot',
   }, [greeting])
   const icon = resolveHazeIcon(look, provider)
   const family = logoFamily(provider)
-  const box = { width: size, height: size, '--haze-mark-size': `${size}px` } as CSSProperties
+  const markSize = isHazeCharacter(icon) ? Math.max(size, 26) : size
+  const box = { width: markSize, height: markSize, '--haze-mark-size': `${markSize}px` } as CSSProperties
   const a11y = decorative ? { 'aria-hidden': true as const } : { role: 'img' as const, 'aria-label': label }
-  return <span className={`haze-mark${SLEEPY.has(mood) ? ' is-resting' : ''}${greeting ? ' is-greeting' : ''}${isPixelIcon(icon) ? ' is-pixel' : ' is-logo'} ${className}`} style={box} data-icon={icon} data-tauri-drag-region={dragRegion || undefined} {...a11y}>
-    {isPixelIcon(icon) ? <PixelArt icon={icon} color={color} />
+  return <span className={`haze-mark${SLEEPY.has(mood) ? ' is-resting' : ''}${greeting ? ' is-greeting' : ''}${isPixelIcon(icon) ? ' is-pixel' : isHazeCharacter(icon) ? ' is-character' : ' is-logo'} ${className}`} style={box} data-icon={icon} data-tauri-drag-region={dragRegion || undefined} {...a11y}>
+    {isHazeCharacter(icon) ? <img className="haze-character-image" src={CHARACTER_ASSETS[icon][size > 32 ? 'animated' : 'static']} alt="" draggable={false} />
+      : isPixelIcon(icon) ? <PixelArt icon={icon} color={color} />
       : icon === 'logo' && provider ? <ProviderLogo provider={provider} size={Math.round(size * .8)} />
       : family ? <TintLogo family={family} fill={icon === 'logo-tint' ? color : 'currentColor'} />
       : null}

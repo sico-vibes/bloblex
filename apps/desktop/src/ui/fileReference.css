@@ -1,0 +1,9 @@
+/* A file attached to a message by path. */
+.file-reference { display: grid; gap: 4px; margin-top: 6px; }
+.file-reference-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; min-height: 30px; padding: 0 6px 0 10px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font-size: var(--fs-xs); }
+.file-reference-chip strong { min-width: 0; overflow: hidden; color: var(--text-1); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.file-reference-chip small { flex: none; color: var(--text-3); font-size: var(--fs-2xs); }
+.file-reference-open { height: 22px; padding: 0 8px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.file-reference-open:hover { color: var(--text-1); background: var(--surface-hover); }
+.file-reference-open:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.file-reference-note { margin: 0; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.45; }

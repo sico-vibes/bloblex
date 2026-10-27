@@ -172,7 +172,9 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, needsYou }: {
+  /** Waiting approvals and questions across every bot (see NeedsYou). */
+  needsYou?: ReactNode
   /** A card shown between the search box and the bots (Manager setup). */
   banner?: ReactNode
   agents: Agent[]
@@ -399,6 +401,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <span>Search</span><kbd aria-hidden="true">Ctrl K</kbd>
     </button>
     {banner}
+    {needsYou}
     <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={`${Nouns} by project`}>
       {manager && <section className="team-group manager-group" aria-label="Manager">
         <div className="team-group-rows">{renderRow(manager)}</div>

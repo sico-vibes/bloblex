@@ -3,7 +3,7 @@ import { act, type ComponentProps, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QueuedPrompt } from '../types'
-import { QueueBanner, SendLaterControl } from './PromptQueue'
+import { ComposerStatus, QueueBanner, SendLaterControl } from './PromptQueue'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -130,5 +130,55 @@ describe('SendLaterControl', () => {
   it('is disabled when there is nothing to send', () => {
     render(<SendLaterControl disabled nowMs={NOW} onSchedule={vi.fn()} />)
     expect(q<HTMLButtonElement>('[aria-label="Send later"]')?.disabled).toBe(true)
+  })
+})
+
+describe('ComposerStatus', () => {
+  const status = (props: Partial<ComponentProps<typeof ComposerStatus>> = {}) => {
+    const handlers = { onToggle: vi.fn(), onResume: vi.fn(), onSendNow: vi.fn(), onDelete: vi.fn(), onUpdate: vi.fn(), onReorder: vi.fn() }
+    render(<ComposerStatus items={[]} paused={false} sessionBusy mode="queue" nowMs={NOW} expanded={false} {...handlers} {...props} />)
+    return handlers
+  }
+
+  it('keeps one quiet row when nothing is queued and says how the next message travels', () => {
+    status()
+    expect(q('.composer-status')).not.toBeNull()
+    expect(q('.composer-status-chip button, .composer-status-chip:not(.quiet)')).toBeNull()
+    expect(q('.composer-status-mode')?.textContent).toBe('Queue · sends after this turn')
+    status({ mode: 'steer' })
+    expect(q('.composer-status-mode')?.textContent).toBe('Steer · reaches this turn now')
+  })
+
+  it('names the queue count and unfolds the rows on demand', () => {
+    const items = [item({ id: 'a', text: 'first' }), item({ id: 'b', text: 'second' })]
+    const handlers = status({ items, expanded: false })
+    const chip = q<HTMLButtonElement>('.composer-status-chip')!
+    expect(chip.textContent).toContain('2 queued messages')
+    expect(chip.getAttribute('aria-expanded')).toBe('false')
+    expect(q('.queue-banner')).toBeNull()
+    click(chip)
+    expect(handlers.onToggle).toHaveBeenCalled()
+    status({ items, expanded: true, onToggle: handlers.onToggle })
+    expect(q('.queue-banner')?.getAttribute('aria-label')).toBe('Queued messages: 2')
+    expect(q<HTMLButtonElement>('.composer-status-chip')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('says when the queue is paused, when a message failed and when a retry is waiting', () => {
+    const failed = [item({ id: 'a', text: 'first', status: 'failed', error: 'The provider refused.' })]
+    const handlers = status({ items: failed, paused: true })
+    expect(q('.composer-status-paused')?.textContent).toContain('Paused: a message could not be sent')
+    click(q('.composer-status-paused button'))
+    expect(handlers.onResume).toHaveBeenCalled()
+    status({ items: [item({ id: 'r', text: 'Please continue.', kind: 'retry' })], onCancelRetry: vi.fn() })
+    expect(q('.composer-status-retry')?.textContent).toContain('Retrying automatically')
+    expect(q('.composer-status-retry button')?.textContent).toBe('Cancel')
+    status({ paused: true })
+    expect(q('.composer-status-paused')?.textContent).toContain('Paused until you resume')
+  })
+
+  it('shows the reason a message went to the queue beside the mode, on demand', () => {
+    status({ notice: 'Queued because this turn could not accept steering. It sends after the turn ends.' })
+    expect(q('.composer-status-note')?.textContent).toContain('could not accept steering')
+    expect(q('.composer-status-note')?.getAttribute('title')).toContain('could not accept steering')
   })
 })

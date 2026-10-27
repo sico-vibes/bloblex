@@ -11,7 +11,7 @@ describe('busy send delivery', () => {
   it('queues and reports an unsupported steer without losing the message', async () => {
     vi.mocked(rpc).mockRejectedValueOnce('unsupported: Steering is turned off').mockResolvedValueOnce({})
     expect(await sendWithDelivery('session.steer', { sessionId: 's', text: 'Follow up' })).toEqual({ queued: true, fallback: true })
-    expect(rpc).toHaveBeenLastCalledWith('session.queue.add', { sessionId: 's', text: 'Follow up' })
+    expect(rpc).toHaveBeenLastCalledWith('session.queue.add', { clientMessageId: expect.stringMatching(/^m-/), sessionId: 's', text: 'Follow up' })
   })
   it('reports the daemon queue fallback for a stale steer', async () => {
     vi.mocked(rpc).mockResolvedValueOnce({ queued: true, steered: false })

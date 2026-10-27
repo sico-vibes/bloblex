@@ -1,20 +1,23 @@
 // Haze look: a bot shows its runtime's logo or a small pixel icon instead of a
 // mascot. The icon is stored on the look (`look.icon`); the daemon's
 // `valid_look` keeps the same list.
+import { CHARACTER_LABELS, HAZE_CHARACTERS, type HazeCharacter } from './characters'
 
 export type HazeIcon =
   | 'logo' | 'logo-tint' | 'logo-mono'
   | 'px-robot' | 'px-cat' | 'px-ghost' | 'px-alien' | 'px-fox' | 'px-frog' | 'px-owl' | 'px-bunny'
   | 'px-bear' | 'px-octopus' | 'px-mushroom' | 'px-slime' | 'px-wizard' | 'px-duck' | 'px-rocket' | 'px-bolt'
+  | HazeCharacter
 
 export const LOGO_ICONS = ['logo', 'logo-tint', 'logo-mono'] as const
 export const PIXEL_ICONS = ['px-robot', 'px-cat', 'px-ghost', 'px-alien', 'px-fox', 'px-frog', 'px-owl', 'px-bunny', 'px-bear', 'px-octopus', 'px-mushroom', 'px-slime', 'px-wizard', 'px-duck', 'px-rocket', 'px-bolt'] as const
-export const HAZE_ICONS: readonly HazeIcon[] = [...LOGO_ICONS, ...PIXEL_ICONS]
+export const HAZE_ICONS: readonly HazeIcon[] = [...LOGO_ICONS, ...PIXEL_ICONS, ...HAZE_CHARACTERS.map(({ id }) => id)]
 
 export const ICON_LABELS: Record<HazeIcon, string> = {
   logo: 'Logo', 'logo-tint': 'Logo in bot colour', 'logo-mono': 'Logo in one colour',
   'px-robot': 'Robot', 'px-cat': 'Cat', 'px-ghost': 'Ghost', 'px-alien': 'Alien', 'px-fox': 'Fox', 'px-frog': 'Frog', 'px-owl': 'Owl', 'px-bunny': 'Bunny',
   'px-bear': 'Bear', 'px-octopus': 'Octopus', 'px-mushroom': 'Mushroom', 'px-slime': 'Slime', 'px-wizard': 'Wizard', 'px-duck': 'Duck', 'px-rocket': 'Rocket', 'px-bolt': 'Bolt',
+  ...CHARACTER_LABELS,
 }
 
 export function isHazeIcon(value: unknown): value is HazeIcon {

@@ -9,3 +9,8 @@
 
 /* The companion renders the same groups in a small window: keep the flat list flat. */
 :root[data-bitbots="on"] .activity-steps.flat { border: 0; }
+
+/* Live command output: the end of what the agent reported so far, in a bounded box. */
+.activity-step-block pre.live { max-height: 220px; overflow: auto; }
+.activity-step-live { min-width: 0; flex: 1; overflow: hidden; color: var(--text-3); font: var(--fs-2xs) var(--font-mono); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.activity-step-note { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }

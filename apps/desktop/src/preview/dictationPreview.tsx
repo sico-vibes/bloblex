@@ -9,10 +9,8 @@ import { setThemeStyle } from '../blob/bitbots'
 import { isThemeStyle, type ThemeStyle } from '../ui/appearance'
 
 // Browser preview of the dictation island: a live loop that behaves like a real
-// session (the model warms up, words arrive, then it transcribes and finishes),
-// and every state side by side. ?state=<phase> shows one state only.
-
-const WORDS = 'Ask Fluffy to check which model Gogo is running and report back with the effort level too'.split(' ')
+// session (the model warms up, then it transcribes and finishes), and every
+// state side by side. The island shows no words (owner, 25 October 2026). ?state=<phase> shows one state only.
 
 const previewParams = new URLSearchParams(location.search)
 const requestedStyle = previewParams.get('style')
@@ -31,18 +29,16 @@ function LiveIsland({ variant }: { variant: 'bubble' | 'companion' }) {
   }, [])
   useEffect(() => { if (tick === 0) setSince(Date.now()) }, [tick])
   const warming = tick < 10
-  const spoken = tick < 10 ? 0 : Math.min(WORDS.length, Math.floor((tick - 10) / 1.7))
   const phase: IslandPhase = tick < 40 ? 'listening' : tick < 48 ? 'processing' : 'done'
-  const level = phase === 'listening' ? 0.02 + Math.abs(Math.sin(tick * 1.7)) * (spoken ? 0.22 : 0.05) : 0
-  return <DictationIsland variant={variant} phase={phase} level={level} since={since} stoppedAt={phase === 'listening' ? null : since + 40 * 160} warming={warming} text={WORDS.slice(0, spoken).join(' ')} />
+  const level = phase === 'listening' ? 0.02 + Math.abs(Math.sin(tick * 1.7)) * (tick < 10 ? 0.05 : 0.22) : 0
+  return <DictationIsland variant={variant} phase={phase} level={level} since={since} stoppedAt={phase === 'listening' ? null : since + 40 * 160} warming={warming} />
 }
 
-const STATES: Array<{ label: string; phase: IslandPhase; text?: string; warming?: boolean; errorText?: string }> = [
+const STATES: Array<{ label: string; phase: IslandPhase; warming?: boolean; errorText?: string }> = [
   { label: 'Listening, model loading', phase: 'listening', warming: true },
   { label: 'Listening', phase: 'listening' },
-  { label: 'Listening with words', phase: 'listening', text: 'Ask Fluffy to check which model Gogo is running' },
-  { label: 'Transcribing', phase: 'processing', text: 'Ask Fluffy to check which model Gogo is running and report back' },
-  { label: 'Done', phase: 'done', text: 'Ask Fluffy to check which model Gogo is running' },
+  { label: 'Transcribing', phase: 'processing' },
+  { label: 'Done', phase: 'done' },
   { label: 'Nothing heard', phase: 'silent' },
   { label: 'Error', phase: 'error', errorText: 'No microphone is available. Check Windows sound settings.' },
 ]
@@ -54,8 +50,8 @@ function Preview() {
   return <main className="dictation-preview">
     <h1>Dictation</h1>
     <section><h2>Live</h2><div className="dictation-preview-row"><div className="dictation-preview-desktop"><LiveIsland variant="bubble" /></div><div className="dictation-preview-companion"><LiveIsland variant="companion" /></div></div></section>
-    <section><h2>Bubble states</h2><div className="dictation-preview-grid">{STATES.filter((state) => !only || state.phase === only).map((state) => <figure key={state.label}><div className="dictation-preview-desktop"><DictationIsland phase={state.phase} level={0.12} since={since} stoppedAt={state.phase === 'listening' ? null : since + 7000} text={state.text ?? ''} warming={state.warming} errorText={state.errorText} /></div><figcaption>{state.label}</figcaption></figure>)}</div></section>
-    <section><h2>Companion</h2><div className="dictation-preview-grid">{STATES.slice(1, 5).map((state) => <figure key={state.label}><div className="dictation-preview-companion"><DictationIsland variant="companion" phase={state.phase} level={0.12} since={since} stoppedAt={state.phase === 'listening' ? null : since + 7000} text={state.text ?? ''} /></div><figcaption>{state.label}</figcaption></figure>)}</div></section>
+    <section><h2>Bubble states</h2><div className="dictation-preview-grid">{STATES.filter((state) => !only || state.phase === only).map((state) => <figure key={state.label}><div className="dictation-preview-desktop"><DictationIsland phase={state.phase} level={0.12} since={since} stoppedAt={state.phase === 'listening' ? null : since + 7000} warming={state.warming} errorText={state.errorText} /></div><figcaption>{state.label}</figcaption></figure>)}</div></section>
+    <section><h2>Companion</h2><div className="dictation-preview-grid">{STATES.slice(1, 5).map((state) => <figure key={state.label}><div className="dictation-preview-companion"><DictationIsland variant="companion" phase={state.phase} level={0.12} since={since} stoppedAt={state.phase === 'listening' ? null : since + 7000} /></div><figcaption>{state.label}</figcaption></figure>)}</div></section>
   </main>
 }
 

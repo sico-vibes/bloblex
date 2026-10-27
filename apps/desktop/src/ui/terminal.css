@@ -1,0 +1,36 @@
+/* The terminal dock: a real shell under the conversation. It wears the look's tokens; xterm paints on a transparent canvas. */
+
+.terminal-dock { position: relative; flex: none; display: flex; flex-direction: column; min-height: 140px; max-height: 70%; border-top: 1px solid var(--line-strong); background: var(--surface-panel, var(--surface-app)); color: var(--text-1); }
+.terminal-dock[hidden], .terminal-view[hidden] { display: none; }
+.terminal-resize { position: absolute; z-index: 3; top: -4px; left: 0; right: 0; height: 8px; cursor: ns-resize; touch-action: none; }
+.terminal-resize:hover, .terminal-resize:focus-visible { background: var(--surface-hover); outline: none; }
+.terminal-resize:focus-visible { box-shadow: var(--focus-ring); }
+
+.terminal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; padding: 0 6px 0 8px; border-bottom: 1px solid var(--line); }
+.terminal-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.terminal-tab { display: flex; align-items: center; flex: none; height: 26px; border-radius: var(--radius-sm); }
+.terminal-tab.active { background: var(--surface-selected); }
+.terminal-tab-button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 9px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.terminal-tab.active .terminal-tab-button { color: var(--text-1); }
+.terminal-tab-button small { max-width: 16ch; overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.terminal-tab.exited .terminal-tab-button { color: var(--text-3); }
+.terminal-tab-close, .terminal-icon { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--text-3); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.terminal-icon.small { width: 18px; }
+.terminal-tab-close:hover, .terminal-icon:hover:not(:disabled), .terminal-tab-button:hover { color: var(--text-1); background: var(--surface-hover); }
+.terminal-icon:disabled { opacity: .4; cursor: default; }
+.terminal-tab-button:focus-visible, .terminal-tab-close:focus-visible, .terminal-icon:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.terminal-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.terminal-new { position: relative; display: flex; align-items: center; }
+.terminal-menu { position: absolute; z-index: 20; right: 0; bottom: calc(100% + 4px); min-width: 170px; padding: 4px; }
+
+.terminal-body { position: relative; flex: 1; min-height: 0; padding: 6px 4px 4px 10px; }
+.terminal-view { position: absolute; inset: 6px 4px 4px 10px; }
+.terminal-view .xterm { height: 100%; }
+.terminal-view .xterm-viewport { background: transparent !important; }
+.terminal-view .xterm-viewport::-webkit-scrollbar { width: 10px; }
+.terminal-view .xterm-viewport::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 6px; background: var(--scroll-thumb, var(--line-strong)); background-clip: padding-box; }
+.terminal-empty { display: grid; place-items: center; height: 100%; color: var(--text-3); font-size: var(--fs-xs); text-align: center; }
+.terminal-exited { position: absolute; z-index: 2; right: 14px; bottom: 10px; display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-overlay); box-shadow: var(--shadow-pop); font-size: var(--fs-xs); }
+.terminal-exited .secondary-button { display: inline-flex; align-items: center; gap: 5px; }
+
+@media (prefers-reduced-motion: reduce) { .terminal-dock * { transition: none !important; } }

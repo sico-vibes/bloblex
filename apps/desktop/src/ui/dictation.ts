@@ -147,24 +147,19 @@ export function useDictation({
   owner = 'desktop',
   modelId,
   onFinal,
-  onPartial,
 }: {
   owner?: string
   modelId: string
   onFinal: (text: string) => void
-  onPartial?: (text: string) => void
 }) {
   const [phase, setPhase] = useState<DictationPhase>('idle')
   const [warming, setWarming] = useState(false)
-  const [partial, setPartial] = useState('')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   /** True while the owner is being asked to download (or is downloading) the on-device model. */
   const [modelPrompt, setModelPrompt] = useState(false)
   const onFinalRef = useRef(onFinal)
-  const onPartialRef = useRef(onPartial)
   onFinalRef.current = onFinal
-  onPartialRef.current = onPartial
 
   const supported = isNative()
 
@@ -180,24 +175,14 @@ export function useDictation({
         setWarming(true)
       } else if (payload.type === 'loaded') {
         setWarming(false)
-      } else if (payload.type === 'partial') {
-        const text = payload.text ?? ''
-        setPartial(text)
-        onPartialRef.current?.(text)
       } else if (payload.type === 'final') {
-        setPartial('')
-        onPartialRef.current?.('')
         if (payload.text) onFinalRef.current(payload.text)
       } else if (payload.type === 'stopped') {
         setPhase('idle')
         setWarming(false)
-        setPartial('')
-        onPartialRef.current?.('')
       } else if (payload.type === 'error') {
         setPhase('idle')
         setWarming(false)
-        setPartial('')
-        onPartialRef.current?.('')
         if (mentionsMissingLocalModel(payload.text ?? '')) { setModelPrompt(true); return }
         setError(payload.text ?? 'Dictation failed.')
       }
@@ -306,5 +291,5 @@ export function useDictation({
     }
   }, [supported, toggle])
 
-  return { phase, warming, partial, progress, error, toggle, modelPrompt, acceptModelPrompt, dismissModelPrompt, active: phase === 'starting' || phase === 'listening' }
+  return { phase, warming, progress, error, toggle, modelPrompt, acceptModelPrompt, dismissModelPrompt, active: phase === 'starting' || phase === 'listening' }
 }

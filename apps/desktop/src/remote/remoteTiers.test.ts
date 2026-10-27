@@ -85,6 +85,8 @@ describe('authorizeRemoteCall', () => {
     })
     expect(call('operator', 'mcp.memory_search', true).code).toBe('forbidden_remote')
     expect(call('operator', 'session.model.update', true).code).toBe('forbidden_remote')
+    // Repository diffs can hold secrets from the host's files, so no tier may read them remotely.
+    for (const tier of ['viewer', 'chat', 'operator'] as const) expect(call(tier, 'session.repository', true).code).toBe('forbidden_remote')
     expect(call('operator', 'something.else')).toEqual({
       allowed: false,
       code: 'forbidden_remote',

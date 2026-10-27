@@ -3,7 +3,7 @@
 // value below is a visual fixture, not product data.
 import { handleFixtureTaskRpc } from './fixtureTasks'
 import { EXPERIMENTS } from '../ui/experiments'
-import type { Agent, DaemonEvent, MessageMeta, PermissionRequest, Project, Runtime, Session, Snapshot } from '../types'
+import type { Agent, DaemonEvent, MessageMeta, PermissionRequest, Project, Runtime, Session, Snapshot, WindowBackdrop } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
@@ -339,6 +339,34 @@ function fixtureCatalog(runtimeId: string) {
 
 export const inDesktop = true
 export const previewMode = true
+/**
+ * `session.repository` for the preview: what the rail shows for a repository. `?repo=` picks the state:
+ * changes (default), clean, nogit, error, many (a long list, cut short) or slow (the first read takes 2 s).
+ * Visual fixtures only; no Git runs and nothing is ever written.
+ */
+const repositoryDiff = (name: string, added: string[], removed: string[]) => [`diff --git a/${name} b/${name}`, `--- a/${name}`, `+++ b/${name}`, `@@ -1,${removed.length + 2} +1,${added.length + 2} @@`, ' import { render } from "./render"', ...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`), ' export {}'].join('\n')
+async function fixtureRepository(sessionId: string) {
+  const mode = flags().get('repo') ?? 'changes'
+  if (mode === 'slow') await new Promise((resolve) => window.setTimeout(resolve, 2000))
+  const root = 'C:/Users/me/work/site'
+  const base = { projectPath: root, repoRoot: root, gitRepo: true, branch: 'feature/rail', detached: false, files: [] as Array<Record<string, unknown>>, addedLines: 0, removedLines: 0, truncated: false, error: null as string | null }
+  if (mode === 'nogit') return { ...base, repoRoot: null, gitRepo: false, branch: null }
+  if (mode === 'error') return { ...base, error: 'git is not installed or could not be started.' }
+  if (mode === 'clean') return base
+  const files = [
+    { path: `${root}/src/App.tsx`, repositoryPath: 'src/App.tsx', change: 'modified', addedLines: 12, removedLines: 3, diff: repositoryDiff('src/App.tsx', ['const title = "Bitbots"', 'render(title)'], ['render()']), binary: false, truncated: false },
+    { path: `${root}/src/rail.ts`, repositoryPath: 'src/rail.ts', change: 'added', addedLines: 10_352, removedLines: 0, diff: repositoryDiff('src/rail.ts', ['export const rail = 1'], []), binary: false, truncated: true },
+    { path: `${root}/docs/notes.md`, repositoryPath: 'docs/notes.md', change: 'added', addedLines: 41, removedLines: 0, diff: repositoryDiff('docs/notes.md', ['# Notes'], []), binary: false, truncated: false },
+    { path: `${root}/old/legacy.ts`, repositoryPath: 'old/legacy.ts', change: 'deleted', addedLines: 0, removedLines: 94, diff: null, binary: false, truncated: false },
+    { path: `${root}/src/Header.tsx`, repositoryPath: 'src/Header.tsx', change: 'renamed', addedLines: 2, removedLines: 2, diff: repositoryDiff('src/Header.tsx', ['export const Header = 1'], ['export const Head = 1']), binary: false, truncated: false },
+    { path: `${root}/assets/logo.png`, repositoryPath: 'assets/logo.png', change: 'modified', addedLines: null, removedLines: null, diff: null, binary: true, truncated: false },
+  ]
+  if (mode === 'many') for (let index = 0; index < 24; index += 1) files.push({ path: `${root}/src/gen/file${index}.ts`, repositoryPath: `src/gen/file${index}.ts`, change: 'modified', addedLines: index + 1, removedLines: index, diff: repositoryDiff(`src/gen/file${index}.ts`, ['const a = 1'], ['const a = 0']), binary: false, truncated: false })
+  const addedLines = files.reduce((sum, file) => sum + (Number(file.addedLines) || 0), 0)
+  const removedLines = files.reduce((sum, file) => sum + (Number(file.removedLines) || 0), 0)
+  return { ...base, files, addedLines: sessionId ? addedLines : 0, removedLines, truncated: mode === 'many' }
+}
+
 export async function rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (method === 'remote.preview.pair') {
     // Preview only: act as the phone submitting the code for the live offer. It
@@ -387,6 +415,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }
   if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
+  if (method === 'session.repository') return fixtureRepository(String(params.sessionId ?? '')) as T
   if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
   if (method === 'session.rename') {
     const session = sessions.find((item) => item.id === params.sessionId)
@@ -1436,3 +1465,26 @@ export async function fetchUsageAnalytics(request: UsageAnalyticsRequest) {
 }
 
 export async function setApprovalBadge(_count: number): Promise<void> { /* No native taskbar in the browser preview. */ }
+
+// The browser preview has no OS compositor behind it, so the frosted backdrop
+// reports itself unavailable instead of pretending.
+export async function applyWindowBackdrop(_enabled: boolean, _dark: boolean): Promise<WindowBackdrop> {
+  return { effect: 'none', active: false, transparencyOff: false, reason: 'Not running in the desktop app.' }
+}
+export async function windowBackdropState(): Promise<WindowBackdrop> {
+  return { effect: 'none', active: false, transparencyOff: false, reason: 'Not running in the desktop app.' }
+}
+
+// The browser preview has no shell: terminals are a desktop-only feature.
+export type TerminalShell = 'powershell' | 'pwsh' | 'cmd'
+export type TerminalOpened = { id: string; pid: number | null; shell: string; cwd: string }
+export type TerminalInfo = TerminalOpened & { running: boolean; exitCode: number | null }
+export type TerminalOutput = { id: string; seq: number; data: string }
+export type TerminalExit = { id: string; exitCode: number | null }
+export async function terminalOpen(_projectPath: string, _options: { cwd?: string | null; shell?: TerminalShell; cols?: number; rows?: number } = {}): Promise<TerminalOpened> { throw new Error('Terminals run in the desktop app, not in the browser preview.') }
+export async function terminalWrite(_id: string, _data: string): Promise<void> {}
+export async function terminalResize(_id: string, _cols: number, _rows: number): Promise<void> {}
+export async function terminalClose(_id: string): Promise<void> {}
+export async function terminalList(): Promise<TerminalInfo[]> { return [] }
+export async function listenForTerminalOutput(_handler: (output: TerminalOutput) => void): Promise<Unlisten> { return noop }
+export async function listenForTerminalExit(_handler: (exit: TerminalExit) => void): Promise<Unlisten> { return noop }

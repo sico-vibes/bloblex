@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async (count: number) => { h.approvalBadge(count) },
   previewMode: false,
   rpc: h.rpc,
@@ -82,6 +84,7 @@ vi.mock('../blob/BlobCanvas', async () => {
 
 import { App } from './App'
 import { setBitbotsEnabled } from '../blob/bitbots'
+import { friendlyErrorText } from './errorCopy'
 import type { Agent, DaemonEvent, Runtime, Session, Snapshot } from '../types'
 
 const stamp = '2026-10-01T00:00:00.000Z'
@@ -214,7 +217,7 @@ function configure(snapshotValue = snapshot()) {
     return {}
   })
   const stop = vi.fn()
-  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return stop })
+  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return () => { h.daemonEventHandlers = h.daemonEventHandlers.filter((item) => item !== handler); stop() } })
   h.listenForDaemonConnection.mockResolvedValue(stop)
   h.listenForActiveSession.mockResolvedValue(stop)
   h.listenForActiveRuntime.mockResolvedValue(stop)
@@ -293,9 +296,18 @@ async function openMenu(row: HTMLButtonElement) {
 }
 
 function emit(event: DaemonEvent) {
-  const handler = h.daemonEventHandlers.at(-1)
-  if (!handler) throw new Error('no daemon listener')
-  handler(event)
+  // Every live listener hears the event, as with the real event bus: App is not the only one.
+  const handlers = [...h.daemonEventHandlers]
+  if (!handlers.length) throw new Error('no daemon listener')
+  for (const handler of handlers) handler(event)
+}
+
+/** Opens the side conversation from the first assignment card, expanding it when it is folded. */
+async function openAssignment(host: HTMLElement) {
+  const head = host.querySelector<HTMLButtonElement>('.delegation-group .delegation-head')
+  if (!head) throw new Error('no assignment card')
+  if (head.getAttribute('aria-expanded') !== 'true') await click(head)
+  await click(host.querySelector('.delegation-group .delegation-open'))
 }
 
 describe('blob roster and editor', () => {
@@ -516,7 +528,7 @@ describe('blob roster and editor', () => {
     expect(send.disabled).toBe(false)
     await act(async () => { send.click() })
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId:'session-claude', text:'', attachments:[{ path:'C:/data/attachments/one.png', name:expect.stringMatching(/^Pasted image/) }] })
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { clientMessageId: expect.stringMatching(/^m-/), sessionId:'session-claude', text:'', attachments:[{ path:'C:/data/attachments/one.png', name:expect.stringMatching(/^Pasted image/) }] })
     expect(view.host.querySelector('.composer-attachment')).toBeNull()
   })
 
@@ -943,9 +955,14 @@ describe('blob roster and editor', () => {
     await typeInto(textarea, 'Then add a footer')
     await click(view.host.querySelector('[aria-label="Queue message"]'))
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Then add a footer' })
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { clientMessageId: expect.stringMatching(/^m-/), sessionId: 'session-claude', text: 'Then add a footer' })
     expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
     expect(textarea.value).toBe('')
+    // The queue is one compact row with a count; its rows unfold on demand.
+    const chip = view.host.querySelector<HTMLButtonElement>('.composer-status-chip')!
+    expect(chip.textContent).toContain('1 queued message')
+    expect(view.host.querySelector('.queue-banner')).toBeNull()
+    await act(async () => { chip.click() })
     expect(view.host.querySelector('.queue-banner')?.getAttribute('aria-label')).toBe('Queued messages: 1')
     expect(view.host.querySelector('.queue-text')?.textContent).toBe('Then add a footer')
   })
@@ -966,8 +983,10 @@ describe('blob roster and editor', () => {
       emit({ type: 'queue.changed', sequence: 90, payload: { sessionId: 'session-claude', paused: true, items: [{ id: 'q9', sessionId: 'session-claude', text: 'Run the tests', kind: 'user', dueAt: null, status: 'queued', error: null, position: 0 }] } } as DaemonEvent)
     })
     await view.settle()
+    expect(view.host.querySelector('.composer-status-chip')?.textContent).toContain('1 queued message')
+    expect(view.host.querySelector('.composer-status-paused')?.textContent).toContain('Paused until you resume')
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('.composer-status-chip')!.click() })
     expect(view.host.querySelector('.queue-text')?.textContent).toBe('Run the tests')
-    expect(view.host.querySelector('.queue-paused')?.textContent).toContain('Paused')
     await click(view.host.querySelector('[aria-label="Remove from queue"]'))
     expect(h.rpc).toHaveBeenCalledWith('session.queue.delete', { sessionId: 'session-claude', id: 'q9' })
   })
@@ -1021,10 +1040,10 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('[aria-label="Steer now"]')).toBeNull()
     expect(view.host.querySelector('[aria-label="Queue message"]')).not.toBeNull()
     // F4: the constant pre-send reason line is gone; the explanation waits for a send that queued.
-    expect(view.host.querySelector('.composer-send-reason')).toBeNull()
+    expect(view.host.querySelector('.composer-status-note')).toBeNull()
     await click(view.host.querySelector('[aria-label="Queue message"]'))
     await view.settle()
-    expect(view.host.querySelector('.composer-send-reason')?.textContent).toContain('Steering is unavailable')
+    expect(view.host.querySelector('.composer-status-note')?.textContent).toContain('Steering is unavailable')
     view.unmount()
     // Gate on: Steer appears and calls session.steer, not session.prompt.
     enabled = true
@@ -1075,16 +1094,17 @@ describe('blob roster and editor', () => {
     configure(snapshot({ sessions: [main, side, ...sessions.filter((item) => item.id !== 'session-claude')] }))
     const view = startApp()
     await view.settle()
-    const chips = [...view.host.querySelectorAll('.team-chip')]
-    expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual(['Messaged Codex. Open the conversation', 'Message from Codex. Open the conversation'])
+    // A sent delegation is an assignment card; the reply is a chip.
+    expect(view.host.querySelector('.delegation-group')?.getAttribute('aria-label')).toBe('Assigned to Codex')
+    expect([...view.host.querySelectorAll('.team-chip')].map((chip) => chip.getAttribute('aria-label'))).toEqual(['Message from Codex. Open the conversation'])
     // The relayed text stays in the side conversation; the chip links to it.
     expect(view.host.querySelector('.team-reply-toggle')).toBeNull()
     expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('All 12 tests pass.')
     // Side conversations stay out of the main transcript and the sidebar rows.
     expect(rows(view.host).filter((row) => row.getAttribute('data-agent-id') === 'agent-codex')).toHaveLength(1)
-    // A chip opens the read-only conversation between the two bots.
+    // The card opens the read-only conversation between the two bots.
     expect(view.host.querySelector('.side-header')).toBeNull()
-    await click(chips[0])
+    await openAssignment(view.host)
     expect(view.host.querySelector('.side-header')?.getAttribute('aria-label')).toBe('Side conversation between Claude and Codex')
     expect(view.host.querySelector('.composer-box')).toBeNull()
     expect(view.host.querySelector('.side-peer .message-author')?.textContent).toContain('Claude')
@@ -1108,9 +1128,7 @@ describe('blob roster and editor', () => {
     configure(snapshot({ sessions: [main, side, ...sessions.filter((item) => item.id !== 'session-claude')] }))
     const view = startApp()
     await view.settle()
-    const chips = [...view.host.querySelectorAll('.team-chip')]
-    expect(chips.length).toBeGreaterThan(0)
-    await click(chips[0])
+    await openAssignment(view.host)
     expect(view.host.querySelector('.side-header')).not.toBeNull()
     // The queued conversation says it is waiting, with no empty first-run screen.
     expect(view.host.querySelector('.session-first-state')).toBeNull()
@@ -1135,12 +1153,13 @@ describe('blob roster and editor', () => {
     await typeInto(textarea, 'First follow-up')
     await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.steer' : 'session.queue.add', { sessionId: working.id, text: 'First follow-up' })
+    expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.steer' : 'session.queue.add', mode === 'steer' ? { sessionId: working.id, text: 'First follow-up' } : { clientMessageId: expect.stringMatching(/^m-/), sessionId: working.id, text: 'First follow-up' })
     await typeInto(textarea, 'Other way')
     await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })) })
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.queue.add' : 'session.steer', { sessionId: working.id, text: 'Other way' })
-    expect(view.host.querySelector('.composer-send-mode')?.textContent).toContain('Ctrl')
+    expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.queue.add' : 'session.steer', mode === 'steer' ? { clientMessageId: expect.stringMatching(/^m-/), sessionId: working.id, text: 'Other way' } : { sessionId: working.id, text: 'Other way' })
+    // The composer's Steer now / After this turn choice shows the preference.
+    expect(view.host.querySelector('.composer-status-modes [role="radio"][aria-checked="true"]')?.textContent).toBe(mode === 'steer' ? 'Steer now' : 'After this turn')
   }, 15_000)
 
   it('shows live side-conversation activity and messages with Agent activity off', async () => {
@@ -1311,6 +1330,7 @@ describe('opt-in conversation experiments', () => {
       await click(view.host.querySelector('[aria-label="Send message"]'))
       await view.settle()
       expect(h.rpc).toHaveBeenCalledWith('session.prompt', {
+        clientMessageId: expect.stringMatching(/^m-/),
         sessionId: 'session-claude',
         text: 'Explain that earlier request',
         replyTo: { sourceSessionId: 'session-claude', messageId: 'u1' },
@@ -1318,13 +1338,18 @@ describe('opt-in conversation experiments', () => {
       expect([...view.host.querySelectorAll('.message-row.user .reply-context-strip.compact')].some((strip) => strip.textContent?.includes('Original prompt'))).toBe(true)
     } finally { experimentalSession.messages = previousMessages }
   })
-  it('clears the composer at once, shows the message as Sending… and restores the draft when the send fails', async () => {
+  it('clears the composer at once, shows the message as Sending…, and keeps a failed send with its reason and retry', async () => {
     prepare(true)
     const originalRpc = h.rpc.getMockImplementation()!
     let fail!: (reason: unknown) => void
-    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => method === 'session.prompt'
-      ? new Promise((_resolve, reject) => { fail = reject })
-      : originalRpc(method, params))
+    let attempts = 0
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method !== 'session.prompt') return originalRpc(method, params)
+      attempts += 1
+      // The first attempt fails; Try again succeeds.
+      if (attempts === 1) return new Promise((_resolve, reject) => { fail = reject })
+      return { accepted: true }
+    })
     const view = startApp(); await view.settle()
     const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')!
     await typeInto(textarea, 'Run the tests')
@@ -1336,8 +1361,32 @@ describe('opt-in conversation experiments', () => {
     expect(view.host.querySelector('.message-pending-note')?.textContent).toBe('Sending…')
     await act(async () => { fail(new Error('conflict: busy')) })
     await view.settle()
+    // The row stays with the reason, and the draft does not duplicate it.
+    const failed = view.host.querySelector('.message-row.user.pending.failed')!
+    expect(failed).not.toBeNull()
+    expect(failed.querySelector('[role="alert"] span')?.textContent).toBe(friendlyErrorText('conflict: busy'))
+    expect(textarea.value).toBe('')
+    // Try again resends the same message and clears the row.
+    await click([...failed.querySelectorAll('button')].find((button) => button.textContent === 'Try again'))
+    await view.settle()
+    expect(attempts).toBe(2)
     expect(view.host.querySelector('.message-row.user.pending')).toBeNull()
+  })
+  it('returns a failed message to the composer for editing instead of leaving two copies', async () => {
+    prepare(true)
+    const originalRpc = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => method === 'session.prompt'
+      ? Promise.reject(new Error('provider_error: The provider refused the request.'))
+      : originalRpc(method, params))
+    const view = startApp(); await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-wrap textarea')!
+    await typeInto(textarea, 'Run the tests')
+    await click(view.host.querySelector('[aria-label="Send message"]'))
+    await view.settle()
+    const edit = [...view.host.querySelectorAll('.message-row.user.pending.failed button')].find((button) => button.textContent === 'Edit')!
+    await click(edit)
     expect(textarea.value).toBe('Run the tests')
+    expect(view.host.querySelector('.message-row.user.pending')).toBeNull()
   })
   it('warms the open conversation so the first message does not wait for the coding agent', async () => {
     prepare(true)
@@ -1444,12 +1493,13 @@ describe('FIX39 P5 follow-up', () => {
     const permission = view.host.querySelector<HTMLButtonElement>('.composer-controls-start .permission-pill')!
     expect(permission).not.toBeNull()
     expect(permission.disabled).toBe(false)
-    expect(view.host.querySelector<HTMLButtonElement>('.composer-controls-end .model-pill')?.disabled).toBe(true)
-    // The effort pill is disabled, or aria-disabled when it has its own reason.
+    // The model and effort pills are disabled, or aria-disabled when they explain why.
+    const model = view.host.querySelector<HTMLButtonElement>('.composer-controls-end .model-pill')!
+    expect(model.disabled || model.getAttribute('aria-disabled') === 'true').toBe(true)
     const effort = view.host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
     expect(effort.disabled || effort.getAttribute('aria-disabled') === 'true').toBe(true)
     await click(permission)
     expect(view.host.querySelector('.permission-menu')).not.toBeNull()
-    expect(view.host.querySelector('.composer-menu-note')?.textContent).toBe('Applies to this bot from now on.')
+    expect(view.host.querySelector('.composer-menu-note')?.textContent).toContain('Applies to this bot from now on')
   })
 })

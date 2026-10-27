@@ -26,6 +26,8 @@ const catalog = { runtimeId:'runtime', provider:'claude', validated:true, fallba
 ] }
 const agent: Agent = { id:'agent', name:'Claude', description:'', instructions:'', color:'coral', runtimeId:'runtime', model:'alpha', thinking:'high', serviceTier:null, customArgs:[], customEnv:{}, maxConcurrency:1, defaultProject:null, sortOrder:0, archived:false, createdAt:'now', updatedAt:'now' }
 const session: Session = { id:'session', runtimeId:'runtime', agentId:'agent', state:'idle', modelLock:{ model:'alpha', thinking:'high' } }
+/** The same conversation after the user has spoken: a model change can lose real context. */
+const contextSession: Session = { ...session, messages:[{ id:'m1', role:'user', content:'Fix the build' }, { id:'m2', role:'assistant', content:'On it.' }], contextUsed: 1200 }
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = []
 const pointer = (type: string, x: number, id = 5) => { const event = new Event(type, { bubbles:true }); Object.defineProperties(event, { pointerId:{ value:id }, clientX:{ value:x }, clientY:{ value:14 }, button:{ value:0 } }); return event }
 /** The open popover's slider, with a 320px track at the left edge of the window. */
@@ -34,10 +36,10 @@ function slider(host: HTMLElement) {
   if (track) Object.defineProperty(track, 'getBoundingClientRect', { configurable:true, value:() => ({ width:320, height:28, top:0, right:320, bottom:28, left:0, x:0, y:0, toJSON:() => ({}) }) })
   return track
 }
-function mount() {
+function mount(current: Session = session) {
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
-  act(() => root.render(<SessionExecutionControls session={session} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />))
+  act(() => root.render(<SessionExecutionControls session={current} agent={agent} onSessionUpdated={() => undefined} onError={() => undefined} />))
   mounted.push({ root, host })
   return host
 }
@@ -83,18 +85,18 @@ describe('session execution controls', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
-  it('keeps model and effort separate and requires confirmation before locking a different model', async () => {
+  it('warns before a model change only when the conversation already has context', async () => {
     rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
       if (method === 'runtime.models') return catalog
-      if (method === 'session.model.update') return { session: { ...session, modelLock:{ model:params.model, thinking:params.thinking } } }
+      if (method === 'session.model.update') return { session: { ...contextSession, modelLock:{ model:params.model, thinking:params.thinking } } }
       return {}
     })
-    const host = mount()
+    const host = mount(contextSession)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(rpc).toHaveBeenCalledWith('runtime.models', { runtimeId:'runtime', sessionId:'session' })
     const model = host.querySelector<HTMLButtonElement>('.model-pill')!
     expect(model.textContent).toContain('Alpha')
-    expect(model.getAttribute('aria-label')).toBe('Conversation model: Alpha')
+    expect(model.getAttribute('aria-label')).toBe('Conversation model: Alpha, High effort')
     expect(model.textContent).not.toContain('Recommended')
     await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
     const effort = slider(host)
@@ -113,15 +115,54 @@ describe('session execution controls', () => {
       await act(async () => { option.click() })
     }
     await chooseBeta()
-    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('may reset its context')
+    // The dialog names the real consequence: a new provider session, not a vague warning.
+    const dialog = host.querySelector('[role="dialog"]')
+    expect(dialog?.textContent).toContain('starts a new provider session')
+    expect(dialog?.textContent).toContain('without the working memory of this chat')
     expect(rpc).not.toHaveBeenCalledWith('session.model.update', expect.anything())
+    // Cancel leaves the model exactly as it was.
     act(() => host.querySelector<HTMLButtonElement>('[role="dialog"] button:first-of-type')!.click())
     expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(host.querySelector('.model-pill')?.textContent).toContain('Alpha')
     expect(rpc).not.toHaveBeenCalledWith('session.model.update', expect.anything())
     await chooseBeta()
     act(() => host.querySelector<HTMLButtonElement>('[role="dialog"] button:last-child')!.click())
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(rpc).toHaveBeenCalledWith('session.model.update', expect.objectContaining({ sessionId:'session', model:'beta', thinking:null, confirmModelChange:true }))
+  })
+
+  it('applies a first model choice in an empty conversation without a dialog', async () => {
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'runtime.models') return catalog
+      if (method === 'agent.update') return { agent: { ...agent, model: params.model } }
+      return { session: { ...session, modelLock:{ model:params.model, thinking:params.thinking } } }
+    })
+    // A conversation with nothing said in it and no provider context yet.
+    const host = mount({ ...session, modelLock:{ model:null, thinking:null }, messages: [], contextUsed: null, contextModel: null })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.model-pill')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(rpc).toHaveBeenCalledWith('session.model.update', expect.objectContaining({ sessionId:'session', model:'beta', confirmModelChange:false }))
+  })
+
+  it('asks when the daemon requires confirmation the view had not predicted', async () => {
+    rpc.mockImplementation(async (method: string) => {
+      if (method === 'runtime.models') return catalog
+      if (method === 'session.model.update') throw new Error('confirmation_required: This conversation already has context. Confirm to continue.')
+      return {}
+    })
+    const onError = vi.fn()
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={{ ...session, messages: [], contextUsed: null }} agent={agent} onSessionUpdated={() => undefined} onError={onError} />)); mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.model-pill')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!.click() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(onError).not.toHaveBeenCalled()
   })
 
   it('previews effort while dragging and persists only when pointer or keyboard interaction settles', async () => {
@@ -274,7 +315,7 @@ describe('session execution controls', () => {
     const host = document.createElement('div'); document.body.append(host)
     const root = createRoot(host)
     const render = (current: Session) => root.render(<SessionExecutionControls session={current} agent={{ ...agent, model:'beta', thinking:'low' }} onSessionUpdated={() => undefined} onError={() => undefined} />)
-    act(() => render(session)); mounted.push({ root, host })
+    act(() => render(contextSession)); mounted.push({ root, host })
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(host.querySelector('.model-pill')?.textContent).toContain('Alpha')
     expect(host.querySelector('.session-effort-trigger')?.textContent).toContain('High')
@@ -283,7 +324,7 @@ describe('session execution controls', () => {
     await act(async () => { model.click() })
     await act(async () => { host.querySelector<HTMLElement>('[role="menuitemradio"][data-value="beta"]')!.click() })
     expect(host.querySelector('[role="dialog"]')).not.toBeNull()
-    await act(async () => { render({ ...session, id:'session-2', modelLock:{ model:'beta', thinking:'low' } }); await Promise.resolve() })
+    await act(async () => { render({ ...contextSession, id:'session-2', modelLock:{ model:'beta', thinking:'low' } }); await Promise.resolve() })
     expect(host.querySelector('[role="dialog"]')).toBeNull()
     expect(host.querySelector('.model-pill')?.textContent).toContain('Beta')
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update')).toHaveLength(0)
@@ -331,7 +372,8 @@ describe('session execution labels', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     const model = host.querySelector<HTMLButtonElement>('.model-pill')!
     expect(model.textContent).toContain('Pick a model')
-    expect(model.getAttribute('title')).toBe('Choose which model this conversation uses')
+    // No effort is named before a model is chosen: the effort control is still a placeholder.
+    expect(model.getAttribute('title')).toBe('Pick a model. Choose which model this conversation uses; it applies from your next message.')
     const effort = host.querySelector<HTMLButtonElement>('.session-effort-trigger')!
     expect(effort.textContent).toBe('Effort')
     expect(effort.getAttribute('aria-disabled')).toBe('true')

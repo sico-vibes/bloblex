@@ -1,14 +1,21 @@
 // The right-hand rail for the open conversation: where it works, how full its
 // context is, what it produced and what it changed. Each card collapses and
 // remembers that. Values are only what the daemon reported; nothing is guessed.
+// Outputs and Changes read the repository itself (`session.repository`): what Git
+// says differs from HEAD now, whoever made the change, with what the conversation's
+// own coding agent reported kept alongside for anything Git no longer lists.
 import { useEffect, useState, type ReactNode } from 'react'
-import { Bot, ChevronDown, ChevronRight, Code2, Copy, FileText, FolderOpen, GitBranch, Monitor, Smartphone } from 'lucide-react'
-import type { JsonRecord, Session } from '../types'
+import { Bot, ChevronDown, ChevronRight, CircleAlert, Code2, Copy, FileText, FolderOpen, GitBranch, Monitor, Smartphone } from 'lucide-react'
+import type { Agent, JsonRecord, Session } from '../types'
 import { rpc } from '../tauri'
-import { parseUnifiedDiff } from './diffParser'
 import { HelpTip } from './SettingsParts'
+import { Skeleton } from './Skeleton'
 import { usePlatform } from '../transport/platform'
 import { useRemoteStatus } from '../remote/useRemote'
+import { CheckpointsBody, WorkspaceBody } from './SessionRailExtras'
+import { ScheduleOverview } from './ScheduleOverview'
+import { isDraftSession } from './teamSelectors'
+import { buildRailView, conversationFiles, repositoryRefreshKey, useSessionRepository, type RailFile, type RepositoryState } from './sessionRepository'
 import './sessionRail.css'
 
 type Environment = { projectPath: string | null; gitRepo: boolean; branch: string | null; detached: boolean; host: string }
@@ -70,25 +77,36 @@ export function sessionTokenSplit(session: Session | null, usage: readonly JsonR
   return { input: total('inputTokens'), output: total('outputTokens'), cacheRead: total('cacheReadTokens'), cacheWrite: total('cacheWriteTokens'), reasoning: total('reasoningTokens') }
 }
 
-type FileChange = { key: string; path: string; name: string; change: string; added: number | null; removed: number | null; diff: string | null }
-
 /** One entry per path (its latest change), newest first, with +/− counts where a diff or count was reported. */
-export function fileChanges(session: Session | null): FileChange[] {
-  const latest = new Map<string, FileChange>()
-  for (const [index, file] of (session?.files ?? []).entries()) {
-    const path = String(file.path ?? file.filePath ?? '')
-    if (!path) continue
-    const diff = typeof file.diff === 'string' ? file.diff : typeof file.patch === 'string' ? file.patch : null
-    const parsed = diff ? parseUnifiedDiff(diff) : null
-    const added = typeof file.addedLines === 'number' ? file.addedLines : typeof file.additions === 'number' ? file.additions : parsed?.additions ?? null
-    const removed = typeof file.removedLines === 'number' ? file.removedLines : typeof file.deletions === 'number' ? file.deletions : parsed?.deletions ?? null
-    latest.delete(path)
-    latest.set(path, { key: String(file.id ?? `${path}:${index}`), path, name: path.split(/[\\/]/).pop() ?? path, change: String(file.change ?? file.kind ?? 'modified'), added, removed, diff })
-  }
-  return [...latest.values()].reverse()
+export const fileChanges = conversationFiles
+
+const folderOf = (path: string | null | undefined) => path?.split(/[\\/]/).filter(Boolean).pop() ?? null
+const lines = (value: number) => value.toLocaleString('en-US')
+
+/** The small tag a file row carries when its diff is not the whole story. */
+export function fileNote(file: RailFile): string | null {
+  if (file.change === 'deleted') return 'deleted'
+  if (file.binary) return 'binary'
+  if (file.truncated) return 'cut short'
+  if (file.change === 'renamed') return 'renamed'
+  return null
 }
 
-export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote, workingBots }: {
+/** Why a row cannot open a diff, in words; null when it can. */
+export function diffUnavailableReason(file: RailFile): string | null {
+  if (file.diff) return null
+  if (file.binary) return 'Binary file: there is no text diff to show.'
+  if (file.change === 'deleted') return 'The file was deleted, so there is no text diff to show.'
+  return file.source === 'repository' ? 'Git did not return a diff for this file. Open it to read the change.' : 'The coding agent did not report a diff for this file.'
+}
+
+export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote, workingBots, botName = 'The bot', canCreatePr = false, onCreatePr, active = true, agents = [], isManager = false, onOpenSessionById, onOpenSchedules }: {
+  /** Every bot, so a schedule can name the bot it wakes. */
+  agents?: readonly Agent[]
+  /** The Manager sees every schedule; any other bot sees its own and its project's. */
+  isManager?: boolean
+  onOpenSessionById?: (sessionId: string) => void
+  onOpenSchedules?: () => void
   workingBots?: ReactNode
   session: Session | null
   usage: readonly JsonRecord[]
@@ -103,29 +121,66 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   runtimeFacts?: string
   /** Opens Settings > Remote, where Remote is turned on (Tailscale check and consent live there). */
   onOpenRemote?: () => void
+  /** The open conversation's bot, named in the pull request dialog. */
+  botName?: string
+  /** The conversation can take a message right now (connected, a usable coding agent, not a draft). */
+  canCreatePr?: boolean
+  /** Opens the pull request review; the App sends the request once the owner confirms. */
+  onCreatePr?: (repository: RepositoryState) => void
+  /** The rail is on screen. A hidden rail does not read the repository. */
+  active?: boolean
 }) {
   const platform = usePlatform()
   const remote = useRemoteStatus(true)
   const [remoteBusy, setRemoteBusy] = useState(false)
-  const environment = useEnvironment(session?.id ?? null)
+  // A draft is not in the daemon until its first message, so it is never asked about.
+  const environment = useEnvironment(session && !isDraftSession(session) ? session.id : null)
+  const busy = ['working', 'starting', 'waiting_permission'].includes(session?.state ?? '')
+  const repository = useSessionRepository(session, repositoryRefreshKey(session), busy, active)
   const [showAllOutputs, setShowAllOutputs] = useState(false)
   if (!session) return <div className="session-rail">{workingBots}<div className="rail-empty">Open a conversation to see where it works and what it changed.</div></div>
-  const projectPath = environment?.projectPath ?? session.projectPath ?? null
-  const folderName = typeof session.workspaceLabel === 'string' && session.workspaceLabel ? session.workspaceLabel : projectPath?.split(/[\\/]/).filter(Boolean).pop() ?? null
+  const projectPath = repository.data?.projectPath ?? environment?.projectPath ?? session.projectPath ?? null
+  const folderName = typeof session.workspaceLabel === 'string' && session.workspaceLabel ? session.workspaceLabel : folderOf(projectPath)
   const used = num(session.contextUsed)
   const size = num(session.contextSize)
   const percent = size > 0 ? Math.min(100, Math.round((used / size) * 100)) : null
   const split = sessionTokenSplit(session, usage)
-  const changes = fileChanges(session)
-  const outputs = changes.filter((file) => /^(added|create|created|new)$/i.test(file.change))
+  const repo = repository.data
+  const view = buildRailView(session, repo)
+  const outputs = view.created
   const visibleOutputs = showAllOutputs ? outputs : outputs.slice(0, 5)
-  const totalAdded = changes.reduce((sum, file) => sum + (file.added ?? 0), 0)
-  const totalRemoved = changes.reduce((sum, file) => sum + (file.removed ?? 0), 0)
-  const fileButtons = (file: FileChange) => <span className="rail-file-actions">
-    {platform.editor && <button type="button" title="Open in editor" aria-label={`Open ${file.path} in editor`} onClick={() => onOpenFile(file.path)}><Code2 size={12} /></button>}
-    {platform.editor && <button type="button" title="Reveal in File Explorer" aria-label={`Reveal ${file.path} in File Explorer`} onClick={() => onRevealFile(file.path)}><FolderOpen size={12} /></button>}
-    <button type="button" title="Copy path" aria-label={`Copy ${file.path}`} onClick={() => onCopyPath(file.path)}><Copy size={12} /></button>
+  const branch = repo?.gitRepo && repo.branch ? repo.branch : environment?.gitRepo ? environment.branch : null
+  const detached = repo?.gitRepo ? repo.detached : environment?.detached === true
+  const repoName = folderOf(repo?.repoRoot ?? projectPath)
+  const readFailed = repository.failed || (!!repo && !!repo.error)
+  const canPr = !!onCreatePr && canCreatePr && view.fromRepository && !!repo && repo.files.length > 0 && !repository.failed
+  const prTitle = !onCreatePr || !repo ? undefined : repository.failed ? 'The repository could not be read just now, so these changes may be out of date. Try again first.' : !view.fromRepository ? 'Pull requests need a Git repository that can be read.' : repo.files.length === 0 ? 'There are no changes to put in a pull request.' : !canCreatePr ? 'Reconnect, or pick a working coding agent, to ask for a pull request.' : `Ask ${botName} to open a pull request for these changes.`
+  const total = view.repository.length + view.earlier.length
+  const openFolder = projectPath && platform.editor ? <button type="button" className="rail-link" onClick={() => onOpenFolder(projectPath)}>Open the folder</button> : null
+  const fileButtons = (file: RailFile) => <span className="rail-file-actions">
+    {platform.editor && file.change !== 'deleted' && <button type="button" title="Open in editor" aria-label={`Open ${file.relative ?? file.path} in editor`} onClick={() => onOpenFile(file.path)}><Code2 size={12} /></button>}
+    {platform.editor && file.change !== 'deleted' && <button type="button" title="Reveal in File Explorer" aria-label={`Reveal ${file.relative ?? file.path} in File Explorer`} onClick={() => onRevealFile(file.path)}><FolderOpen size={12} /></button>}
+    <button type="button" title="Copy path" aria-label={`Copy ${file.relative ?? file.path}`} onClick={() => onCopyPath(file.path)}><Copy size={12} /></button>
   </span>
+  const changeRow = (file: RailFile) => {
+    const reason = diffUnavailableReason(file)
+    const note = fileNote(file)
+    return <li key={file.key} className="rail-file" data-source={file.source}>
+      <button type="button" className="rail-file-open" title={reason ?? (file.truncated ? `View the shortened diff for ${file.relative ?? file.path}` : `View the diff for ${file.relative ?? file.path}`)} aria-disabled={reason ? true : undefined} disabled={!!reason} onClick={() => file.diff && onDiff(file.path, file.diff)}>
+        <FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.relative ?? file.path}>{file.name}</span>{note && <span className="rail-tag" title={reason ?? undefined}>{note}</span>}
+      </button>
+      {!file.binary && file.added !== null && <em className="rail-add">+{lines(file.added)}</em>}
+      {!file.binary && file.removed !== null && <i className="rail-del">−{lines(file.removed)}</i>}
+      {fileButtons(file)}
+    </li>
+  }
+  const changesAside = total > 0 || canPr || !!onCreatePr && view.fromRepository
+    ? <span className="rail-card-aside">
+      {view.fromRepository && total > 0 && <span className="rail-diffstat" aria-label={`${lines(view.added)} lines added, ${lines(view.removed)} removed`}><em>+{lines(view.added)}</em> <i>−{lines(view.removed)}</i></span>}
+      {!view.fromRepository && view.earlier.length > 0 && <span className="rail-diffstat"><em>+{lines(view.added)}</em> <i>−{lines(view.removed)}</i></span>}
+      {onCreatePr && view.fromRepository && <button type="button" className="rail-pr" disabled={!canPr} title={prTitle} onClick={() => repo && onCreatePr(repo)}>Create PR</button>}
+    </span>
+    : undefined
 
   return <div className="session-rail">
     {workingBots}
@@ -133,7 +188,7 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
       <div className="rail-row"><Monitor size={13} aria-hidden="true" /><span className="rail-row-main">{environment?.host ?? 'This computer'}</span></div>
       {folderName && <div className="rail-row"><FolderOpen size={13} aria-hidden="true" /><span className="rail-row-main" title={projectPath ?? undefined}>{folderName}</span>{projectPath && platform.editor && <button type="button" className="rail-link" onClick={() => onOpenFolder(projectPath)}>Open</button>}</div>}
       {appliedModel && <div className="rail-row"><Bot size={13} aria-hidden="true" /><span className="rail-row-main" title="The model the coding agent reported using">{appliedModel}</span></div>}
-      {environment?.gitRepo && environment.branch && <div className="rail-row"><GitBranch size={13} aria-hidden="true" /><span className="rail-row-main">{environment.branch}</span>{environment.detached && <span className="rail-tag">detached</span>}</div>}
+      {branch && <div className="rail-row"><GitBranch size={13} aria-hidden="true" /><span className="rail-row-main" title="The branch the repository has checked out now">{branch}</span>{detached && <span className="rail-tag">detached</span>}</div>}
       {remote.available === true && remote.status && <div className="rail-row rail-remote">
         <Smartphone size={13} aria-hidden="true" />
         <span className="rail-row-main" title={remote.status.enabled && remote.status.url ? remote.status.url : undefined}>Remote{remote.status.enabled ? ` · ${remote.status.connectedCount} of ${remote.status.deviceCount} connected` : ' · off'}</span>
@@ -144,6 +199,14 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
             void rpc('remote.disable').catch(() => undefined).finally(() => setRemoteBusy(false))
           }}><i /></button>
       </div>}
+    </Card>
+
+    <Card id="workspace" title="Workspace">
+      <WorkspaceBody session={session} active={active} />
+    </Card>
+
+    <Card id="schedules" title="Schedules">
+      <ScheduleOverview compact agents={agents} connected={active} scope={isManager ? null : { agentId: session.agentId ?? null, projectId: session.projectId ?? null }} onOpenSession={onOpenSessionById} onOpenSchedules={onOpenSchedules} />
     </Card>
 
     <Card id="context" title="Context">
@@ -159,22 +222,29 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
     </Card>
 
     <Card id="outputs" title="Outputs">
-      {outputs.length === 0 ? <p className="rail-note">Files this conversation creates appear here.</p> : <>
-        <ul className="rail-files">{visibleOutputs.map((file) => <li key={file.key} className="rail-file"><FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.path}>{file.name}</span>{fileButtons(file)}</li>)}</ul>
+      {outputs.length === 0 ? <p className="rail-note">{repository.loading ? 'Looking for new files…' : 'New files in this repository, and files this conversation creates, appear here.'}</p> : <>
+        <ul className="rail-files">{visibleOutputs.map((file) => <li key={file.key} className="rail-file"><FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.relative ?? file.path}>{file.name}</span>{fileButtons(file)}</li>)}</ul>
         {outputs.length > 5 && <button type="button" className="rail-link" onClick={() => setShowAllOutputs((value) => !value)}>{showAllOutputs ? 'Show less' : `Show ${outputs.length - 5} more`}</button>}
       </>}
     </Card>
 
-    <Card id="changes" title="Changes" aside={changes.length > 0 ? <span className="rail-diffstat"><em>+{totalAdded}</em> <i>−{totalRemoved}</i></span> : undefined}>
-      {changes.length === 0 ? <p className="rail-note">Files the coding agent edits appear here with their diff.</p>
-        : <ul className="rail-files">{changes.map((file) => <li key={file.key} className="rail-file">
-          <button type="button" className="rail-file-open" title={file.diff ? `View the diff for ${file.path}` : file.path} disabled={!file.diff} onClick={() => file.diff && onDiff(file.path, file.diff)}>
-            <FileText size={13} aria-hidden="true" /><span className="rail-file-name">{file.name}</span>
-          </button>
-          {file.added !== null && <em className="rail-add">+{file.added}</em>}
-          {file.removed !== null && <i className="rail-del">−{file.removed}</i>}
-          {fileButtons(file)}
-        </li>)}</ul>}
+    <Card id="changes" title="Changes" aside={changesAside}>
+      {repository.loading && !repo && <div className="rail-loading" role="status" aria-busy="true"><span className="sr-only">Reading the repository…</span><Skeleton lines={3} variant="row" /></div>}
+      {view.fromRepository && repo && <p className="rail-context" title={repo.repoRoot ?? undefined}><GitBranch size={12} aria-hidden="true" /><span><b>{repo.detached ? 'Detached HEAD' : repo.branch ?? 'No branch'}</b>{repoName ? ` · ${repoName}` : ''}. Every uncommitted change in this repository, not only this conversation's.</span></p>}
+      {repo && !repo.gitRepo && !repo.error && !readFailed && <p className="rail-note">{folderName ? `${folderName} is not` : 'This folder is not'} a Git repository, so changes cannot be tracked. {view.earlier.length ? 'These are the files the coding agent reported.' : 'Files the coding agent edits appear here with their diff.'}</p>}
+      {readFailed && <p className="rail-note rail-problem" role="alert"><CircleAlert size={12} aria-hidden="true" /><span>{repo?.error ? `Git could not be read here: ${repo.error}` : 'The repository could not be read.'}{view.earlier.length ? ' Showing what the coding agent reported.' : ''} <button type="button" className="rail-link" onClick={repository.refresh}>Try again</button></span></p>}
+      {view.fromRepository && repo && repo.files.length === 0 && <p className="rail-note">{repoName ? `No uncommitted changes in ${repoName}.` : 'No uncommitted changes.'}{view.earlier.length ? ' Earlier edits from this conversation are below.' : ''}</p>}
+      {!repository.loading && !repo && !repository.failed && total === 0 && <p className="rail-note">Files the coding agent edits appear here with their diff.</p>}
+      {view.repository.length > 0 && <ul className="rail-files">{view.repository.map(changeRow)}</ul>}
+      {view.fromRepository && repo?.truncated && <p className="rail-note">The repository has more changed files than are listed here. {openFolder ?? 'Open the folder to see all of them.'}</p>}
+      {view.earlier.length > 0 && <>
+        {view.fromRepository && <h4 className="rail-subhead">Edited earlier in this conversation</h4>}
+        <ul className="rail-files">{view.earlier.map(changeRow)}</ul>
+      </>}
+    </Card>
+
+    <Card id="checkpoints" title="Changes by turn">
+      <CheckpointsBody session={session} active={active} onChanged={repository.refresh} />
     </Card>
   </div>
 }

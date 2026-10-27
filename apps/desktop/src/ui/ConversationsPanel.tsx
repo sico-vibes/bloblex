@@ -2,11 +2,12 @@
 // selected bot in its project, newest first, with bot-to-bot conversations
 // branching under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Archive, ArrowLeftRight, ChevronRight, PanelLeftClose, Pencil, SquarePen, Trash2 } from 'lucide-react'
+import { Archive, ArrowLeftRight, ChevronRight, PanelLeftClose, Pencil, Search, SquarePen, Trash2 } from 'lucide-react'
 import type { Agent, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
+import { presentedSessionState } from './sessionOutcome'
 import { ancestorIds, conversationTree, isEmptyConversation, sessionIsBusy, sideTitle, type ConversationNode } from './teamSelectors'
 import './conversationsPanel.css'
 
@@ -35,6 +36,25 @@ function isToday(value: unknown, now: number) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
+/** More conversations than this get a filter field. */
+const FILTER_THRESHOLD = 7
+
+function countNodes(nodes: readonly ConversationNode[]): number {
+  return nodes.reduce((total, node) => total + 1 + countNodes(node.children), 0)
+}
+
+/** Keeps a node when its own title matches every word, or when a conversation under it does. */
+function filterTree(nodes: readonly ConversationNode[], words: readonly string[], titleOf: (node: ConversationNode) => string): ConversationNode[] {
+  if (!words.length) return [...nodes]
+  const kept: ConversationNode[] = []
+  for (const node of nodes) {
+    const children = filterTree(node.children, words, titleOf)
+    const title = titleOf(node).toLocaleLowerCase()
+    if (words.every((word) => title.includes(word)) || children.length) kept.push({ ...node, children })
+  }
+  return kept
+}
+
 export function ConversationsPanel({ agent, agents, sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, onRename, onArchive, onDelete, onClose }: {
   agent: Agent
   agents: readonly Agent[]
@@ -54,6 +74,11 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
   // Conversations nothing was said in are not listed, except the open one.
   const tree = useMemo(() => conversationTree(sessions.filter((session) => session.id === selectedSessionId || !isEmptyConversation(session)), agent.id, agent.projectId ?? null), [sessions, agent.id, agent.projectId, selectedSessionId])
   const activeId = sideSessionId ?? selectedSessionId
+  const [query, setQuery] = useState('')
+  const titleOf = (node: ConversationNode) => node.kind === 'side' ? sideTitle(node.session, agents as Agent[]) : (node.session.title?.trim() || 'New chat')
+  const total = useMemo(() => countNodes(tree), [tree])
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  const shown = words.length ? filterTree(tree, words, titleOf) : tree
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [renaming, setRenaming] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -64,13 +89,16 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
     if (above.length) setExpanded((current) => { const next = new Set(current); for (const id of above) next.add(id); return next })
   }, [tree, activeId])
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
-  const today = tree.filter((node) => isToday(node.session.updatedAt ?? node.session.createdAt, now))
-  const earlier = tree.filter((node) => !isToday(node.session.updatedAt ?? node.session.createdAt, now))
+  const today = shown.filter((node) => isToday(node.session.updatedAt ?? node.session.createdAt, now))
+  const earlier = shown.filter((node) => !isToday(node.session.updatedAt ?? node.session.createdAt, now))
 
   const renderNode = (node: ConversationNode, depth: number) => {
     const { session } = node
-    const open = expanded.has(session.id)
+    const open = expanded.has(session.id) || words.length > 0
     const busy = sessionIsBusy(session)
+    const state = String(presentedSessionState(session) ?? '').toLowerCase()
+    const needsYou = state === 'waiting_permission'
+    const failed = state === 'error' || state === 'failed'
     const active = session.id === activeId
     const peer = node.kind === 'side' ? agents.find((item) => item.id === (node.role === 'sender' ? session.agentId : session.link?.peerAgentId)) : undefined
     const peerName = peer?.name ?? (node.role === 'receiver' ? session.link?.peerName : undefined) ?? 'Teammate'
@@ -89,7 +117,7 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
               <span className="convo-title">{title}</span>
               {node.kind === 'side' && <span className="convo-sub">{node.role === 'sender' ? `Asked ${peerName}` : `From ${peerName}`}</span>}
             </span>
-            {busy ? <i className="convo-dot" aria-label="Working" /> : <time className="convo-time">{relativeTime(session.updatedAt ?? session.createdAt, now)}</time>}
+            {needsYou ? <span className="convo-flag needs">Needs you</span> : failed ? <span className="convo-flag failed">Failed</span> : busy ? <i className="convo-dot" aria-label="Working" /> : <time className="convo-time">{relativeTime(session.updatedAt ?? session.createdAt, now)}</time>}
           </button>}
         {node.kind === 'main' && renaming !== session.id && <span className="convo-actions">
           <button type="button" className="convo-action" aria-label={`Rename ${title}`} title="Rename" onClick={() => setRenaming(session.id)}><Pencil size={12} aria-hidden="true" /></button>
@@ -105,11 +133,13 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
     <div className="convo-head">
       <strong>Conversations</strong>
       <span className="convo-head-actions">
-        <button type="button" className="icon-button small" aria-label="New conversation" title="New conversation" disabled={!canCreate} onClick={onNew}><SquarePen size={14} /></button>
+        <button type="button" className="ghost-button small convo-new" aria-label="New conversation" title="Start a separate conversation with this bot" disabled={!canCreate} onClick={onNew}><SquarePen size={13} aria-hidden="true" />New chat</button>
         <button type="button" className="icon-button small" aria-label="Hide conversations" title="Hide conversations" onClick={onClose}><PanelLeftClose size={14} /></button>
       </span>
     </div>
+    {total > FILTER_THRESHOLD && <label className="convo-filter"><Search size={13} aria-hidden="true" /><input type="search" value={query} placeholder="Find a conversation" aria-label="Find a conversation" spellCheck={false} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') } }} /></label>}
     <div className="convo-scroll">
+      {tree.length > 0 && shown.length === 0 && <p className="convo-empty">No conversation matches “{query.trim()}”.</p>}
       {tree.length === 0 && <p className="convo-empty">No conversations with {agent.name} yet.</p>}
       {today.length > 0 && <section aria-label="Today"><h3 className="convo-group">Today</h3><ul role="tree" className="convo-list">{today.map((node) => renderNode(node, 0))}</ul></section>}
       {earlier.length > 0 && <section aria-label="Earlier"><h3 className="convo-group">Earlier</h3><ul role="tree" className="convo-list">{earlier.map((node) => renderNode(node, 0))}</ul></section>}

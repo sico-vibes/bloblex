@@ -10,6 +10,7 @@ use crate::{agent_error, bot_is_locked, derr, locked_bot_error, new_session, App
 use axum::http::StatusCode;
 use bloblex_agent_core::{ExecOptions, McpServerSpec};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -39,6 +40,28 @@ pub struct Team {
 #[derive(Clone)]
 struct Queued { text: String, meta: Value, depth: u32 }
 
+/// Whether a waiting item is the same delivery: one assignment's brief, one
+/// assignment's reply, or one request's update, is never queued twice. An update
+/// is told apart by its request id, so two requests on one assignment both go out
+/// while neither is queued twice.
+fn same_delivery(item: &Queued, meta: &Value) -> bool {
+    let Some(id) = meta["delegationId"].as_str().filter(|id| !id.is_empty()) else { return false };
+    item.meta["delegationId"].as_str() == Some(id)
+        && item.meta["kind"] == meta["kind"]
+        && item.meta["requestId"] == meta["requestId"]
+}
+
+/// Adds one delivery to a session's queue, at the back or at the front, unless
+/// that same delivery already waits there. Returns `(pushed, was_empty)`.
+fn enqueue(queues: &mut HashMap<String, VecDeque<Queued>>, session_id: &str, text: String, meta: Value, depth: u32, front: bool) -> (bool, bool) {
+    let queue = queues.entry(session_id.to_owned()).or_default();
+    let was_empty = queue.is_empty();
+    if queue.iter().any(|item| same_delivery(item, &meta)) { return (false, was_empty); }
+    let item = Queued { text, meta, depth };
+    if front { queue.push_front(item); } else { queue.push_back(item); }
+    (true, was_empty)
+}
+
 /// The tags line the team tools add to a project or a bot, or an empty string.
 fn tags_suffix(tags: &Value) -> String {
     let list = tags.as_array().map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
@@ -60,11 +83,56 @@ impl Team {
         let grants = self.grants.lock().unwrap();
         grants.iter().find(|(candidate, _)| bloblex_security::capability_matches(candidate, token)).map(|(_, session)| session.clone())
     }
+    /// The hop depth a session's current turn is running at, so a delivery made
+    /// from outside this module (a child's pending request) carries it too.
+    pub(crate) fn depth_of(&self, session_id: &str) -> u32 {
+        self.depth.lock().unwrap().get(session_id).copied().unwrap_or(0)
+    }
     #[cfg(test)]
     pub fn set_depth(&self, session_id: &str, depth: u32) { self.depth.lock().unwrap().insert(session_id.to_owned(), depth); }
     pub fn forget(&self, session_id: &str) {
         if let Some(token) = self.tokens.lock().unwrap().remove(session_id) { self.grants.lock().unwrap().remove(&token); }
         self.depth.lock().unwrap().remove(session_id);
+    }
+    /// A restart puts a persisted brief back behind whatever the queue already
+    /// holds. It writes no notice: the "Waiting for" line is already in the
+    /// transcript, and this is the same delivery continuing. A brief that is
+    /// already waiting (a row that was both persisted and still in memory) is
+    /// not added a second time.
+    pub(crate) async fn restore_queued(&self, session_id: &str, text: String, meta: Value, depth: u32) {
+        enqueue(&mut *self.queued.lock().await, session_id, text, meta, depth, false);
+    }
+    /// Takes the waiting brief of one assignment out of a session's queue, so a
+    /// cancelled assignment is never delivered. Returns how many items went.
+    pub(crate) async fn cancel_queued(&self, session_id: &str, delegation_id: &str) -> usize {
+        let mut queues = self.queued.lock().await;
+        let Some(queue) = queues.get_mut(session_id) else { return 0 };
+        let before = queue.len();
+        queue.retain(|item| item.meta["delegationId"].as_str() != Some(delegation_id));
+        before - queue.len()
+    }
+    /// Takes the wakes of one assignment out of a session's queue (Lane V1): once
+    /// the assignment is over its pending wake is dropped, and a notice still
+    /// waiting in memory must not go out afterwards. Other items of the same
+    /// assignment, and every other assignment's, are left where they are.
+    pub(crate) async fn cancel_queued_wakes(&self, session_id: &str, delegation_id: &str) -> usize {
+        let mut queues = self.queued.lock().await;
+        let Some(queue) = queues.get_mut(session_id) else { return 0 };
+        let before = queue.len();
+        queue.retain(|item| !(item.meta["kind"] == "blob_update" && item.meta["delegationId"].as_str() == Some(delegation_id)));
+        before - queue.len()
+    }
+    /// Takes one request's wake out of a session's queue, leaving a newer request's
+    /// wake on the same assignment alone: the request it announced was answered or
+    /// dismissed, so that notice is no longer meaningful.
+    pub(crate) async fn cancel_queued_wake(&self, session_id: &str, delegation_id: &str, request_id: &str) -> usize {
+        let mut queues = self.queued.lock().await;
+        let Some(queue) = queues.get_mut(session_id) else { return 0 };
+        let before = queue.len();
+        queue.retain(|item| !(item.meta["kind"] == "blob_update"
+            && item.meta["delegationId"].as_str() == Some(delegation_id)
+            && item.meta["requestId"].as_str() == Some(request_id)));
+        before - queue.len()
     }
     #[cfg(test)]
     pub(crate) async fn enqueue_for_test(&self, session_id: &str, text: &str) {
@@ -192,19 +260,83 @@ async fn repo_is_busy_elsewhere(st: &AppState, origin: &str, repo: &Path) -> boo
         .await.unwrap_or(false)
 }
 
-/// FIX39 P10: give a code-writing delegation its own git worktree when its
-/// project is a git repo and another task is working there. Returns the record
-/// to store on the side conversation, or `None` to run in the shared folder
-/// (non-git project, research bot, no clash, or any git error).
-pub(crate) async fn prepare_worktree(st: &AppState, origin: &str, project_path: &Path, title: &str, target: &Value) -> Option<Value> {
-    if is_research_agent(target) { return None; }
-    let path = project_path.to_path_buf();
-    let repo = tokio::task::spawn_blocking(move || crate::worktree::repo_root(&path)).await.ok().flatten()?;
-    if !repo_is_busy_elsewhere(st, origin, &repo).await { return None; }
-    let (repo_for_create, topic) = (repo.clone(), title.to_owned());
-    let worktree = tokio::task::spawn_blocking(move || crate::worktree::create(&repo_for_create, &topic)).await.ok()?.ok()?;
-    Some(worktree.to_json())
+/// FIX39 P10 + DELEGATION item 4: give a code-writing delegation its own git
+/// worktree when its project is a git repo and another task is working there.
+/// Isolation has three outcomes, and they are not the same thing: made, not
+/// applicable (no clash, a research bot, or a folder that is no repository) and
+/// tried but failed. Only the last one is reported to the owner.
+pub(crate) struct WorktreeAttempt {
+    /// The record to store on the side conversation, when a copy was made.
+    pub worktree: Option<Value>,
+    /// Why isolation was tried and did not happen, in plain words.
+    pub error: Option<String>,
 }
+
+fn shared(reason: Option<String>) -> WorktreeAttempt { WorktreeAttempt { worktree: None, error: reason } }
+
+pub(crate) async fn prepare_worktree_attempt(st: &AppState, origin: &str, project_path: &Path, title: &str, target: &Value) -> WorktreeAttempt {
+    if is_research_agent(target) { return shared(None); }
+    let path = project_path.to_path_buf();
+    // A `.git` entry (a folder, or the file a linked worktree has) tells "git is
+    // unavailable or refused" apart from "this folder is simply not a repository".
+    let looks_like_repo = path.join(".git").exists();
+    let repo = match tokio::task::spawn_blocking(move || crate::worktree::repo_root(&path)).await {
+        Ok(Some(repo)) => repo,
+        _ if !looks_like_repo => return shared(None),
+        _ => return shared(Some("Git could not be reached to make a separate copy of the project.".to_owned())),
+    };
+    if !repo_is_busy_elsewhere(st, origin, &repo).await { return shared(None); }
+    let (repo_for_create, topic) = (repo, title.to_owned());
+    match tokio::task::spawn_blocking(move || crate::worktree::create(&repo_for_create, &topic)).await {
+        Ok(Ok(worktree)) => WorktreeAttempt { worktree: Some(worktree.to_json()), error: None },
+        // `create` answers in plain sentences and never panics, so its reason is
+        // the one to show.
+        Ok(Err(reason)) => shared(Some(reason)),
+        Err(_) => shared(Some("The separate copy of the project could not be made.".to_owned())),
+    }
+}
+
+/// The worktree record alone. Kept beside [`prepare_worktree_attempt`] for the
+/// P10 tests, which only assert whether a copy was made.
+#[cfg(test)]
+pub(crate) async fn prepare_worktree(st: &AppState, origin: &str, project_path: &Path, title: &str, target: &Value) -> Option<Value> {
+    prepare_worktree_attempt(st, origin, project_path, title, target).await.worktree
+}
+
+/// A one-line reason for an isolation failure: no command output past its first
+/// line, no home-folder path, at most 200 characters.
+fn short_reason(raw: &str) -> String {
+    let mut text = raw.lines().next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+    for key in ["USERPROFILE", "HOME"] {
+        if let Ok(home) = std::env::var(key) {
+            let home = home.trim();
+            if home.len() > 3 {
+                text = text.replace(home, "the home folder");
+                text = text.replace(&home.replace('\\', "/"), "the home folder");
+            }
+        }
+    }
+    text.chars().take(200).collect()
+}
+
+/// The chart and table block schemas, appended to every bot's instructions.
+///
+/// This text is the contract with the renderer in
+/// `apps/desktop/src/ui/richData.ts`: the fences, the field names and the limits
+/// are what it accepts, so the wording and the JSON examples are kept verbatim.
+const CHART_TABLE_INSTRUCTIONS: &str = concat!(
+    "Charts and tables in chat. The Bitbots window draws two fenced block types as interactive views. Use them only for numbers and rows you actually have from the user, your tools, files or commands in this conversation. Never invent, estimate or pad values to make a chart; if you do not have the data, say so or fetch it first. A plain Markdown table is fine for a short list; use a chart when the user asks for a chart, graph or plot, or when comparing numbers across categories or over time is the point. Add one sentence outside the block saying what it shows and where the data came from.",
+    "\n\n```bitbots-chart\n",
+    r#"{"type":"bar","title":"Build time by job","unit":"s","categories":["lint","test","bundle"],"series":[{"name":"main","values":[12.4,98.1,45]}]}"#,
+    "\n```\n\n",
+    r#""type" is "bar" or "line". "categories" are strings. Each series has a "name" and exactly one number per category (null for a missing value). Use at most 6 series and 200 categories, and one unit for the whole chart: put measures with different units in separate charts. Optional: "title", "caption", "unit". Shorthand for one series: {"type":"bar","data":[{"label":"lint","value":12.4}]}."#,
+    "\n\n```bitbots-table\n",
+    r##"{"title":"Open issues","columns":["Issue","Owner","Age (days)"],"rows":[["#12","Sam",4],["#15","Ada",9]]}"##,
+    "\n```\n\n",
+    r#""columns" are names; each row is a list in column order (or an object keyed by column name); at most 24 columns and 1000 rows; keep numbers as numbers. Each block must be valid JSON on its own with nothing else inside the fence. Plain Markdown tables and csv code blocks are also shown as sortable tables.
+
+Showing files. To show a file from the project folder, write ![short description](relative/path.png) on its own line for an image, or [name](relative/path.pdf) as a link for a PDF, audio, video or text file. Only files that exist inside the project folder can be shown, so create or save the file first and use its real path."#,
+);
 
 /// Bitbots context appended to every blob session's system instructions.
 pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspace: &std::path::Path) -> String {
@@ -228,8 +360,9 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
     });
     if agent["systemRole"].as_str() == Some("manager") {
         lines.push(format!("You are {name}, the user's Manager: chat like a capable team lead. Ground yourself with list_projects and list_blobs, then route by role, description, tags and project. Resolve any project mentioned by name, tags or context before acting; when unsure, ask_user with concrete options. With no project, research goes to a free bot tagged researcher; for project P, use P's researcher. If none fits, propose_bot for that project (or propose_project when a project is needed); do small things yourself when appropriate; you ask the user before creating projects, bots or assigning tasks."));
-        lines.push("Read details with your read tools, and make every write an approval card: creating or updating projects and bots, assigning or messaging, opening a conversation and changing a permission are all proposed and wait for the owner. Your notes list the exact tool names. Fill brief/message, doneGoal and reportBack yourself from the chat; never ask the user to fill a task form. Use a new topic for parallel work or conversation to follow up. Locked bots refuse settings changes; never propose Full access. After proposing, say briefly who will do what and end your turn. Approval outcomes are recorded here; teammate replies arrive later and wake you to report back.".into());
+        lines.push("Read details with your read tools, and make consequential changes an approval card: creating or updating projects and bots, assigning a task, opening a conversation and changing a permission are proposed and wait for the owner. A message to a teammate is not consequential: `message_blob` is sent at once with no approval, so use it for ordinary delegation and only use `assign_task` when the user wants the work tracked as a task. Fill the brief or message yourself, and for a task also doneGoal and reportBack; never ask the user to fill a task form. Use a new topic for parallel work or conversation to follow up. Locked bots refuse settings changes; never propose Full access. After delegating, say briefly who will do what and end your turn. Approval outcomes are recorded here; teammate replies arrive later and wake you to report back.".into());
         lines.push("Your notes about the user and your playbook are yours across model changes: keep the profile current with `remember_about_user` (read it with `recall_about_user`), and propose playbook edits with `update_playbook`. Never store secrets in either.".to_owned());
+        lines.push("A message that starts with [Update from NAME] means a teammate is waiting for the user to approve or answer something in that teammate's own conversation. Tell the user briefly which teammate and what is being asked, point them to that conversation, and do not try to answer for them, approve anything, or send the task again.".to_owned());
     } else {
         match st.db.manager_agent().ok().flatten() {
             Some(manager) => lines.push(format!("You cannot create projects or {nouns}; the Manager does that. If the user asks you to, say so briefly and tag the Manager as @{} so the user can ask them.", agent_name(&manager))),
@@ -238,13 +371,18 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
     }
     lines.push(String::new());
     lines.push("Teammates are separate agents with their own tools and memory. Use the bloblex tools: `list_blobs` shows the team (name, role, what each is for, whether they are busy); `message_blob` sends one teammate a message in a private side conversation between the two of you; `list_conversations` lists your side conversations, each with a short topic.".into());
-    lines.push(format!("When the user tags a {noun} with @Name, or asks you to hand work to someone, write that teammate a self-contained brief (they cannot see this conversation: include the goal, context, paths, constraints and what to send back) and send it with `message_blob` (the Manager fills doneGoal and reportBack too, and waits for approval). Then tell the user in one short sentence who you asked and end your turn: do not wait, poll or sleep. The reply arrives later in this conversation as a message starting with \"[Reply from <name>]\". When it arrives, report to the user: what they did or found, your own verdict, and any open questions."));
+    lines.push(format!("When the user tags a {noun} with @Name, or asks you to hand work to someone, write that teammate a self-contained brief (they cannot see this conversation: include the goal, context, paths, constraints and what to send back) and send it with `message_blob`. Then tell the user in one short sentence who you asked and end your turn: do not wait, poll or sleep. The reply arrives later in this conversation as a message starting with \"[Reply from <name>]\". When it arrives, report to the user: what they did or found, your own verdict, and any open questions."));
     lines.push("Each side conversation has a topic, like a chat title. Before messaging a teammate, check `list_conversations`: if one you started with them is about the same subject, continue it by passing its id as `conversation` (they keep the context there). Otherwise start a new one and give it a short `topic` of 3 to 6 words. When the user references a conversation with #, continue that one.".into());
+    // Every bot, Manager and side conversations included: the renderer contract
+    // for charts and tables sits after the delegation lines and before the
+    // side-conversation block.
+    lines.push(CHART_TABLE_INSTRUCTIONS.into());
     if link["kind"] == "side" {
         let peer = link["peerName"].as_str().unwrap_or(noun.as_str());
         lines.push(String::new());
         lines.push(format!("This is a side conversation. Messages here come from {peer}, another {noun}, not from the user. Do what {peer} asks and answer them directly; your final message each turn is delivered back to {peer} automatically. Keep it focused: results, evidence and open questions."));
         if let Some(topic) = link["topic"].as_str().filter(|topic| !topic.trim().is_empty()) { lines.push(format!("Topic of this conversation: {topic}.")); }
+        lines.push("If you need a decision or information only the user can give, use the ask_user tool, then end your turn. Your Manager is told you are waiting, but only the user can answer; their answer arrives as your next message. Do not ask the Manager to answer for the user.".into());
     }
     format!("<bloblex_team>\n{}\n</bloblex_team>", lines.join("\n"))
 }
@@ -288,7 +426,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
     let mut list: Vec<Value> = vec![
         json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the Manager.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}}),
-        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
+        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Use it whenever the user asks you to message, ask or hand work to a teammate: it is sent at once, with no approval card. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
         json!({"name":"schedule_task","description":format!("Propose a scheduled task for your {noun}. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":format!("List this {noun}'s scheduled tasks, whether each is enabled, and when it next runs."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
@@ -301,12 +439,6 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         // The board draft tool: creates only, never assigns or dispatches.
         list.push(json!({"name":"create_task","description":format!("Create an unassigned task on the user's task board. It is a draft: it has no bot, does not run and cannot be scheduled. The user decides which {noun} gets it by dragging it in Bitbots. Use it when the user asks for work to be tracked on the board; use message_blob for ordinary delegation."),"inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"A short title, 1 to 120 characters."},"brief":{"type":"string","description":"The full brief: goal, context, paths and constraints."},"doneGoal":{"type":"string","description":"What must be true for the task to count as done."},"reportBack":{"type":"string","description":"What the bot should report when it stops."},"projectId":{"type":"string","description":"The project this task belongs to (optional)."},"parentTaskId":{"type":"string","description":"The parent task, when this is a follow-up (optional)."},"images":{"description":"Images the user attached in this conversation that the task needs: a list of their numbers (1 is the first image the user sent here, 2 the next, and so on) or the word all. Optional.","anyOf":[{"type":"array","items":{"type":"integer","minimum":1},"maxItems":8},{"type":"string","enum":["all"]}]}},"required":["title","brief","doneGoal","reportBack"],"additionalProperties":false}}));
         for tool in &mut list {
-            if tool["name"] == "message_blob" {
-                tool["description"] = json!("Propose messaging a teammate. Supply the brief, doneGoal and reportBack yourself; the owner only approves the card. For parallel work give a new topic; to continue pass conversation. Nothing is sent before approval.");
-                let props = tool["inputSchema"]["properties"].as_object_mut().unwrap();
-                for key in ["doneGoal", "reportBack", "project"] { props.insert(key.into(), json!({"type":"string"})); }
-                tool["inputSchema"]["required"] = json!(["blob","message","doneGoal","reportBack"]);
-            }
             if tool["name"] == "list_blobs" {
                 tool["description"] = json!("List bots with ids, role, description, tags, project and busy/available status. Filter by project (id/name), role, tag or freeOnly. Research without a project uses a free researcher (freeOnly = not tied to a project); a named project uses its own researcher, or propose_bot if none fits.");
                 tool["inputSchema"]["properties"] = json!({"project":{"type":"string","description":"A project id or exact name."},"role":{"type":"string"},"tag":{"type":"string"},"freeOnly":{"type":"boolean","description":"true means bots not tied to a project (free bots), not merely idle."}});
@@ -336,12 +468,11 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
     // are allowed, but only while the feature is on and only blob scope.
     let session = st.db.session_detail(session_id).ok();
     let is_automation = session.as_ref().map(|row| crate::is_unattended(&row["link"])).unwrap_or(false);
-    // `ask_user` is offered in a bot's own conversation, whatever the provider
-    // (FIX36 D2 removed the OpenCode-only gate). It stays out of automation runs
-    // and side conversations, where there is no user to answer.
-    let ask_user = session.as_ref().is_some_and(|row| {
-        row["archived"] != true && !matches!(row["link"]["kind"].as_str(), Some("side" | "automation")) && !crate::is_unattended(&row["link"])
-    });
+    // `ask_user` is offered wherever someone can answer, whatever the provider
+    // (FIX36 D2 removed the OpenCode-only gate). A delegated side conversation
+    // is allowed too, as long as nothing in its origin chain is unattended: the
+    // owner answers there, and the Manager is only told it is waiting.
+    let ask_user = session.as_ref().is_some_and(|row| crate::questions::may_ask(st, row).is_ok());
     let memory_enabled = crate::memory::enabled(st);
     if is_automation && method.starts_with("automation.") {
         return Err(derr("forbidden", "Automation runs cannot change automations.", StatusCode::FORBIDDEN));
@@ -370,8 +501,18 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "list_blobs" => list_blobs(st, session_id).await,
                 "list_conversations" if is_manager => manager_conversations(st, session_id, args),
                 "list_conversations" => list_conversations(st, session_id, args).await,
-                "message_blob" if is_manager => crate::proposals::propose_message(st, session_id, args).await,
-                "message_blob" => message_blob(st, session_id, args).await,
+                // Messaging is not consequential: it is delivered at once for
+                // every bot, the Manager included. Consequential changes
+                // (projects, bots, permissions, assign_task) stay proposals.
+                // The archived guard stays: an archived Manager conversation
+                // cannot message either.
+                "message_blob" => {
+                    if is_manager && session.as_ref().is_some_and(|row| row["archived"] == true) {
+                        Err("This conversation is archived.".into())
+                    } else {
+                        message_blob(st, session_id, args).await
+                    }
+                }
                 "list_projects" if is_manager => list_projects(st).await,
                 "update_blob" if is_manager => crate::proposals::propose_update(st, session_id, "bot", args).await,
                 "update_project" if is_manager => crate::proposals::propose_update(st, session_id, "project", args).await,
@@ -392,7 +533,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "schedule_task" => crate::automations::schedule_task_tool(st, session_id, args).await,
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
-                "ask_user" => Err("ask_user is available in a bot's own conversation; not in side conversations or scheduled runs.".into()),
+                "ask_user" => Err("ask_user is not available in this conversation.".into()),
                 "memory_search" if memory_enabled => crate::memory::tool_search(st, session_id, args).await,
                 "memory_get" if memory_enabled => crate::memory::tool_get(st, session_id, args).await,
                 "memory_write" if memory_enabled => crate::memory::tool_write(st, session_id, args).await,
@@ -495,20 +636,106 @@ pub(crate) struct Delegation {
     /// FIX39 item 18: the Manager must not be told work is running when it is
     /// only waiting for a slot.
     pub started: bool,
+    /// Why a queued assignment has not started: `busy` (its conversation is
+    /// mid-turn) or `slots` (every global slot is taken). `None` when it started.
+    pub queue_reason: Option<String>,
+    /// The assignment's status when this call replayed a brief that was already
+    /// sent: nothing was recorded or delivered a second time.
+    pub duplicate: Option<String>,
+}
+
+/// One brief is one assignment: the Manager's turn, the sender, the target and the
+/// brief's own text. `None` without an origin turn, because a call outside a turn
+/// cannot be a replay of itself.
+fn delegation_dedupe_key(origin_turn: Option<&str>, origin: &str, from: &str, target: &str, message: &str) -> Option<String> {
+    let turn = origin_turn.filter(|turn| !turn.is_empty())?;
+    let mut hasher = Sha256::new();
+    for part in [origin, turn, from, target] {
+        hasher.update(part.as_bytes());
+        hasher.update([0u8]);
+    }
+    hasher.update(message.as_bytes());
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Why this teammate's runtime cannot start a turn right now, as a sentence the
+/// Manager can act on. This is the lookup `new_session` uses, and nothing else is
+/// re-checked here: approval rules are untouched.
+async fn unavailable_runtime(st: &AppState, target: &Value) -> Option<String> {
+    let name = agent_name(target);
+    let runtime_id = target["runtimeId"].as_str().unwrap_or("");
+    let runtimes = st.runtimes.read().await;
+    let Some(runtime) = runtimes.iter().find(|runtime| runtime["id"].as_str() == Some(runtime_id)) else {
+        return Some(format!("{name} has no installed runtime any more, so it cannot start work. Ask the user to choose a runtime for {name}, or pick another teammate."));
+    };
+    let provider = runtime["provider"].as_str().unwrap_or("");
+    // Presence and a usable adapter are what `new_session` needs before it can
+    // even try; the executable's own preflight stays there, and its message names
+    // the target, so nothing is duplicated here.
+    if provider.is_empty() || crate::adapter_for(&st.adapters, provider).is_none() {
+        return Some(format!("{name}'s runtime is not usable by Bitbots any more, so it cannot start work. Ask the user to fix {name}'s runtime, or pick another teammate."));
+    }
+    None
+}
+
+/// The delegation a replayed brief already recorded, with nothing recorded or
+/// delivered a second time.
+fn already_sent(row: &Value, target_name: &str) -> Delegation {
+    Delegation {
+        side: row["sideSessionId"].as_str().unwrap_or("").to_owned(),
+        title: row["topic"].as_str().unwrap_or("").to_owned(),
+        target_name: target_name.to_owned(),
+        started: row["status"] == "running",
+        queue_reason: row["queueReason"].as_str().map(str::to_owned),
+        duplicate: Some(row["status"].as_str().unwrap_or("").to_owned()),
+    }
 }
 
 async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
     let delegation = delegate(st, session_id, args).await?;
     let (target_name, title, side) = (&delegation.target_name, &delegation.title, &delegation.side);
+    // A replayed call is answered with the assignment that really exists, never
+    // with a second delivery.
+    if let Some(status) = &delegation.duplicate {
+        let state = match status.as_str() {
+            "completed" => "it has finished",
+            "failed" => "it failed",
+            "cancelled" => "it was cancelled",
+            "interrupted" => "a restart interrupted it",
+            "queued" => "it is still waiting its turn",
+            _ => "it is still running",
+        };
+        let reply = if matches!(status.as_str(), "queued" | "running") {
+            format!("Its reply will arrive here as a message starting with \"[Reply from {target_name}]\".")
+        } else {
+            "Whatever it reported has already arrived here.".to_owned()
+        };
+        return Ok(format!("That brief was already sent to {target_name} in \"{title}\" (conversation {side}) for this turn and was not sent again; {state}. {reply} Tell the user you already asked {target_name} and end your turn now."));
+    }
     let state = if delegation.started {
         "They are working on it"
-    } else {
+    } else if delegation.queue_reason.as_deref() == Some("busy") {
         "They are finishing another conversation, so this one is queued and starts as soon as a slot frees"
+    } else if delegation.queue_reason.as_deref() == Some("slots") {
+        "Every bot slot is busy right now, so this one is queued and starts as soon as one frees"
+    } else {
+        "It is queued and starts as soon as a slot frees"
     };
     Ok(format!("Sent to {target_name} in \"{title}\" (conversation {side}). {state}; their reply will arrive here as a message starting with \"[Reply from {target_name}]\". Tell the user you asked {target_name} and end your turn now."))
 }
 
+/// A Manager-initiated hand-off: the global pause (`delegation.paused`) applies.
 pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> Result<Delegation, String> {
+    delegate_with(st, session_id, args, true).await
+}
+
+/// A hand-off the owner approved in the chat. The pause never blocks it: the owner just decided, and a pause must not
+/// make an approval fail.
+pub(crate) async fn delegate_approved(st: &AppState, session_id: &str, args: &Value) -> Result<Delegation, String> {
+    delegate_with(st, session_id, args, false).await
+}
+
+async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pause: bool) -> Result<Delegation, String> {
     let message = args["message"].as_str().map(str::trim).filter(|m| !m.is_empty()).ok_or("message is required.")?.to_owned();
     if message.len() > 200_000 { return Err("The message is too long; keep briefs under 200 KB.".into()); }
     let from_row = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.")?;
@@ -516,16 +743,55 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
     let from = st.db.agent_get(&from_id).map_err(|_| format!("Your {} is no longer available.", entity_noun(false)))?;
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
     let names = agents.iter().filter(|a| a["id"] != from_id.as_str() && a["hidden"] != true).map(agent_name).collect::<Vec<_>>().join(", ");
-    let target = resolve_blob(&agents, args["blob"].as_str().unwrap_or("")).ok_or_else(|| format!("No teammate is called that. Teammates: {names}."))?;
+    let wanted = args["blob"].as_str().unwrap_or("");
+    // A teammate nobody can reach is named in the refusal, so the Manager learns
+    // why it is not on the list instead of only that the name is unknown.
+    let target = match resolve_blob(&agents, wanted) {
+        Some(target) => target,
+        None => {
+            let all = st.db.agent_list(true, None).unwrap_or_default();
+            return Err(match resolve_blob(&all, wanted) {
+                Some(unreachable) if unreachable["archived"] == true => format!("{} is archived, so it cannot be reached. Ask the user to restore it, or pick another teammate. Teammates: {names}.", agent_name(&unreachable)),
+                Some(unreachable) if unreachable["hidden"] == true => format!("{} is hidden from the team, so work cannot be sent to it. Ask the user to show it in the team, or pick another teammate. Teammates: {names}.", agent_name(&unreachable)),
+                _ => format!("No teammate is called that. Teammates: {names}."),
+            });
+        }
+    };
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
+    let target_name = agent_name(&target);
     if target_id == from_id { return Err("You cannot message yourself.".into()); }
+    // Why this teammate cannot take work now, before any conversation is made.
+    if target["hidden"] == true {
+        return Err(format!("{target_name} is hidden from the team, so work cannot be sent to it. Ask the user to show it in the team, or pick another teammate."));
+    }
+    if bot_is_locked(&target) {
+        return Err(format!("{target_name} is locked, so it cannot start new work. Ask the user to unlock {target_name}, or pick another teammate."));
+    }
+    if let Some(reason) = unavailable_runtime(st, &target).await { return Err(reason); }
     let depth = st.team.depth.lock().unwrap().get(session_id).copied().unwrap_or(0) + 1;
     if depth > MAX_DEPTH { return Err(depth_error()); }
     let from_name = agent_name(&from);
-    let target_name = agent_name(&target);
     let topic = args["topic"].as_str().and_then(clean_topic);
-    let wanted = args["conversation"].as_str().map(str::trim).filter(|id| !id.is_empty());
-    let existing = match wanted {
+    // FIX47: the assignment is recorded against the Manager turn that sent it, so
+    // a replay of the same tool call can be recognised below.
+    let origin_turn = st.active_turns.lock().await.get(session_id).cloned();
+    let dedupe_key = delegation_dedupe_key(origin_turn.as_deref(), session_id, &from_id, &target_id, &message);
+    if let Some(key) = &dedupe_key {
+        if let Some(row) = st.db.delegation_find_by_dedupe(key).ok().flatten() {
+            return Ok(already_sent(&row, &target_name));
+        }
+    }
+    // Owner's global pause (Lane V1, item 3): a *new* assignment is refused while
+    // it is on. A replay above already returned its recorded row, so a pause never
+    // turns a replay into a refusal, and nothing that is already recorded,
+    // running, queued, approved or waiting is touched: this is the first check a
+    // new brief meets. One keyed settings read, and the sentence is the Manager's
+    // to relay.
+    if honour_pause && st.db.delegation_paused().unwrap_or(false) {
+        return Err("Delegation is paused. Ask the user to resume it in Manager settings, or do the work yourself.".into());
+    }
+    let wanted_conversation = args["conversation"].as_str().map(str::trim).filter(|id| !id.is_empty());
+    let existing = match wanted_conversation {
         Some(id) => Some(continuable(st, id, &from_id, &target_id, &target_name)?),
         // Without a topic or an id, keep talking in the latest conversation with
         // them, preferring the one this conversation started.
@@ -555,9 +821,15 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
             // FIX39 P10: when another task is already working in this git repo,
             // run this one in its own worktree instead, so the two cannot clash.
             let mut run_path = project_path;
-            if let Some(worktree) = prepare_worktree(st, session_id, &run_path, &title, &target).await {
+            let attempt = prepare_worktree_attempt(st, session_id, &run_path, &title, &target).await;
+            if let Some(worktree) = attempt.worktree {
                 if let Some(path) = worktree["path"].as_str() { run_path = PathBuf::from(path); }
                 link["worktree"] = worktree;
+            } else if let Some(reason) = attempt.error {
+                // Isolation was wanted and did not happen, so this runs in the
+                // shared folder. Record why, in the link, once: the workspace
+                // report shows it instead of claiming the folder is fine.
+                link["worktreeError"] = json!(short_reason(&reason));
             }
             let created = new_session(st, json!({"agentId":target_id,"projectPath":run_path,"title":title,"link":link.clone()})).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
@@ -573,16 +845,45 @@ pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> R
         }
     };
     // FIX39 item 18: with no per-bot cap, a delivery starts unless the
-    // conversation is mid-turn or every global slot is taken.
-    let started = !session_busy(st, &side).await && st.db.active_turn_reservation_count().unwrap_or(0) < crate::global_concurrency_limit(st).max(0) as u64;
+    // conversation is mid-turn or every global slot is taken. The reason travels
+    // with the row, so the Manager's board can say which of the two it is.
+    let busy = session_busy(st, &side).await;
+    let slots_full = st.db.active_turn_reservation_count().unwrap_or(0) >= crate::global_concurrency_limit(st).max(0) as u64;
+    let started = !busy && !slots_full;
+    let queue_reason = if started { None } else if busy { Some("busy") } else { Some("slots") };
+    let queue_reason = queue_reason.map(str::to_owned);
     let preview = message.chars().take(280).collect::<String>();
-    note_above_turn_text(st, session_id, &preview, json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side,"topic":title})).await;
+    // FIX47: the assignment is recorded before it is announced, so the Manager's
+    // conversation can show its own status for it (the side conversation's state
+    // is not the assignment's: several assignments can share one conversation).
+    // A ledger failure never blocks the message.
+    let side_row = st.db.session_detail(&side).ok();
+    let workspace_path = side_row.as_ref().and_then(|row| row["projectPath"].as_str()).unwrap_or_default().to_owned();
+    let worktree = side_row.as_ref().map(|row| row["link"]["worktree"].clone()).filter(Value::is_object);
+    let recorded = crate::delegations::record(st, json!({
+        "originSessionId": session_id, "originTurnId": &origin_turn, "sideSessionId": &side,
+        "fromAgentId": &from_id, "targetAgentId": &target_id, "topic": &title, "briefPreview": &preview,
+        "workspacePath": &workspace_path, "worktree": &worktree, "deliveryText": &message, "deliveryDepth": depth,
+        "dedupeKey": &dedupe_key, "queueReason": &queue_reason,
+    })).await;
+    // A concurrent replay lost the race to record: its row is the assignment, and
+    // nothing is announced or delivered here.
+    if let Some((row, created)) = &recorded {
+        if !*created { return Ok(already_sent(row, &target_name)); }
+    }
+    let delegation_id = recorded.as_ref().and_then(|(row, _)| row["id"].as_str().map(str::to_owned));
+    let mut notice = json!({"kind":"delegation","direction":"sent","peerAgentId":target_id,"peerName":target_name,"sideSessionId":side,"topic":title,"originTurnId":origin_turn});
+    if let Some(reason) = &queue_reason { notice["queueReason"] = json!(reason); }
+    if let Some(id) = &delegation_id { notice["delegationId"] = json!(id); }
+    note_above_turn_text(st, session_id, &preview, notice).await;
     let state = st.clone();
     let side_for_task = side.clone();
+    let mut meta = json!({"kind":"blob_message","fromAgentId":from_id,"fromName":from_name});
+    if let Some(id) = &delegation_id { meta["delegationId"] = json!(id); }
     tokio::spawn(async move {
-        deliver(&state, &side_for_task, message, json!({"kind":"blob_message","fromAgentId":from_id,"fromName":from_name}), depth, false).await;
+        deliver(&state, &side_for_task, message, meta, depth, false).await;
     });
-    Ok(Delegation { side, title, target_name, started })
+    Ok(Delegation { side, title, target_name, started, queue_reason, duplicate: None })
 }
 
 /// A conversation id the sender may continue: one they started with this teammate.
@@ -690,28 +991,73 @@ pub(crate) async fn note(st: &AppState, session_id: &str, content: &str, meta: V
     }
 }
 
+/// Whether a delivery went out now or is waiting for the conversation to be free.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Delivery { Sent, Queued }
+
 /// Prompts a session now, or queues the prompt until its current turn ends.
 /// `retry` is true when the drain is re-delivering an item it just popped, so a
 /// second refusal puts it back at the FRONT (order kept) and never writes a
 /// second "Waiting for" notice.
-async fn deliver(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32, retry: bool) {
+async fn deliver(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32, retry: bool) -> Delivery {
     if session_busy(st, session_id).await {
         if retry { requeue_front(st, session_id, text, meta, depth).await; }
         else { queue_delivery(st, session_id, text, meta, depth).await; }
-        return;
+        return Delivery::Queued;
     }
+    // FIX47: the delivery carries the ledger row it belongs to, so starting and
+    // failing update that assignment and not the side conversation's other ones.
+    // A reply carries the row it reports on as well, and an update from a side
+    // conversation its open assignment; neither starts nor fails that assignment:
+    // only a forwarded brief does.
+    let delegation = (!matches!(meta["kind"].as_str(), Some("blob_reply" | "blob_update")))
+        .then(|| meta["delegationId"].as_str()).flatten().map(str::to_owned);
     st.team.depth.lock().unwrap().insert(session_id.to_owned(), depth);
-    if let Err(error) = crate::session_prompt_for_team(st, json!({"sessionId":session_id,"text":text.clone(),"meta":meta.clone()})).await {
-        st.team.depth.lock().unwrap().remove(session_id);
-        if error.1.code == "conflict" {
-            // The global limit refused it. A retry goes back to the front with no
-            // new notice; a first arrival queues at the back and says so.
-            if retry { requeue_front(st, session_id, text, meta, depth).await; }
-            else { queue_delivery(st, session_id, text, meta, depth).await; }
-        } else {
-            relay_failure(st, session_id, &error.1.message).await;
+    match crate::session_prompt_for_team(st, json!({"sessionId":session_id,"text":text.clone(),"meta":meta.clone()})).await {
+        Ok(accepted) => {
+            if let Some(id) = delegation.as_deref() { crate::delegations::started(st, id, accepted["turnId"].as_str().unwrap_or("")).await; }
+            Delivery::Sent
+        }
+        Err(error) => {
+            st.team.depth.lock().unwrap().remove(session_id);
+            if error.1.code == "conflict" {
+                // The global limit refused it. A retry goes back to the front with no
+                // new notice; a first arrival queues at the back and says so.
+                // FIX47: a refused delivery has not started, so its row stays queued.
+                if retry { requeue_front(st, session_id, text, meta, depth).await; }
+                else { queue_delivery(st, session_id, text, meta, depth).await; }
+                Delivery::Queued
+            } else {
+                if let Some(id) = delegation.as_deref() { crate::delegations::failed(st, id, &error.1.message).await; }
+                relay_failure(st, session_id, &error.1.message, delegation.as_deref()).await;
+                // The sender was told the delivery failed, so nothing is waiting.
+                Delivery::Sent
+            }
         }
     }
+}
+
+/// The `[Reply from X]` relay into the Manager's conversation, with its ledger
+/// row attached so the relay is sent once per outcome and outlives a restart.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn deliver_reply(st: &AppState, origin: &str, side: &str, agent_id: &str, name: &str, text: String, delegation: Option<&str>, depth: u32) -> Delivery {
+    let mut meta = json!({"kind":"blob_reply","fromAgentId":agent_id,"fromName":name,"sideSessionId":side});
+    if let Some(id) = delegation { meta["delegationId"] = json!(id); }
+    deliver(st, origin, text, meta, depth, false).await
+}
+
+/// The `[Update from X]` notice into the Manager's conversation: a teammate's own
+/// conversation is waiting for the owner to approve or answer something. It goes
+/// through the same path as a reply, so a busy Manager queues it. It carries the
+/// assignment and the request id, which keeps one request from queueing twice,
+/// and it neither starts nor fails that assignment (only a brief does). It grants
+/// nothing: the request stays the owner's to answer where it was asked.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn deliver_update(st: &AppState, origin: &str, side: &str, agent_id: &str, name: &str, text: String,
+    delegation: &str, request_id: &str, request_kind: &str, title: &str, depth: u32) -> Delivery {
+    let meta = json!({"kind":"blob_update","fromAgentId":agent_id,"fromName":name,"sideSessionId":side,
+        "delegationId":delegation,"requestId":request_id,"requestKind":request_kind,"title":title});
+    deliver(st, origin, text, meta, depth, false).await
 }
 
 /// Queues one delivery behind a busy conversation and makes it visible. FIX39
@@ -725,14 +1071,12 @@ async fn queue_delivery(st: &AppState, session_id: &str, text: String, meta: Val
     let notify = meta["kind"] == "blob_message";
     // Only the first item that makes the queue non-empty writes the notice, so a
     // delivery retried as slots come and go does not stack "Waiting for" lines.
-    let was_empty = {
+    // The same brief is never queued twice, however often it is offered.
+    let (pushed, was_empty) = {
         let mut queues = st.team.queued.lock().await;
-        let queue = queues.entry(session_id.to_owned()).or_default();
-        let was_empty = queue.is_empty();
-        queue.push_back(Queued { text, meta, depth });
-        was_empty
+        enqueue(&mut queues, session_id, text, meta, depth, false)
     };
-    if !was_empty || !notify { return; }
+    if !pushed || !was_empty || !notify { return; }
     let name = st.db.session_detail(session_id).ok()
         .and_then(|row| row["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()))
         .map(|agent| agent_name(&agent))
@@ -745,7 +1089,26 @@ async fn queue_delivery(st: &AppState, session_id: &str, text: String, meta: Val
 /// (the global limit is held by another conversation), so re-delivering it must
 /// not move it behind messages that arrived after it.
 async fn requeue_front(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32) {
-    st.team.queued.lock().await.entry(session_id.to_owned()).or_default().push_front(Queued { text, meta, depth });
+    enqueue(&mut *st.team.queued.lock().await, session_id, text, meta, depth, true);
+}
+
+/// Whether a delivery that has reached the front belongs to an assignment that is
+/// already over: a cancelled (or otherwise finished) delegation must never be
+/// delivered. Only forward briefs and wakes are checked; a reply carries the id
+/// of the row it reports on, which is terminal by definition. A wake of a
+/// finished assignment is also no longer meaningful (Lane V1), and the caller
+/// records it dropped.
+fn stopped_delegation(st: &AppState, meta: &Value) -> bool {
+    if !matches!(meta["kind"].as_str(), Some("blob_message" | "blob_update")) { return false; }
+    let Some(id) = meta["delegationId"].as_str().filter(|id| !id.is_empty()) else { return false };
+    if meta["kind"] == "blob_update" {
+        if let Some(request) = meta["requestId"].as_str().filter(|request| !request.is_empty()) {
+            // Approvals can resolve while the Manager is busy. Do not deliver a
+            // stale wake once its original card has already been decided.
+            if matches!(st.db.permission_status(request), Ok(Some(status)) if status != "pending") { return true; }
+        }
+    }
+    st.db.delegation_get(id).ok().is_some_and(|row| matches!(row["status"].as_str(), Some("completed" | "failed" | "cancelled" | "interrupted")))
 }
 
 /// FIX39 item 18: after any turn ends, try every session with a queued delivery,
@@ -759,18 +1122,55 @@ pub(crate) async fn drain_queued_deliveries(st: &AppState, preferred: Option<&st
     }
     for sid in ids {
         if session_busy(st, &sid).await { continue; }
-        let next = st.team.queued.lock().await.get_mut(&sid).and_then(VecDeque::pop_front);
-        if let Some(next) = next { deliver(st, &sid, next.text, next.meta, next.depth, true).await; }
+        // The front may hold briefs whose assignment was cancelled while it
+        // waited: those are dropped silently, never delivered, and the next item
+        // is tried instead.
+        loop {
+            let next = st.team.queued.lock().await.get_mut(&sid).and_then(VecDeque::pop_front);
+            let Some(next) = next else { break };
+            if stopped_delegation(st, &next.meta) {
+                // A wake whose assignment ended while it waited is recorded as
+                // dropped, so a later boot does not offer it again.
+                crate::delegations::drop_queued_wake(st, &next.meta);
+                continue;
+            }
+            let delivery = deliver(st, &sid, next.text, next.meta.clone(), next.depth, true).await;
+            // A reply or wake that finally leaves the queue has reached the
+            // Manager, so the row it reports on stops waiting for it.
+            if delivery == Delivery::Sent {
+                crate::delegations::settle_queued_reply(st, &next.meta);
+                crate::delegations::settle_queued_wake(st, &next.meta);
+            }
+            break;
+        }
     }
 }
 
 /// When a side conversation cannot even start a turn, tell the sender.
-async fn relay_failure(st: &AppState, side_session: &str, reason: &str) {
+async fn relay_failure(st: &AppState, side_session: &str, reason: &str, delegation: Option<&str>) {
     let Ok(row) = st.db.session_detail(side_session) else { return };
     let link = &row["link"];
     let Some(origin) = link["originSessionId"].as_str() else { return };
     let name = row["agentId"].as_str().and_then(|id| st.db.agent_get(id).ok()).map(|a| agent_name(&a)).unwrap_or_else(|| "The teammate".into());
-    note(st, origin, &format!("{name} could not start: {reason}"), json!({"kind":"delegation","direction":"failed","peerAgentId":row["agentId"],"peerName":name,"sideSessionId":side_session})).await;
+    let mut meta = json!({"kind":"delegation","direction":"failed","peerAgentId":row["agentId"],"peerName":name,"sideSessionId":side_session});
+    if let Some(id) = delegation { meta["delegationId"] = json!(id); }
+    note(st, origin, &format!("{name} could not start: {reason}"), meta).await;
+}
+
+/// The wording of the `[Reply from X]` body for one assignment outcome, shared by
+/// the live relay in [`after_turn`] and the startup re-offer in
+/// [`crate::delegations::startup`], so a reply that outlives a restart reads
+/// exactly like the one sent at the time.
+///
+/// `outcome_kind` is `completed`, `cancelled` or `failed`; `reply_or_detail` is
+/// the turn's stored reply for a completion and the failure's detail otherwise.
+pub(crate) fn reply_text(outcome_kind: &str, reply_or_detail: Option<&str>) -> String {
+    let present = reply_or_detail.map(str::trim).filter(|text| !text.is_empty());
+    match outcome_kind {
+        "completed" => present.unwrap_or("(finished without a text reply)").to_owned(),
+        "cancelled" => "The task was cancelled before it finished.".to_owned(),
+        _ => format!("The turn failed: {}", present.unwrap_or("the provider reported an error")),
+    }
 }
 
 /// Runs after every turn: relays side-conversation replies and drains queues.
@@ -780,19 +1180,52 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
     let outcome = outcome.to_owned();
     tokio::spawn(async move {
         let depth = st.team.depth.lock().unwrap().remove(&session_id).unwrap_or(0);
-        if let Ok(row) = st.db.session_detail(&session_id) {
+        // Only the link and the bot are read here, so the turn end must not load the whole conversation.
+        if let Ok(row) = st.db.session_brief(&session_id) {
             let link = row["link"].clone();
             if link["kind"] == "side" {
-                if let Some(origin) = link["originSessionId"].as_str().filter(|origin| st.db.session_exists(origin).unwrap_or(false)) {
-                    let target_id = row["agentId"].as_str().unwrap_or("").to_owned();
-                    let name = st.db.agent_get(&target_id).map(|a| agent_name(&a)).unwrap_or_else(|_| "Teammate".into());
-                    let reply = match outcome.as_str() {
-                        "turn.completed" => turn.as_deref().and_then(|turn| st.db.turn_reply(&session_id, turn).ok().flatten()).unwrap_or_else(|| "(finished without a text reply)".into()),
-                        "turn.cancelled" => "The task was cancelled before it finished.".into(),
-                        _ => format!("The turn failed: {}", detail.unwrap_or_else(|| "the provider reported an error".into())),
+                // FIX47: the assignment that owned this turn gets its outcome
+                // before the reply is relayed, so a status shown to the user is
+                // never ahead of or behind the message it is about.
+                let end = crate::delegations::after_turn(&st, &session_id, turn.clone(), &outcome, detail.clone()).await;
+                // A turn that ended on a question only the owner can answer has
+                // not finished the assignment: nothing is relayed, and the
+                // assignment keeps running until the answer's next turn ends it.
+                let origin = (!matches!(end, crate::delegations::TurnEnd::Waiting))
+                    .then(|| link["originSessionId"].as_str().filter(|origin| st.db.session_exists(origin).unwrap_or(false)))
+                    .flatten();
+                if let Some(origin) = origin {
+                    // A duplicate turn ending must not wake the Manager twice: the
+                    // ledger row's reply slot is the claim, so only the first call
+                    // that finds it empty sends. A turn no assignment tracks (or
+                    // one an automatic retry continues) has nothing to claim.
+                    let owed: Option<&Value> = match &end {
+                        crate::delegations::TurnEnd::Ungoverned | crate::delegations::TurnEnd::Waiting => None,
+                        crate::delegations::TurnEnd::Owed(row) => Some(row),
                     };
-                    let text = format!("[Reply from {name}]\n{reply}");
-                    deliver(&st, origin, text, json!({"kind":"blob_reply","fromAgentId":target_id,"fromName":name,"sideSessionId":session_id}), depth, false).await;
+                    if owed.is_none_or(|row| crate::delegations::claim_reply(&st, row)) {
+                        let target_id = row["agentId"].as_str().unwrap_or("").to_owned();
+                        let name = st.db.agent_get(&target_id).map(|a| agent_name(&a)).unwrap_or_else(|_| "Teammate".into());
+                        let reply = {
+                            let kind = match outcome.as_str() {
+                                "turn.completed" => "completed",
+                                "turn.cancelled" => "cancelled",
+                                _ => "failed",
+                            };
+                            let source = match kind {
+                                "completed" => turn.as_deref().and_then(|turn| st.db.turn_reply(&session_id, turn).ok().flatten()),
+                                "cancelled" => None,
+                                _ => detail.clone(),
+                            };
+                            reply_text(kind, source.as_deref())
+                        };
+                        let text = format!("[Reply from {name}]\n{reply}");
+                        let delegation = owed.and_then(|row| row["id"].as_str());
+                        let delivery = deliver_reply(&st, origin, &session_id, &target_id, &name, text, delegation, depth).await;
+                        // A reply still waiting in the queue keeps `pending`, so the
+                        // next boot offers it again instead of losing it.
+                        if let Some(row) = owed { crate::delegations::settle_reply(&st, row, delivery == Delivery::Sent); }
+                    }
                 }
             }
         }
@@ -963,7 +1396,7 @@ fn manager_tool_schemas() -> Vec<Value> {
         "blob":{"type":"string","description":"Exact bot id or name."},
         "name":{"type":"string","maxLength":40}, "description":{"type":"string","maxLength":255},
         "role":{"type":"string","maxLength":40}, "instructions":{"type":"string","maxLength":4000},
-        "look":{"type":["object","null"],"description":"Bot look: shape, optional seed, traits, optional art (robot, robot-flat, robot-pop, robot-dot, blob, painted), optional paint (classic, cube, star, flower, pear, peanut, ghost, bunny, kitty, ufo, boxbot, tile), optional icon (logo, logo-tint, logo-mono, px-robot, px-cat, px-ghost, px-alien, px-fox, px-frog, px-owl, px-bunny, px-bear, px-octopus, px-mushroom, px-slime, px-wizard, px-duck, px-rocket, px-bolt) and bot outline/colors, as returned by read_blob. Haze look: the bot's mark. logo, logo-tint and logo-mono show the runtime's logo in its own colours, the bot colour or one colour; px-* are pixel icons."},
+        "look":{"type":["object","null"],"description":"Bot look: shape, optional seed, traits, optional art (robot, robot-flat, robot-pop, robot-dot, blob, painted), optional paint (classic, cube, star, flower, pear, peanut, ghost, bunny, kitty, ufo, boxbot, tile), optional icon (logo, logo-tint, logo-mono, px-robot, px-cat, px-ghost, px-alien, px-fox, px-frog, px-owl, px-bunny, px-bear, px-octopus, px-mushroom, px-slime, px-wizard, px-duck, px-rocket, px-bolt, char-albert-einstein, char-nikola-tesla, char-cleopatra, char-superman, char-sherlock-holmes, char-robin-hood, char-thor, char-hulk, char-marie-curie, char-joan-of-arc, char-amelia-earhart, char-sun-wukong, char-frida-kahlo, char-captain-marvel, char-ada-lovelace, char-ludwig-van-beethoven, char-charlie-chaplin, char-william-shakespeare, char-queen-elizabeth-i, char-master-chief, char-sonic, char-anubis, char-wolfgang-amadeus-mozart, char-arthur-morgan, char-count-dracula, char-hua-mulan, char-gandalf, char-benjamin-franklin, char-kratos) and bot outline/colors, as returned by read_blob. Haze look: the bot's mark. logo, logo-tint and logo-mono show the runtime's logo in its own colours, the bot colour or one colour; px-* are pixel icons; char-* selects one of the Haze character portraits in its original colours."},
         "model":{"type":["string","null"]}, "thinking":{"type":["string","null"],"description":"Effort id, or null for model default."},
         "approvalMode":{"type":"string","enum":["ask","auto"]},
         "tags":{"type":"array","maxItems":8,"items":{"type":"string","minLength":1,"maxLength":24}}

@@ -40,6 +40,12 @@
 .composer-pill[aria-expanded="true"] .composer-pill-chevron { transform: rotate(180deg); }
 .model-pill { color: var(--text-1); }
 .model-pill.unavailable { color: var(--text-3); }
+/* A running turn: the pill stays focusable so its tooltip can say when the model can change. */
+.model-pill.waiting { color: var(--text-3); opacity: .6; cursor: default; }
+.model-pill.waiting:hover { background: transparent; color: var(--text-3); }
+.model-pill-unavailable { display: inline-flex; align-items: center; gap: 2px; }
+.model-retry { width: 24px; height: 24px; }
+.model-menu-scope { padding-top: 6px; border-top: 1px solid var(--line); margin: 6px 0 0; padding-left: 10px; padding-right: 10px; }
 .model-pill-divider { flex: 0 0 auto; width: 1px; height: 14px; background: var(--line-strong); }
 .model-pill .provider-logo { flex: 0 0 auto; }
 .model-pill-fast { flex: 0 0 auto; color: var(--mode-fast); fill: color-mix(in srgb, var(--mode-fast) 20%, transparent); }
@@ -52,6 +58,9 @@
 .composer-icon-button { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 50%; background: transparent; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
 .composer-icon-button:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
 .composer-icon-button:disabled { color: var(--text-3); opacity: .5; cursor: default; }
+.composer-icon-button[aria-expanded="true"] { color: var(--text-1); background: var(--surface-hover); }
+.attach-menu { min-width: 260px; }
+.attach-menu .composer-menu-item:disabled .composer-menu-icon { opacity: .6; }
 
 /* Menus share one surface: model list, permission modes. */
 .composer-menu { position: absolute; z-index: 30; bottom: calc(100% + 10px); width: max-content; min-width: 236px; max-width: min(320px, calc(100vw - 32px)); padding: 6px; display: grid; gap: 1px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom center; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
@@ -123,11 +132,30 @@
 .composer-attachment.error img { opacity: .35; filter: grayscale(1); }
 .composer-attachment-state { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-1); border-radius: inherit; }
 .composer-attachment-state.error { color: var(--bad); }
-.composer-attachment-remove { position: absolute; top: -6px; right: -6px; width: 19px; height: 19px; display: grid; place-items: center; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface-overlay); opacity: 0; cursor: pointer; transition: opacity 120ms ease; }
-.composer-attachment:hover .composer-attachment-remove, .composer-attachment-remove:focus-visible { opacity: 1; }
+.composer-attachment-remove { position: absolute; top: -8px; right: -8px; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; line-height: 1; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface-overlay); opacity: 0; cursor: pointer; transition: opacity 120ms ease, box-shadow 120ms ease; }
+.composer-attachment-remove > svg { display: block; }
+.composer-attachment:hover .composer-attachment-remove,
+.composer-attachment:focus-within .composer-attachment-remove,
+.composer-attachment-remove:focus-visible { opacity: 1; }
+.composer-attachment-remove:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .message-attachments { margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; list-style: none; }
 .message-attachments li { max-width: 220px; padding: 5px 9px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); font-size: var(--fs-xs); }
 .message-attachments span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A sent image stays a picture: the thumbnail comes from the message's own
+   ownership-checked image, and a missing or damaged file shows a placeholder. */
+.message-images { margin: 0 0 2px; padding: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; list-style: none; }
+.message-image { width: 132px; height: 132px; padding: 0; display: grid; place-items: center; overflow: hidden; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-selected); cursor: pointer; }
+.message-image img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.message-image.placeholder { cursor: default; border-style: dashed; }
+.message-image-placeholder { display: grid; justify-items: center; gap: 4px; padding: 8px; color: var(--text-3); font-size: var(--fs-2xs); text-align: center; }
+.message-image-placeholder span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-image:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.message-image-viewer { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 24px; background: #000000b8; }
+.message-image-viewer figure { margin: 0; display: grid; gap: 8px; justify-items: center; max-width: min(1100px, 100%); }
+.message-image-viewer img { max-width: 100%; max-height: calc(100vh - 120px); display: block; border-radius: 12px; background: var(--surface-raised); }
+.message-image-viewer figcaption { color: #f4f4f6; font-size: var(--fs-xs); }
+.message-image-viewer-close { position: absolute; top: 16px; right: 16px; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; color: #f4f4f6; border: 1px solid #ffffff44; border-radius: 50%; background: #00000066; cursor: pointer; }
+.message-image-viewer-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 @media (max-width: 940px) {
   .composer-pill { padding-inline: 7px; }
@@ -150,12 +178,13 @@
 .session-effort-control.composer-popover-anchor .session-effort-trigger.max-tier > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .session-effort-trigger.locked { color: var(--text-3); opacity: .55; cursor: not-allowed; }
 .session-effort-trigger.locked:hover { background: transparent; }
-.session-effort-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 10px); width: min(320px, calc(100vw - 32px)); padding: 13px 14px 12px; display: grid; gap: 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom right; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
-/* Six levels plus Ultracode need more room than five. */
-.session-effort-popover.has-ultra { width: min(404px, calc(100vw - 32px)); }
+/* The popover is as wide as its own content: every level label is readable at
+   five and six levels, the same layout serves every provider, and the cap keeps
+   it inside a narrow window. Labels wrap rather than clip when the cap is hit. */
+.session-effort-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 10px); width: max-content; min-width: min(320px, calc(100vw - 24px)); max-width: min(460px, calc(100vw - 24px)); padding: 13px 14px 12px; display: grid; gap: 12px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-overlay); box-shadow: var(--shadow-pop); transform-origin: bottom right; animation: composer-menu-in 140ms cubic-bezier(.2,.8,.2,1) both; }
 .session-effort-popover-heading { min-height: 24px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
 .session-effort-title { color: var(--text-3); font-weight: 500; }
-.session-effort-value { position: relative; min-width: 0; flex: 1 1 auto; display: grid; padding-block: .2em; margin-block: -.2em; overflow: hidden; color: var(--text-1); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.session-effort-value { position: relative; min-width: 0; flex: 1 1 auto; display: grid; padding-block: .2em; margin-block: -.2em; color: var(--text-1); font-weight: 600; white-space: nowrap; }
 .session-effort-popover.claude .session-effort-value { color: var(--meter-claude); }
 .session-effort-value.ultra > span { background: linear-gradient(90deg, var(--meter-blue), var(--meter-violet) 60%, #f0b6e8); -webkit-background-clip: text; background-clip: text; color: transparent; }.session-effort-value-in { grid-area: 1 / 1; animation: effort-label-in 160ms cubic-bezier(.2,0,0,1) both; }
 @keyframes effort-label-in { from { opacity: 0; transform: translateY(2px); filter: blur(1.5px) } to { opacity: 1; transform: none; filter: none } }
@@ -199,9 +228,9 @@
 .session-effort-recommended span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .session-effort-recommended span.start { transform: translateX(-12px); }
 .session-effort-recommended span.end { transform: translateX(calc(-100% + 12px)); }
-.session-effort-labels { display: flex; align-items: stretch; justify-content: space-between; gap: 2px; margin-top: -1px; }
-.session-effort-labels button { min-width: 0; flex: 1 1 0; padding: 3px 5px; display: flex; align-items: center; justify-content: center; gap: 4px; overflow: hidden; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-2xs); text-align: center; cursor: pointer; }
-.session-effort-labels button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-effort-labels { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: 4px 2px; margin-top: -1px; }
+.session-effort-labels button { min-width: max-content; flex: 1 1 auto; padding: 3px 5px; display: flex; align-items: center; justify-content: center; gap: 4px; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-2xs); text-align: center; cursor: pointer; }
+.session-effort-labels button > span { white-space: nowrap; }
 .session-effort-labels button.ultra.selected .effort-icon { color: var(--meter-violet); opacity: 1; }
 .session-effort-labels button.default { text-decoration: underline dotted; text-underline-offset: 3px; }
 .session-effort-labels button:hover:not(:disabled), .session-effort-labels button.selected { color: var(--text-1); background: var(--surface-hover); }
@@ -226,6 +255,25 @@
 @media (prefers-reduced-motion: reduce) { .tip-bubble { transition: none !important; } }
 
 /* Prompt queue: messages waiting for the current turn, and scheduled ("send later") ones. */
+/* Prompt queue: one compact status line inside the composer card. It exists only
+   while there is something to say (the component renders nothing when idle, so
+   no blank strip sits above the input); once shown, the line is 22 px and the
+   rows unfold only when asked. */
+.composer-status { display: grid; gap: 4px; }
+.composer-status-line { min-height: 22px; display: flex; align-items: center; gap: 8px; overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); white-space: nowrap; }
+.composer-status-chip { min-height: 22px; max-width: 100%; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; color: var(--text-2); border: 1px solid var(--line); border-radius: 7px; background: var(--surface-selected); font: inherit; cursor: pointer; }
+.composer-status-chip:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.composer-status-chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.composer-status-chip.failed { color: var(--danger-ink); border-color: color-mix(in srgb, var(--danger-ink) 55%, transparent); }
+.composer-status-chevron { transition: transform 120ms ease; }
+.composer-status-chevron.open { transform: rotate(180deg); }
+.composer-status-mode { flex: 0 0 auto; color: var(--text-2); }
+.composer-status-paused, .composer-status-retry { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: var(--warning); }
+.composer-status-note { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; }
+.composer-status .queue-link { font-size: inherit; }
+.composer-queue { margin: 2px 0 4px; padding: 6px 8px; display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-selected); }
+.composer-queue .queue-banner { margin: 0; padding: 0; border: 0; background: none; }
+@media (prefers-reduced-motion: reduce) { .composer-status-chevron { transition: none; } }
 .queue-banner { margin: 0 12px -6px; padding: 8px 10px 14px; display: grid; gap: 6px; color: var(--text-2); border: 1px solid var(--line); border-bottom: 0; border-radius: 14px 14px 0 0; background: var(--surface-raised); font-size: var(--fs-xs); }
 .queue-head { min-height: 20px; display: flex; align-items: center; gap: 10px; color: var(--text-3); }
 .queue-title b { color: var(--text-2); font-weight: 500; }
@@ -246,6 +294,7 @@
 .queue-edit:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .queue-meta { flex: 0 1 auto; max-width: 45%; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
 .queue-meta.danger { color: var(--danger-ink); }
+.queue-confirm { display: inline-flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 10px; color: var(--text-2); }
 .queue-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0; opacity: 0; transition: opacity 120ms ease; }
 .queue-item:hover .queue-actions, .queue-item:focus-within .queue-actions, .queue-item.failed .queue-actions { opacity: 1; }
 .queue-icon { width: 24px; height: 24px; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
@@ -279,3 +328,23 @@
 .slash-chip-remove { width: 16px; height: 16px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .slash-chip-remove:hover { color: var(--text-1); background: var(--surface-hover); }
 @media (prefers-reduced-motion: reduce) { .slash-menu { animation: none; } }
+
+.composer-status-interrupt { margin-left: auto; white-space: nowrap; }
+
+/* A file attached by path (documents, audio, video): a chip above the box, never a thumbnail. */
+.composer-file-ref { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 2px 4px; }
+.composer-file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 26px; padding: 0 2px 0 8px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font-size: var(--fs-xs); }
+.composer-file-chip strong { min-width: 0; overflow: hidden; color: var(--text-1); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.composer-file-chip small { flex: none; color: var(--text-3); font-size: var(--fs-2xs); }
+.composer-file-chip button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; color: var(--text-3); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.composer-file-chip button:hover { color: var(--text-1); background: var(--surface-hover); }
+.composer-file-chip button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.composer-file-error { color: var(--status-danger-text, var(--status-danger)); font-size: var(--fs-xs); }
+
+/* How the next message reaches a running turn (27 October 2026): two small choices instead of a hidden Ctrl+Enter. */
+.composer-status-modes { flex: 0 0 auto; display: inline-flex; padding: 1px; gap: 1px; border: 1px solid var(--line); border-radius: 7px; }
+.composer-status-modes button { min-height: 20px; padding: 0 8px; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font: inherit; cursor: pointer; }
+.composer-status-modes button:hover:not(:disabled):not(.active) { color: var(--text-1); background: var(--surface-hover); }
+.composer-status-modes button.active { color: var(--text-1); background: var(--surface-selected-strong, var(--surface-selected)); }
+.composer-status-modes button:disabled { cursor: default; opacity: .55; }
+.composer-status-modes button:focus-visible { outline: none; box-shadow: var(--focus-ring); }

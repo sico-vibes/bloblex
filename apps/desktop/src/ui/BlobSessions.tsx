@@ -3,6 +3,7 @@ import { StatusDot } from './StatusDot'
 import { Plus } from 'lucide-react'
 import type { Agent, Session } from '../types'
 import { formatUnknownSafe } from '../types'
+import { presentedSessionState } from './sessionOutcome'
 import { projectFolderName, sessionDotClass, shortTime } from './rosterSelectors'
 import { rpc } from '../tauri'
 import { useEntityNoun } from './vocabulary'
@@ -36,7 +37,7 @@ export function BlobSessions({ agent, sessions, legacyCount, canCreate, onOpenSe
     <div className="settings-card">
       {recent.length === 0 && <p className="settings-empty">No conversations yet.</p>}
       {recent.map((session) => {
-        const dot = sessionDotClass(session.state)
+        const dot = sessionDotClass(presentedSessionState(session))
         return <button type="button" className="settings-row blob-session-row" key={session.id} onClick={() => onOpenSession(session)}>
           <span className="settings-row-copy"><strong>{formatUnknownSafe(session.title, 'New session')}</strong><small>{projectFolderName(session.projectPath)}</small></span>
           {dot === 'busy' && <StatusDot status="working" />}{dot === 'bad' && <StatusDot status="failed" />}

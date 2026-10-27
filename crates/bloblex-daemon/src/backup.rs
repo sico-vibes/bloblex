@@ -42,7 +42,7 @@ const MAX_SKILL_TOTAL_BYTES: u64 = 50 * 1024 * 1024;
 
 /// The exact settings keys a backup may carry. `experimental.*` boolean flags
 /// are allowed in addition to this list (see `exportable_setting`).
-const SETTING_ALLOWLIST: [&str; 33] = [
+const SETTING_ALLOWLIST: [&str; 34] = [
     "appearance.style",
     "appearance.accent",
     "appearance.density",
@@ -71,6 +71,7 @@ const SETTING_ALLOWLIST: [&str; 33] = [
     "retry.maxWaitSecs",
     "questions.expirySecs",
     "automations.maxConcurrent",
+    "delegation.paused",
     "task.concurrency.max",
     "task.globalPaused",
     "claude.enableWorkflows",

@@ -138,6 +138,9 @@
 :root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .tour-invite { box-shadow: var(--shadow-pop); }
 :root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .message-row.user .message-bubble .mention { color: inherit; }
 :root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) .app-wallpaper { position: fixed; inset: 0; z-index: 0; pointer-events: none; background-size: cover; background-position: center; }
+/* The main window is natively transparent (for Haze): keep Frost opaque under its wallpaper. */
+:root[data-style="bitbots"]:not(.companion-surface):not(.dictation-surface) body { background: #14161c; }
+:root[data-style="bitbots"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) body { background: #e8eaf1; }
 :root[data-style="bitbots"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) .primary-button { background: var(--user-accent, #6a5cf5); color: var(--user-accent-ink, #fff); }
 
 /* ── Frost companion and dictation surfaces ────────────────────────────
@@ -221,8 +224,6 @@
 :root[data-style="bitbots"].companion-surface .dictation-island-text,
 :root[data-style="bitbots"].dictation-surface .dictation-island-time,
 :root[data-style="bitbots"].dictation-surface .dictation-island-text { color: var(--text-1); }
-:root[data-style="bitbots"].companion-surface .dictation-island-text.note,
-:root[data-style="bitbots"].dictation-surface .dictation-island-text.note,
 :root[data-style="bitbots"].companion-surface .dictation-island-note,
 :root[data-style="bitbots"].dictation-surface .dictation-island-note { color: var(--text-2); }
 :root[data-style="bitbots"].companion-surface .dictation-island-wave i,

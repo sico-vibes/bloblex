@@ -6,6 +6,16 @@ export type BusySendMode = 'steer' | 'queue'
 export const BUSY_SEND_SETTING = 'composer.busySendMode'
 export const busySendMode = (value: unknown): BusySendMode => value === 'queue' ? 'queue' : 'steer'
 
+/**
+ * One id per message the owner sends. It travels with the call and is kept in the pending row, so
+ * pressing Retry after an unclear failure (a dropped connection, a reconnect) sends the same id and the
+ * daemon answers with the message it already has instead of starting a second turn.
+ */
+export function newClientMessageId(): string {
+  const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+  return `m-${random}`
+}
+
 /** Resend only a definitive refusal; an ambiguous provider failure may have delivered it. */
 export async function sendWithDelivery(method: string, params: Record<string, unknown>): Promise<{ queued: boolean; fallback: boolean }> {
   try {
@@ -14,7 +24,7 @@ export async function sendWithDelivery(method: string, params: Record<string, un
     return { queued: method === 'session.queue.add' || fallback, fallback }
   } catch (reason) {
     if (method !== 'session.steer' || !['unsupported', 'conflict'].includes(daemonCodeOf(reason) ?? '')) throw reason
-    await rpc('session.queue.add', params)
+    await rpc('session.queue.add', { clientMessageId: newClientMessageId(), ...params })
     return { queued: true, fallback: true }
   }
 }

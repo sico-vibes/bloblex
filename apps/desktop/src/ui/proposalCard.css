@@ -19,7 +19,8 @@
 .proposal-value.mono { font-family: var(--font-mono); font-size: var(--fs-xs); }
 .proposal-reason { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }
 .proposal-preview { max-height: 220px; margin: 0; padding: 10px; overflow: auto; color: var(--text-2); border-radius: var(--radius-sm); background: var(--surface-sunken, var(--surface-panel)); font-size: var(--fs-xs); white-space: pre-wrap; }
-.proposal-actions { padding: 10px 12px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
+.proposal-actions { padding: 10px 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
+.proposal-error { flex: 0 0 100%; margin: 0 0 2px; color: var(--status-danger); font-size: var(--fs-xs); text-align: left; overflow-wrap: anywhere; }
 .proposal-hint { margin-right: auto; color: var(--text-3); font-size: var(--fs-xs); }
 @media (max-width: 520px) { .proposal-row { grid-template-columns: 1fr; } }
 :root[data-bitbots="on"] .proposal-card { border: 2px solid var(--bb-line-strong); border-radius: 0; }

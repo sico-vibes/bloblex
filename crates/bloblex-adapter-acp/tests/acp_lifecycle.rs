@@ -199,6 +199,45 @@ async fn fake_child_roundtrips_unknown_rpc_stream_and_prompt_stop_reason() {
 }
 
 #[tokio::test]
+async fn a_process_exit_after_a_finished_turn_reports_no_turn_error() {
+    let adapter = Arc::new(AcpAdapter::default());
+    let (handle, mut events) = new_session(&adapter, "exit-after-complete", "bloblex-exit-after-complete").await;
+    let adapter_for_prompt = adapter.clone();
+    let prompt_handle = handle.clone();
+    let prompt = tokio::spawn(async move {
+        adapter_for_prompt
+            .prompt(
+                &prompt_handle,
+                PromptRequest { attachments: Vec::new(),
+                    turn_id: "turn-exit".into(),
+                    text: "Finish and exit".into(),
+                    exec_options: Default::default(),
+                },
+            )
+            .await
+    });
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap() {
+            Some(AgentEvent::TurnCompleted) => break,
+            Some(AgentEvent::Error { .. }) => panic!("a finished turn must not report an error"),
+            Some(_) => {}
+            None => panic!("the event stream closed before the turn ended"),
+        }
+    }
+    prompt.await.unwrap().unwrap();
+    // The fixture exits 200 ms after finishing; the exit must stay silent.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(150), events.recv()).await {
+            Ok(Some(AgentEvent::Error { .. })) => panic!("a process exit after a finished turn must not fail it"),
+            Ok(Some(_)) | Err(_) => {}
+            Ok(None) => break,
+        }
+    }
+    let _ = adapter.close_session(&handle).await;
+}
+
+#[tokio::test]
 async fn fake_child_permission_reply_reaches_provider_and_resolves_prompt() {
     let adapter = Arc::new(AcpAdapter::default());
     let (handle_a, mut events_a) =

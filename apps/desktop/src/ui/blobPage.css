@@ -216,12 +216,15 @@ fieldset.blob-settings-body + .settings-group { border-top: 1px solid var(--line
 /* Hold to confirm: a tinted danger button whose fill sweeps across while held. */
 .hold-confirm-button { position: relative; isolation: isolate; min-width: 150px; height: 36px; padding: 0 16px; overflow: hidden; color: var(--danger-ink); border: 1px solid color-mix(in srgb, var(--status-danger) 40%, transparent); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--status-danger) 12%, transparent); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; transition: color 160ms ease, border-color 160ms ease, transform 120ms ease; }
 .hold-confirm-button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--status-danger) 65%, transparent); }
-.hold-confirm-button.holding { color: #fff; transform: scale(.98); }
+.hold-confirm-button.holding { color: #fff; }
 .hold-confirm-button:disabled { cursor: progress; opacity: .8; }
 .hold-confirm-fill { position: absolute; z-index: 0; inset: 0; background: var(--status-danger); transform: scaleX(0); transform-origin: left center; transition: transform 240ms cubic-bezier(.22,1,.36,1); pointer-events: none; }
 .hold-confirm-button.holding .hold-confirm-fill { transform: scaleX(1); transition: transform 1000ms linear; }
 .hold-confirm-button.armed .hold-confirm-fill { background: color-mix(in srgb, var(--status-danger) 85%, #000); }
-.hold-confirm-button .hold-confirm-label { position: relative; z-index: 1; }
+.hold-confirm-button .hold-confirm-label { position: relative; z-index: 1; display: grid; justify-items: center; }
+/* Every state's label shares one grid cell with the longest label, so idle, holding, armed and working never change the button's size (and so never re-wrap the dialog). */
+.hold-confirm-button .hold-confirm-label > *, .hold-confirm-button .hold-confirm-label::after { grid-area: 1 / 1; }
+.hold-confirm-button .hold-confirm-label::after { content: attr(data-sizer); visibility: hidden; height: 0; overflow: hidden; pointer-events: none; }
 .hold-confirm-button[aria-busy="true"] { cursor: progress; }
 @media (prefers-reduced-motion: reduce) { .hold-confirm-fill, .hold-confirm-button.holding .hold-confirm-fill { transition: none; } }
 .blob-archive-card { padding: 14px 16px; display: flex; align-items: center; gap: 12px; }

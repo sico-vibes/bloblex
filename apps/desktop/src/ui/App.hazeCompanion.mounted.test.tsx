@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async () => undefined,
   previewMode: false,
   rpc: h.rpc,
@@ -397,7 +399,7 @@ describe.each(['haze', 'bitbots', 'blobots'] as const)('A bot without a conversa
     await press(view.host, 'Send message')
     await view.settle()
     expect(h.rpc.mock.calls.filter(([method]) => method === 'agent.conversation.create')).toEqual([['agent.conversation.create', { agentId: 'agent-codex' }]])
-    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-new', text: 'Start here' })
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', { clientMessageId: expect.stringMatching(/^m-/), sessionId: 'session-new', text: 'Start here' })
     // The draft's own id is never offered to the main window.
     expect(h.rpc.mock.calls.filter(([, params]) => JSON.stringify(params ?? {}).includes('draft:'))).toEqual([])
   })

@@ -99,9 +99,14 @@ describe('remote build output', () => {
   })
 
   it('is small enough to precache on a phone', () => {
-    const total = walk(DIST).reduce((sum, file) => sum + statSync(file).size, 0)
+    // The Haze character art (an avatar and an animated SVG per character) is
+    // shown on the phone and counted on its own; everything else is the shell.
+    const isArt = (file: string) => /[\\/]assets[\\/](avatar|animated)-[^\\/]*\.svg$/.test(file)
+    const size = (files: string[]) => files.reduce((sum, file) => sum + statSync(file).size, 0)
+    const files = walk(DIST)
     // The shell today is comfortably under 1 MB; a jump means something got
     // dragged into the phone bundle that should not be there.
-    expect(total).toBeLessThan(1_500_000)
+    expect(size(files.filter((file) => !isArt(file)))).toBeLessThan(1_500_000)
+    expect(size(files.filter(isArt))).toBeLessThan(2_000_000)
   })
 })

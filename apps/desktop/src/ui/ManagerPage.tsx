@@ -11,6 +11,8 @@ import { SettingsGroup, SettingsRow } from './SettingsParts'
 import { Select } from './Select'
 import { PlaybookDiff } from './PlaybookDiff'
 import { SafeMarkdown } from './SafeMarkdown'
+import { ScheduleOverview } from './ScheduleOverview'
+import { DelegationPause } from './DelegationPause'
 import { unwrapMarkdown } from './WhatsNew'
 import { openSafeLink } from './openSafeLink'
 import './managerPage.css'
@@ -60,7 +62,7 @@ function FactForm({ draft, busy, onSave, onCancel }: { draft: FactDraft; busy: b
   </form>
 }
 
-export function ManagerPage({ manager, connected = true, onOpenManager }: { manager: Agent | null; connected?: boolean; onOpenManager: (agentId: string) => void }) {
+export function ManagerPage({ manager, connected = true, onOpenManager, agents = [], onOpenSession }: { manager: Agent | null; connected?: boolean; onOpenManager: (agentId: string) => void; agents?: readonly Agent[]; onOpenSession?: (sessionId: string) => void }) {
   const [facts, setFacts] = useState<ManagerFact[] | null>(null)
   const [versions, setVersions] = useState<PlaybookVersion[]>([])
   const [problem, setProblem] = useState<string | null>(null)
@@ -121,6 +123,10 @@ export function ManagerPage({ manager, connected = true, onOpenManager }: { mana
         </SettingsRow>
         : <SettingsRow label="No Manager yet" hint="Set one up from the card at the top of the sidebar. It plans the work with you and asks before it creates anything." />}
     </SettingsGroup>
+
+    <DelegationPause connected={connected} />
+
+    <ScheduleOverview agents={agents} connected={connected} onOpenSession={onOpenSession} />
 
     <SettingsGroup title="What it knows about you" action={<button type="button" className="ghost-button small" disabled={busy || !connected || editingFact !== null} onClick={() => setEditingFact({ category: 'workflow', key: '', value: '', locked: true })}><Plus size={13} aria-hidden="true" />Add</button>}>
       {editingFact && !editingFact.id && <FactForm draft={editingFact} busy={busy} onSave={(draft) => void saveFact(draft)} onCancel={() => setEditingFact(null)} />}

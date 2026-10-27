@@ -17,6 +17,7 @@ import { SwatchGrid } from './SwatchGrid'
 import { AGENT_SWATCHES, swatchForColor } from './agentColor'
 import { useEntityNoun } from './vocabulary'
 import { HAZE_ICONS, ICON_LABELS, LOGO_ICONS, PIXEL_ICONS, type HazeIcon } from '../blob/haze/icons'
+import { CHARACTER_ASSETS, HAZE_CHARACTERS, isHazeCharacter } from '../blob/haze/characters'
 import { rememberLookRuntime, useLookProvider } from '../blob/haze/runtimeRegistry'
 import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
 
@@ -98,26 +99,31 @@ export function LookEditor({ look, color, colorHex, name, locked = false, runtim
   if (style === 'haze') {
     const pick = (icon: HazeIcon) => onLookChange({ ...look, icon })
     const current = look.icon ?? 'logo'
+    const keyboardChoices = provider ? HAZE_ICONS : [...PIXEL_ICONS, ...HAZE_CHARACTERS.map(({ id }) => id)]
     const option = (icon: HazeIcon) => {
       const preview = { ...look, icon }
       rememberLookRuntime(preview, runtimeId)
       const selected = current === icon
-      return <button key={icon} type="button" role="radio" aria-checked={selected} aria-label={ICON_LABELS[icon]} title={ICON_LABELS[icon]} tabIndex={selected ? 0 : -1} disabled={locked || (!provider && !icon.startsWith('px-'))} className={`look-style-option haze-icon-option${selected ? ' selected' : ''}`} onClick={() => pick(icon)}>
-        <BlobCanvas decorative color={colorHex} size={icon.startsWith('px-') ? 30 : 26} look={preview} label={ICON_LABELS[icon]} />
+      const initialTabStop = !keyboardChoices.includes(current as never) && icon === keyboardChoices[0]
+      return <button key={icon} type="button" role="radio" aria-checked={selected} aria-label={ICON_LABELS[icon]} title={ICON_LABELS[icon]} tabIndex={selected || initialTabStop ? 0 : -1} disabled={locked || (!provider && !icon.startsWith('px-') && !isHazeCharacter(icon))} className={`look-style-option haze-icon-option${selected ? ' selected' : ''}`} onClick={() => pick(icon)}>
+        {isHazeCharacter(icon) ? <img className="haze-character-image" src={CHARACTER_ASSETS[icon].static} alt="" draggable={false} />
+          : <BlobCanvas decorative color={colorHex} size={icon.startsWith('px-') ? 30 : 26} look={preview} label={ICON_LABELS[icon]} />}
       </button>
     }
     const onGridKey = (event: KeyboardEvent<HTMLDivElement>) => {
       const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0
       if (!step || locked) return
       event.preventDefault()
-      const choices = provider ? HAZE_ICONS : PIXEL_ICONS
-      const next = choices[(choices.indexOf(current as never) + step + choices.length) % choices.length]!
+      const panel = event.currentTarget
+      const choices = keyboardChoices
+      const currentIndex = choices.indexOf(current as never)
+      const next = choices[((currentIndex < 0 ? 0 : currentIndex) + step + choices.length) % choices.length]!
       pick(next)
-      requestAnimationFrame(() => (event.currentTarget.ownerDocument.querySelector(`.haze-icon-option[aria-label="${ICON_LABELS[next]}"]`) as HTMLElement | null)?.focus())
+      requestAnimationFrame(() => (panel.querySelector(`.haze-icon-option[aria-label="${ICON_LABELS[next]}"]`) as HTMLElement | null)?.focus())
     }
     return <div className="look-editor haze-look-editor" style={{ ['--look-accent' as string]: colorHex }}>
       <div className="look-stage">
-        <div className="look-stage-hero haze-look-hero"><BlobCanvas color={colorHex} size={88} mood={mood} look={look} label={`${name} preview`} /></div>
+        <div className="look-stage-hero haze-look-hero"><BlobCanvas color={colorHex} size={120} mood={mood} look={look} label={`${name} preview`} /></div>
         <div className="haze-look-row" aria-hidden="true"><HazeAura status={auraStatusFor(mood)} color={colorHex} selected /><BlobCanvas decorative color={colorHex} size={18} look={look} label={name} /><span>{name}</span></div>
         <div className="look-moods" role="radiogroup" aria-label="Preview status">
           {PREVIEW_MOODS.filter((item) => item.mood !== 'sleeping').map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} disabled={locked} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
@@ -128,7 +134,9 @@ export function LookEditor({ look, color, colorHex, name, locked = false, runtim
         <div className="haze-icon-grid logos">{LOGO_ICONS.map(option)}</div>
         <span className="look-section-label">Pixel icon</span>
         <div className="haze-icon-grid">{PIXEL_ICONS.map(option)}</div>
-        <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>
+        <span className="look-section-label">Characters</span>
+        <div className="haze-icon-grid haze-character-grid">{HAZE_CHARACTERS.map(({ id }) => option(id))}</div>
+        {!isHazeCharacter(current) && <div className="look-colour"><span className="look-section-label">Colour</span><SwatchGrid value={color} onChange={onColorChange} disabled={locked} /></div>}
       </div>
     </div>
   }

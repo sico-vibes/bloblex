@@ -1,0 +1,65 @@
+/* The Manager's assignments: one flat card per run of messages sent in a turn (DelegationGroup.tsx). Status colour only while something is happening. */
+.delegation-group { width: min(640px, 100%); margin: 8px auto 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--text-1); overflow: hidden; }
+.delegation-head { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px 8px 10px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.delegation-head:hover { background: var(--surface-hover); }
+.delegation-head:focus-visible, .delegation-row-toggle:focus-visible, .delegation-open:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.delegation-head > svg, .delegation-row-toggle > svg { flex: 0 0 auto; color: var(--text-3); transition: transform 120ms ease; }
+.delegation-head > svg.open, .delegation-row-toggle > svg.open { transform: rotate(90deg); }
+.delegation-faces { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.delegation-faces .blob-canvas, .delegation-faces .delegation-art-fallback { margin-left: -6px; }
+.delegation-faces > :first-child { margin-left: 0; }
+.delegation-more { margin-left: 4px; color: var(--text-3); font-size: var(--fs-xs); }
+.delegation-art-fallback { display: inline-grid; place-items: center; border-radius: var(--radius-sm); background: var(--surface-selected-strong); color: var(--text-1); font-size: 11px; font-weight: 700; }
+.delegation-head-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.delegation-head-copy strong { overflow: hidden; font-size: var(--fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.delegation-head-copy span { overflow: hidden; color: var(--text-2); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.delegation-group.attention .delegation-head-copy span { color: var(--warning); }
+.delegation-group.failed:not(.attention) .delegation-head-copy span { color: var(--danger-ink); }
+.delegation-total { flex: 0 0 auto; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.delegation-list { margin: 0; padding: 0 6px 6px; list-style: none; border-top: 1px solid var(--line); }
+.delegation-row { margin-top: 4px; border-radius: var(--radius-sm); }
+.delegation-row-main { display: flex; align-items: center; gap: 4px; }
+.delegation-row-toggle { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.delegation-row-toggle:hover, .delegation-row.approval .delegation-row-toggle { background: var(--surface-hover); }
+.delegation-row-toggle .blob-canvas, .delegation-row-toggle .delegation-art-fallback { flex: 0 0 auto; pointer-events: none; }
+.delegation-row-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.delegation-row-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.delegation-row-name strong { overflow: hidden; font-size: var(--fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.delegation-status { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.delegation-mark { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 2px; background: var(--text-3); opacity: .55; }
+.delegation-row.working .delegation-mark, .delegation-row.approval .delegation-mark { background: var(--status-working); opacity: 1; }
+.delegation-row.approval .delegation-status { color: var(--warning); }
+.delegation-row.failed .delegation-status, .delegation-row.interrupted .delegation-status { color: var(--danger-ink); }
+.delegation-row.failed .delegation-mark, .delegation-row.interrupted .delegation-mark { background: var(--danger-ink); opacity: 1; }
+.delegation-row.working .delegation-mark { animation: delegation-working 1.4s ease-in-out infinite; }
+@keyframes delegation-working { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .delegation-row.working .delegation-mark { animation: none; } .delegation-head > svg, .delegation-row-toggle > svg { transition: none; } }
+.delegation-row-topic { overflow: hidden; color: var(--text-3); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.delegation-open { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; height: 28px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: var(--fs-xs); cursor: pointer; }
+.delegation-open:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-1); }
+.delegation-open:disabled { cursor: default; opacity: .45; }
+.delegation-row.approval .delegation-open { color: var(--warning); font-weight: 600; }
+.delegation-detail { display: grid; gap: 6px; margin: 0 8px 6px 46px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-hover); color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; }
+.delegation-detail p { margin: 0; }
+.delegation-brief { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; color: var(--text-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.delegation-error { color: var(--danger-ink); overflow-wrap: anywhere; }
+.delegation-hint { color: var(--text-3); }
+.delegation-facts { display: grid; gap: 3px; margin: 0; }
+.delegation-facts > div { display: flex; gap: 8px; min-width: 0; }
+.delegation-facts dt { flex: 0 0 68px; color: var(--text-3); }
+.delegation-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text-2); }
+.delegation-facts code { font-family: var(--font-mono, ui-monospace, monospace); font-size: inherit; }
+.delegation-note { color: var(--text-3); }
+
+/* Stop: a quiet text button; the confirm pair replaces it in place. Danger colour only while confirming. */
+.delegation-stop { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; height: 28px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.delegation-stop:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-1); }
+.delegation-stop.danger { color: var(--status-danger-text, var(--status-danger)); }
+.delegation-stop:disabled { cursor: default; opacity: .55; }
+.delegation-stop:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.delegation-stop-confirm { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.delegation-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 2px 10px 8px; border-top: 1px solid var(--line); }
+.delegation-foot .delegation-error { margin: 0; flex: 1; }
+.delegation-followup { justify-self: start; height: 26px; padding: 0 9px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.delegation-followup:hover { color: var(--text-1); background: var(--surface-hover); }
+.delegation-followup:focus-visible { outline: none; box-shadow: var(--focus-ring); }

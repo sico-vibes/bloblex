@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async (count: number) => { h.approvalBadge(count) },
   previewMode: false,
   rpc: h.rpc,
@@ -163,7 +165,7 @@ function configure(snapshotValue = snapshot()) {
     return {}
   })
   const stop = vi.fn()
-  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return stop })
+  h.listenForDaemonEvents.mockImplementation(async (handler: (event: any) => void) => { h.daemonEventHandlers.push(handler); return () => { h.daemonEventHandlers = h.daemonEventHandlers.filter((item) => item !== handler); stop() } })
   h.listenForDaemonConnection.mockResolvedValue(stop)
   h.listenForActiveSession.mockResolvedValue(stop)
   h.listenForActiveRuntime.mockResolvedValue(stop)
@@ -192,9 +194,10 @@ afterEach(() => {
 })
 
 function emit(event: DaemonEvent) {
-  const handler = h.daemonEventHandlers.at(-1)
-  if (!handler) throw new Error('no daemon listener')
-  handler(event)
+  // Every live listener hears the event, as with the real event bus: App is not the only one.
+  const handlers = [...h.daemonEventHandlers]
+  if (!handlers.length) throw new Error('no daemon listener')
+  for (const handler of handlers) handler(event)
 }
 
 const selectedBot = (host: ParentNode) => host.querySelector('.bot-row[aria-current="true"] strong')?.textContent ?? null

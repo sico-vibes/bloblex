@@ -60,6 +60,7 @@ export function conversationPreview(session: Session | null | undefined): string
     if (role === 'notice' && message.meta?.kind === 'delegation') return `Messaged ${message.meta.peerName ?? 'a teammate'}`
     if (role === 'notice' && message.meta?.kind === 'blob_created') return `Created ${typeof message.meta.name === 'string' ? message.meta.name : 'a teammate'}`
     if (role === 'notice') continue
+    if (message.meta?.kind === 'blob_update') return `${message.meta.fromName ?? 'A teammate'} is waiting for you`
     if (message.meta?.kind === 'blob_reply') return `Message from ${message.meta.fromName ?? 'a teammate'}`
     const text = messageText(message)
     if (text) return role === 'user' && !message.meta ? `You: ${text}` : text

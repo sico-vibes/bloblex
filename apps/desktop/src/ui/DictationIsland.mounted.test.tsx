@@ -10,28 +10,42 @@ afterEach(() => { if (root) act(() => root!.unmount()); host?.remove(); root = n
 
 function show(props: Partial<Parameters<typeof DictationIsland>[0]>) {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root!.render(<DictationIsland phase="listening" level={0.1} since={Date.now()} text="" {...props} />))
+  act(() => root!.render(<DictationIsland phase="listening" level={0.1} since={Date.now()} {...props} />))
   return host
 }
 
-describe('dictation island words', () => {
-  it('shows the words as they arrive, finals and the current partial together', () => {
-    const island = show({ text: 'Hello there, this is' })
-    expect(island.querySelector('.dictation-island-text')?.textContent).toBe('Hello there, this is')
-    expect(island.querySelector('.dictation-island-text.note')).toBeNull()
+// The owner asked for the recorder bubble only (25 October 2026): FIX43's live words and "Words appear when you stop." note are gone for every engine.
+describe('dictation island is a recorder only', () => {
+  it('shows the timer and level bars while listening, with no words and no note', () => {
+    const island = show({})
+    expect(island.querySelector('.dictation-island-time')).not.toBeNull()
+    expect(island.querySelector('.dictation-island-wave')).not.toBeNull()
+    expect(island.querySelector('.dictation-island-text')).toBeNull()
+    expect(island.querySelector('.dictation-island')?.classList.contains('is-expanded')).toBe(false)
+    expect(island.textContent).not.toMatch(/Words appear/)
   })
 
-  it('says plainly that ChatGPT transcription shows its words when you stop, instead of showing nothing', () => {
-    const island = show({ engine: { engine: 'chatgpt', fallback: false } })
-    expect(island.querySelector('.dictation-island-text.note')?.textContent).toBe('Words appear when you stop.')
+  it('does not accept or show a transcript, whatever the phase', () => {
+    for (const phase of ['listening', 'processing', 'done', 'silent'] as const) {
+      act(() => root?.unmount()); host?.remove()
+      // A stray `text` prop (an old caller) must change nothing.
+      const island = show({ phase, ...({ text: 'Hello there, this is' } as object) })
+      expect(island.textContent).not.toContain('Hello there')
+      expect(island.querySelector('.dictation-island-text')).toBeNull()
+    }
   })
 
-  it('leaves an on-device engine that has not heard words yet without a note, and drops the note once words arrive', () => {
-    expect(show({ engine: { engine: 'on-device', fallback: false } }).querySelector('.dictation-island-text')).toBeNull()
-    act(() => root!.render(<DictationIsland phase="listening" level={0.1} since={Date.now()} text="" engine={{ engine: 'chatgpt', fallback: false }} warming />))
-    expect(host!.querySelector('.dictation-island-text')).toBeNull()
-    act(() => root!.render(<DictationIsland phase="listening" level={0.1} since={Date.now()} text="One two" engine={{ engine: 'chatgpt', fallback: false }} />))
-    expect(host!.querySelector('.dictation-island-text')?.textContent).toBe('One two')
-    expect(host!.querySelector('.dictation-island-text.note')).toBeNull()
+  it('keeps its notes for loading, finished and silent recordings', () => {
+    expect(show({ warming: true }).textContent).toContain('Getting ready')
+    act(() => root!.render(<DictationIsland phase="done" level={0} since={Date.now() - 4000} stoppedAt={Date.now()} />))
+    expect(host!.textContent).toContain('Added to your message')
+    act(() => root!.render(<DictationIsland phase="silent" level={0} since={Date.now() - 4000} stoppedAt={Date.now()} />))
+    expect(host!.textContent).toContain('Nothing heard')
+  })
+
+  it('still explains an error and expands only for that', () => {
+    const island = show({ phase: 'error', errorText: 'No microphone is available.' })
+    expect(island.querySelector('.dictation-island-text.error')?.textContent).toBeTruthy()
+    expect(island.querySelector('.dictation-island')?.classList.contains('is-expanded')).toBe(true)
   })
 })

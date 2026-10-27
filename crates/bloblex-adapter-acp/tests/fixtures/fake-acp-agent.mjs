@@ -115,6 +115,14 @@ input.on("line", (line) => {
       return;
     } else if (mode === "cancel-timeout" && sessionId.endsWith("-2")) {
       setTimeout(() => finishPrompt(sessionId, "end_turn"), 2500);
+    } else if (mode === "exit-after-complete") {
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId, update: { sessionUpdate: "agent_turn_complete" } },
+      });
+      finishPrompt(sessionId, "end_turn");
+      setTimeout(() => process.exit(0), 200);
     } else if (crashEnabled) {
       return;
     } else if (mode === "interleave" && sessionId.endsWith("-1")) {

@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { UsageAnalyticsRequest } from './analyticsTypes'
 import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContract'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from './executionContract'
-import type { DaemonEvent, JsonRecord, Snapshot } from './types'
+import type { DaemonEvent, JsonRecord, Snapshot, WindowBackdrop } from './types'
 import { normalizeAnalytics } from './ui/analyticsFormat'
 import { settingsPageFromEvent, type SettingsPageName } from './ui/settingsIndex'
 import {
@@ -474,4 +474,69 @@ export async function listenForSpeechDownload(handler: (progress: { modelId: str
 /** Main-window owned waiting badge; non-Windows platforms keep the tray tooltip. */
 export async function setApprovalBadge(count: number): Promise<void> {
   if (inDesktop) await invoke('set_approval_badge', { count: Math.max(0, Math.floor(count)) })
+}
+
+/** A real shell in a pseudo-terminal, owned by the desktop shell (never the daemon, never remote). */
+export type TerminalShell = 'powershell' | 'pwsh' | 'cmd'
+export type TerminalOpened = { id: string; pid: number | null; shell: string; cwd: string }
+export type TerminalInfo = TerminalOpened & { running: boolean; exitCode: number | null }
+export type TerminalOutput = { id: string; seq: number; data: string }
+export type TerminalExit = { id: string; exitCode: number | null }
+
+export async function terminalOpen(projectPath: string, options: { cwd?: string | null; shell?: TerminalShell; cols?: number; rows?: number } = {}): Promise<TerminalOpened> {
+  if (!inDesktop) throw new Error('Terminals are available only in the desktop app.')
+  return invoke<TerminalOpened>('terminal_open', { projectPath, cwd: options.cwd ?? null, shell: options.shell ?? null, cols: options.cols ?? null, rows: options.rows ?? null })
+}
+export async function terminalWrite(id: string, data: string): Promise<void> {
+  if (!inDesktop) return
+  await invoke('terminal_write', { id, data })
+}
+export async function terminalResize(id: string, cols: number, rows: number): Promise<void> {
+  if (!inDesktop) return
+  await invoke('terminal_resize', { id, cols, rows })
+}
+export async function terminalClose(id: string): Promise<void> {
+  if (!inDesktop) return
+  await invoke('terminal_close', { id })
+}
+export async function terminalList(): Promise<TerminalInfo[]> {
+  if (!inDesktop) return []
+  return invoke<TerminalInfo[]>('terminal_list')
+}
+export async function listenForTerminalOutput(handler: (output: TerminalOutput) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen<TerminalOutput>('terminal://output', (event) => handler(event.payload))
+}
+export async function listenForTerminalExit(handler: (exit: TerminalExit) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen<TerminalExit>('terminal://exit', (event) => handler(event.payload))
+}
+
+/** What the UI may show when the native backdrop is not what was asked for. */
+const NO_DESKTOP_BACKDROP: WindowBackdrop = { effect: 'none', active: false, transparencyOff: false, reason: 'Not running in the desktop app.' }
+
+/**
+ * Applies or clears the native frosted-glass backdrop of the main window.
+ *
+ * The blur is the OS compositor's, not CSS, so it is a native request; it
+ * resolves to an honest report even when Windows will not draw it, and never
+ * throws into the UI.
+ */
+export async function applyWindowBackdrop(enabled: boolean, dark: boolean): Promise<WindowBackdrop> {
+  if (!inDesktop) return NO_DESKTOP_BACKDROP
+  try {
+    return await invoke<WindowBackdrop>('window_backdrop_apply', { enabled, dark })
+  } catch {
+    return NO_DESKTOP_BACKDROP
+  }
+}
+
+/** The backdrop in force now, with the Windows transparency setting read again. */
+export async function windowBackdropState(): Promise<WindowBackdrop> {
+  if (!inDesktop) return NO_DESKTOP_BACKDROP
+  try {
+    return await invoke<WindowBackdrop>('window_backdrop_state')
+  } catch {
+    return NO_DESKTOP_BACKDROP
+  }
 }

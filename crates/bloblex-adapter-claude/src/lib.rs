@@ -983,6 +983,9 @@ impl ClaudeAdapter {
 }
 #[async_trait]
 impl AgentAdapter for ClaudeAdapter {
+    // `prompt` compares `launch_options.model` with the request (1152-1190) and
+    // restarts with `--resume <provider id>` plus `--model` when it differs.
+    fn model_switch(&self) -> ModelSwitch { ModelSwitch::KeepsSession }
     async fn model_catalog(&self, r: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {
         let now = Utc::now();
         let mut command = Command::new(&r.executable);

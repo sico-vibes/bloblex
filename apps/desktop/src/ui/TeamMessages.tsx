@@ -28,6 +28,16 @@ export function ReplyChip({ from, name, text, onOpenConversation }: { from: Agen
   return <TeamChatChip kind="incoming" peer={from} name={name} text={text} onOpenConversation={onOpenConversation} />
 }
 
+/** A teammate is waiting for the owner's approval or answer. The chip only opens that teammate's request; it decides nothing. */
+export function UpdateChip({ from, name, kind, title, onOpenConversation }: { from: Agent | null | undefined; name: string; kind: 'approval' | 'question'; title?: string; onOpenConversation?: () => void }) {
+  return <div className="team-chip-row">
+    <button type="button" className="team-chip update" style={accentOf(from)} disabled={!onOpenConversation} aria-label={`${name} is waiting for you to ${kind === 'question' ? 'answer a question' : 'approve a request'}${title ? `: ${title}` : ''}. Open the request.`} onClick={onOpenConversation}>
+      <span>{kind === 'question' ? 'Question' : 'Approval'}</span><MiniBlob agent={from} name={name} /><b>{name}</b>{title && <em className="team-chip-topic">{title}</em>}
+      {onOpenConversation && <ArrowUpRight size={12} className="team-chip-caret" aria-hidden="true" />}
+    </button>
+  </div>
+}
+
 /** "Created Dex (Engineer) in crewspan": the new bot's face and colour, like a delegation chip. */
 export function CreatedBotChip({ agent, name, detail, onOpen }: { agent: Agent | null | undefined; name: string; detail?: string; onOpen?: () => void }) {
   const noun = useEntityNoun()

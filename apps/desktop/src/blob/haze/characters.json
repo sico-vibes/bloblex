@@ -1,0 +1,118 @@
+[
+  {
+    "id": "char-albert-einstein",
+    "name": "Albert Einstein"
+  },
+  {
+    "id": "char-nikola-tesla",
+    "name": "Nikola Tesla"
+  },
+  {
+    "id": "char-cleopatra",
+    "name": "Cleopatra"
+  },
+  {
+    "id": "char-superman",
+    "name": "Superman"
+  },
+  {
+    "id": "char-sherlock-holmes",
+    "name": "Sherlock Holmes"
+  },
+  {
+    "id": "char-robin-hood",
+    "name": "Robin Hood"
+  },
+  {
+    "id": "char-thor",
+    "name": "Thor"
+  },
+  {
+    "id": "char-hulk",
+    "name": "Hulk"
+  },
+  {
+    "id": "char-marie-curie",
+    "name": "Marie Curie"
+  },
+  {
+    "id": "char-joan-of-arc",
+    "name": "Joan of Arc"
+  },
+  {
+    "id": "char-amelia-earhart",
+    "name": "Amelia Earhart"
+  },
+  {
+    "id": "char-sun-wukong",
+    "name": "Sun Wukong"
+  },
+  {
+    "id": "char-frida-kahlo",
+    "name": "Frida Kahlo"
+  },
+  {
+    "id": "char-captain-marvel",
+    "name": "Captain Marvel"
+  },
+  {
+    "id": "char-ada-lovelace",
+    "name": "Ada Lovelace"
+  },
+  {
+    "id": "char-ludwig-van-beethoven",
+    "name": "Ludwig van Beethoven"
+  },
+  {
+    "id": "char-charlie-chaplin",
+    "name": "Charlie Chaplin"
+  },
+  {
+    "id": "char-william-shakespeare",
+    "name": "William Shakespeare"
+  },
+  {
+    "id": "char-queen-elizabeth-i",
+    "name": "Queen Elizabeth I"
+  },
+  {
+    "id": "char-master-chief",
+    "name": "Master Chief"
+  },
+  {
+    "id": "char-sonic",
+    "name": "Sonic"
+  },
+  {
+    "id": "char-anubis",
+    "name": "Anubis"
+  },
+  {
+    "id": "char-wolfgang-amadeus-mozart",
+    "name": "Wolfgang Amadeus Mozart"
+  },
+  {
+    "id": "char-arthur-morgan",
+    "name": "Arthur Morgan"
+  },
+  {
+    "id": "char-count-dracula",
+    "name": "Count Dracula"
+  },
+  {
+    "id": "char-hua-mulan",
+    "name": "Hua Mulan"
+  },
+  {
+    "id": "char-gandalf",
+    "name": "Gandalf"
+  },
+  {
+    "id": "char-benjamin-franklin",
+    "name": "Benjamin Franklin"
+  },
+  {
+    "id": "char-kratos",
+    "name": "Kratos"
+  }
+]

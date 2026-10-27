@@ -1,0 +1,23 @@
+/* Read-only schedule list for the Manager page. Amber only while a run is in progress. */
+.schedule-overview { display: grid; gap: 8px; margin-top: 18px; }
+.schedule-overview h3 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+.schedule-overview ul { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.schedule-overview li { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 12px; }
+.schedule-overview li + li { border-top: 1px solid var(--line); }
+.schedule-overview-main { display: grid; min-width: 0; }
+.schedule-overview-main strong { overflow: hidden; color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-overview-main small, .schedule-overview-note { color: var(--text-3); font-size: var(--fs-xs); }
+.schedule-overview-note { margin: 0; line-height: 1.5; }
+.schedule-overview-facts { display: grid; min-width: 0; color: var(--text-3); font-size: var(--fs-xs); }
+.schedule-overview-state { color: var(--text-2); font-weight: 600; }
+.schedule-overview li[data-state="running"] .schedule-overview-state { color: var(--status-working-text, var(--status-working)); }
+.schedule-overview li[data-state="off"] strong, .schedule-overview li[data-state="paused"] strong { color: var(--text-2); }
+.schedule-overview-open { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.schedule-overview-open:hover { color: var(--text-1); background: var(--surface-hover); }
+.schedule-overview-open:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (max-width: 720px) { .schedule-overview li { grid-template-columns: 1fr; gap: 6px; } }
+.schedule-overview.compact { margin-top: 0; gap: 6px; }
+.schedule-overview.compact ul { border: 0; background: transparent; }
+.schedule-overview.compact li { grid-template-columns: 1fr; gap: 4px; padding: 6px 0; }
+.schedule-overview.compact li + li { border-top: 1px solid var(--line); }
+.schedule-overview.compact .schedule-overview-open { justify-self: start; }

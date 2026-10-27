@@ -12,10 +12,15 @@ describe('safe Markdown parsing', () => {
 
   it('supports ordered lists, emphasis, strong text, inline code, and safe web links', () => {
     expect(parseMarkdownBlocks('1. first\n2. second')[0]).toMatchObject({ kind: 'list', ordered: true })
-    expect(tokenizeInlineMarkdown('**strong** *em* `code` [web](https://example.invalid/path) [bad](javascript:alert(1))')).toEqual([
+    const tokens = tokenizeInlineMarkdown('**strong** *em* `code` [web](https://example.invalid/path) [bad](javascript:alert(1))')
+    expect(tokens.slice(0, 7)).toEqual([
       { kind: 'strong', text: 'strong' }, { kind: 'text', text: ' ' }, { kind: 'em', text: 'em' }, { kind: 'text', text: ' ' },
-      { kind: 'code', text: 'code' }, { kind: 'text', text: ' ' }, { kind: 'link', text: 'web', url: 'https://example.invalid/path' }, { kind: 'text', text: ' [bad](javascript:alert(1))' },
+      { kind: 'code', text: 'code' }, { kind: 'text', text: ' ' }, { kind: 'link', text: 'web', url: 'https://example.invalid/path' },
     ])
+    // The unsafe link stays literal text, however the tokenizer splits it.
+    const rest = tokens.slice(7)
+    expect(rest.every((token) => token.kind === 'text')).toBe(true)
+    expect(rest.map((token) => token.text).join('')).toBe(' [bad](javascript:alert(1))')
   })
 
   it('keeps underscore identifiers and dunder names literal while allowing boundary emphasis', () => {

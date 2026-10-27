@@ -3,7 +3,6 @@ import { currentWindow, invokeNative, listenNative } from '../transport/nativeBr
 import { playDictationCue } from './dictationSound'
 import { syncThemeStyleFromCache } from '../blob/bitbots'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
-import type { DictationEngineInfo } from './dictation'
 
 type Phase = 'idle' | IslandPhase
 type Unlisten = () => void
@@ -14,19 +13,17 @@ const TAP_MAX_MOVEMENT_PX = 6
 
 /**
  * The floating dictation bubble, in its own always-on-top window, shown by the
- * backend while dictation runs and the companion is hidden. It shows the words
- * as they arrive and grows to fit them. Tap to open Bitbots; hold to move it.
+ * backend while dictation runs and the companion is hidden. It is a recorder
+ * only (timer, level bars, state): the words go to the message box, never here.
+ * It grows only to explain an error. Tap to open Bitbots; hold to move it.
  */
 export function DictationBubble() {
   const [phase, setPhase] = useState<Phase>('idle')
   const [level, setLevel] = useState(0)
   const [warming, setWarming] = useState(false)
   const [errorText, setErrorText] = useState('')
-  const [finals, setFinals] = useState('')
-  const [partial, setPartial] = useState('')
   const [since, setSince] = useState<number | null>(null)
   const [stoppedAt, setStoppedAt] = useState<number | null>(null)
-  const [engine, setEngine] = useState<DictationEngineInfo | null>(null)
   const responsible = useRef(false)
   const heard = useRef(false)
   const pressStart = useRef<{ x: number; y: number; time: number } | null>(null)
@@ -50,8 +47,7 @@ export function DictationBubble() {
           // This window may have been created under the other look; match the app before showing.
           syncThemeStyleFromCache()
           heard.current = false
-          setEngine(null)
-          setFinals(''); setPartial(''); setErrorText(''); setWarming(false)
+          setErrorText(''); setWarming(false)
           setSince(Date.now()); setStoppedAt(null)
           setPhase('listening')
           playDictationCue('record-start')
@@ -61,17 +57,14 @@ export function DictationBubble() {
           setWarming(false)
         } else if (type === 'partial') {
           if (text) heard.current = true
-          setPartial(text ?? '')
         } else if (type === 'final') {
-          if (text) { heard.current = true; setFinals((current) => (current ? `${current} ${text}` : text)) }
-          setPartial('')
+          if (text) heard.current = true
         } else if (type === 'processing') {
           setStoppedAt(Date.now())
           setPhase('processing')
           playDictationCue('processing-start')
         } else if (type === 'stopped') {
           setWarming(false)
-          setPartial('')
           setStoppedAt((current) => current ?? Date.now())
           setPhase(heard.current ? 'done' : 'silent')
           playDictationCue('processing-finish')
@@ -83,10 +76,6 @@ export function DictationBubble() {
         }
       }))
       add(await listenNative<{ level: number }>('bloblex-dictation-level', (payload) => setLevel(payload.level)))
-      add(await listenNative<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (payload) => {
-        if (!responsible.current) return
-        setEngine({ engine: payload.engine, fallback: payload.fallback === true, reason: payload.reason ?? null })
-      }))
     })().catch(() => undefined)
     return () => {
       disposed = true
@@ -94,8 +83,7 @@ export function DictationBubble() {
     }
   }, [])
 
-  const text = `${finals}${finals && partial ? ' ' : ''}${partial}`
-  const expanded = (phase === 'listening' || phase === 'processing') ? text.trim().length > 0 : phase === 'error'
+  const expanded = phase === 'error'
   useEffect(() => {
     void invokeNative('set_dictation_bubble_size', { expanded }).catch(() => undefined)
   }, [expanded])
@@ -125,7 +113,7 @@ export function DictationBubble() {
 
   return (
     <div className="dictation-bubble-root" onPointerDown={onPointerDown} onPointerUp={onPointerUp}>
-      {phase !== 'idle' && <DictationIsland phase={phase} level={level} since={since} stoppedAt={stoppedAt} text={text} warming={warming} errorText={errorText} engine={engine} />}
+      {phase !== 'idle' && <DictationIsland phase={phase} level={level} since={since} stoppedAt={stoppedAt} warming={warming} errorText={errorText} />}
     </div>
   )
 }

@@ -14,7 +14,6 @@ export function DictationButton({
   owner = 'desktop',
   modelId = DEFAULT_SPEECH_MODEL_ID,
   onFinal,
-  onPartial,
   disabled = false,
   autoStart = false,
   onAutoStarted,
@@ -22,12 +21,11 @@ export function DictationButton({
   owner?: string
   modelId?: string
   onFinal: (text: string) => void
-  onPartial?: (text: string) => void
   disabled?: boolean
   autoStart?: boolean
   onAutoStarted?: () => void
 }) {
-  const { phase, active, warming, error, progress, toggle, modelPrompt, acceptModelPrompt, dismissModelPrompt } = useDictation({ owner, modelId, onFinal, onPartial })
+  const { phase, active, warming, error, progress, toggle, modelPrompt, acceptModelPrompt, dismissModelPrompt } = useDictation({ owner, modelId, onFinal })
   const started = useRef(false)
   useEffect(() => {
     if (!autoStart || started.current || disabled) return

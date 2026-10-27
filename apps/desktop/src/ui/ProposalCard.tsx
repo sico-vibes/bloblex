@@ -5,7 +5,10 @@ import { useState } from 'react'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import type { BlobLook } from '../blob/look'
 import { BookOpen, Bot, FolderPlus, GitMerge, ListChecks, Pencil, ShieldCheck, UserCog } from 'lucide-react'
-import type { JsonRecord, PermissionRequest, Project } from '../types'
+import type { JsonRecord, PermissionRequest, Project, Runtime } from '../types'
+import { parseModelCatalog } from '../executionContract'
+import { useCachedRpc } from './catalogCache'
+import { friendlyErrorText } from './errorCopy'
 import { openProjectFolder, rpc, setActiveRuntime, setActiveSession } from '../tauri'
 import { Select } from './Select'
 import { providerBrand } from './providerBrand'
@@ -63,10 +66,11 @@ export function proposalEdits(original: JsonRecord, edited: JsonRecord): JsonRec
   return Object.keys(changes).length ? changes : undefined
 }
 
-export function ProposalCard({ request, managerName = 'The Manager', projects, onDecided, onError }: {
+export function ProposalCard({ request, managerName = 'The Manager', projects, runtimes = [], onDecided, onError }: {
   request: PermissionRequest
   managerName?: string
   projects: readonly Project[]
+  runtimes?: readonly Runtime[]
   onDecided?: (decision: Decision) => void
   onError?: (message: string) => void
 }) {
@@ -75,6 +79,10 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
   const [draft, setDraft] = useState<JsonRecord>(original)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [decisionError, setDecisionError] = useState<string | null>(null)
+  const runtime = runtimes.find((item) => item.provider === draft.provider)
+  const modelsQuery = useCachedRpc('runtime.models', editing && proposal?.kind === 'bot' && runtime ? { runtimeId: runtime.id } : null)
+  const catalog = modelsQuery.value === undefined ? null : parseModelCatalog(modelsQuery.value)
   if (!proposal) return null
   const kind = String(proposal.kind)
   const updating = draft.action === 'update' && (kind === 'bot' || kind === 'project')
@@ -95,6 +103,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
   const taskProject = kind === 'task' ? projectForDraft(projects, text(draft.project)) : undefined
   const decide = async (decision: Decision, discard?: boolean) => {
     setBusy(true)
+    setDecisionError(null)
     try {
       const edits = decision === 'approve' ? proposalEdits(original, draft) : undefined
       const result = await rpc<{ result?: { sessionId?: string; runtimeId?: string; action?: string } }>('proposal.decide', { id: proposal.id, decision, ...(edits ? { edits } : {}), ...(discard ? { discard: true } : {}) })
@@ -104,7 +113,12 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
       }
       onDecided?.(decision)
     } catch (reason) {
-      onError?.(reason instanceof Error ? reason.message : 'That could not be done.')
+      const raw = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : ''
+      const message = /model is not available in this runtime catalog/i.test(raw)
+        ? 'This model is not available for the selected coding agent. Edit the proposal and choose an available model.'
+        : raw ? friendlyErrorText(raw) : 'Could not complete this proposal. Check your connection and try again.'
+      setDecisionError(message)
+      onError?.(message)
     } finally { setBusy(false) }
   }
   const chooseParent = async () => {
@@ -158,6 +172,14 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
               : <p className="proposal-value">{projectForDraft(projects, text(draft.project))?.name || text(draft.project) || 'No project'}</p>}
           </label>
         </div>
+        {editing && <label className="proposal-field"><span>Model</span>
+          {catalog?.models.length ? <Select ariaLabel="Model" variant="field" value={text(draft.model)} onChange={(value) => set('model', value || null)} options={[
+            { value: '', label: 'Agent default' },
+            ...(text(draft.model) && !catalog.models.some((model) => model.id === draft.model) ? [{ value: text(draft.model), label: `${text(draft.model)} · unavailable`, disabled: true }] : []),
+            ...catalog.models.map((model) => ({ value: model.id, label: model.displayName || model.id }))
+          ]} searchable={8} /> : <input aria-label="Model" value={text(draft.model)} onChange={(event) => set('model', event.target.value || null)} />}
+          {!catalog && <small className="proposal-hint">{modelsQuery.loading ? 'Loading available models…' : 'Available models could not be loaded. Enter a model ID or leave it empty.'}</small>}
+        </label>}
       </>}
       {(kind === 'bot' || kind === 'project') && !updating && <>
         {Array.isArray(draft.tags) && <div className="proposal-field"><span>Tags</span><p className="proposal-value">{draft.tags.join(', ') || 'No tags'}</p></div>}
@@ -232,6 +254,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, o
       </>}
     </div>
     <footer className="proposal-actions">
+      {decisionError && <p className="proposal-error" role="alert">{decisionError}</p>}
       {needsFolder && <small className="proposal-hint">Choose where the new folder goes, then approve.</small>}
       {merging && <button type="button" className="ghost-button small" disabled={busy} onClick={() => void decide('reject', true)}>Discard</button>}
       <button type="button" className="ghost-button small" disabled={busy} onClick={() => void decide('reject')}>{merging ? 'Keep branch' : 'Reject'}</button>

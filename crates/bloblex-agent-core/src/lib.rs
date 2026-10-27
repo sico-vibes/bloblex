@@ -1229,8 +1229,25 @@ pub struct AgentDiagnostic {
     pub api_retry_connection_failure: bool,
 }
 
+/// How a provider applies a changed model to a conversation that already has
+/// provider context. `KeepsSession` means the next prompt carries the new model
+/// into the same provider session, so nothing is lost; `NewSession` means the
+/// provider cannot switch inside a chat, so Bitbots has to start a fresh one,
+/// say so, and hand it a bounded recap. Defaulting to `NewSession` keeps the
+/// honest answer for any adapter that has not proved otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelSwitch { KeepsSession, #[default] NewSession }
+impl ModelSwitch {
+    pub fn as_str(self) -> &'static str { match self { Self::KeepsSession => "keepsSession", Self::NewSession => "newSession" } }
+}
+
 #[async_trait]
 pub trait AgentAdapter: Send + Sync {
+    /// The provider's own way of applying a new model between turns. Override
+    /// only with a file:line proof that the adapter really sends the model on
+    /// the next prompt of the same provider session.
+    fn model_switch(&self) -> ModelSwitch { ModelSwitch::NewSession }
     /// Return a profile-scoped model catalog. Adapters that do not support
     /// discovery keep source compatibility and report `Unsupported` by default.
     async fn model_catalog(&self, _runtime: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {

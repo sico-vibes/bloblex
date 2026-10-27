@@ -9,6 +9,7 @@
 //! also use their native question paths.
 
 use crate::{derr, team, AppState, DispatchError};
+use crate::delegations;
 use axum::http::StatusCode;
 use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
@@ -22,6 +23,15 @@ const MAX_EXPIRY_SECS: i64 = 604_800;
 const SHOWN: &str = "Your question was shown to the user. End your turn now. Their answer will arrive as your next message.";
 const DISMISSED: &str = "The user dismissed your question without answering.";
 const EXPIRED_NOTICE: &str = "A question expired without an answer.";
+/// A delegated bot whose question expired is prompted to carry on, so the
+/// assignment can finish instead of waiting forever for an answer.
+const EXPIRED_PROMPT: &str = "Your question expired without an answer. Continue without it, or say what is blocked.";
+/// How far the origin chain of a side conversation is followed when deciding
+/// whether anyone is there to answer. A deeper chain is refused, not trusted.
+const MAX_ORIGIN_HOPS: usize = 4;
+const NO_ORIGIN: &str = "This assignment's conversation is gone, so there is no one to ask.";
+const UNATTENDED_CHAIN: &str = "This assignment was started by a scheduled run, so there is no one to ask.";
+const TOO_DEEP: &str = "This assignment is too far from the user to ask a question.";
 
 /// How long a persisted question stays answerable, from `questions.expirySecs`
 /// (1800 to 604800 seconds), defaulting to 24 hours.
@@ -38,11 +48,43 @@ fn expiry_at(st: &AppState) -> String {
     (Utc::now() + Duration::seconds(expiry_secs(st))).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// Why this conversation may not leave an `ask_user` card, if it may not.
+///
+/// Only the owner answers a card, so a conversation nobody is watching must
+/// never ask: an archived one, a scheduled or unattended run, and a side
+/// conversation whose origin chain (four hops at most) contains one. A side
+/// conversation is otherwise allowed: its Manager is told it is waiting, but
+/// only the owner can answer, and the answer arrives as the child's next
+/// message. Every other kind of conversation is allowed, as before.
+pub(crate) fn may_ask(st: &AppState, session: &Value) -> Result<(), &'static str> {
+    if session["archived"] == true { return Err("This conversation is archived."); }
+    let link = &session["link"];
+    match link["kind"].as_str() {
+        Some("automation") => Err("ask_user is not available to scheduled runs."),
+        Some("task") if crate::is_unattended(link) => Err("ask_user is not available to scheduled runs."),
+        Some("side") => {
+            let mut next = link["originSessionId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned).ok_or(NO_ORIGIN)?;
+            for _ in 0..MAX_ORIGIN_HOPS {
+                let origin = st.db.session_detail(&next).map_err(|_| NO_ORIGIN)?;
+                if origin["archived"] == true { return Err(NO_ORIGIN); }
+                let origin_link = &origin["link"];
+                if crate::is_unattended(origin_link) { return Err(UNATTENDED_CHAIN); }
+                match origin_link["originSessionId"].as_str().filter(|id| !id.is_empty()) {
+                    Some(previous) => next = previous.to_owned(),
+                    None => return Ok(()),
+                }
+            }
+            Err(TOO_DEEP)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The MCP tool description, offered in every bot's own conversation.
 pub fn tool_schema() -> Value {
     json!({
         "name": "ask_user",
-        "description": "Ask the user one to six structured questions. The questions appear as a card in the chat; they may take a while to answer, so call this and then end your turn. Do not wait or poll. The user's answer arrives later as your next message.",
+        "description": "Ask the user one to six structured questions. The questions appear as a card in the chat; they may take a while to answer, so call this and then end your turn. Do not wait or poll. The user's answer arrives later as your next message. In a side conversation your Manager is told that you are waiting, but only the user can answer.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -87,13 +129,7 @@ pub fn tool_schema() -> Value {
 /// Persist and announce an `ask_user` call. Returns the text the agent sees.
 pub async fn ask_user_tool(st: &AppState, session_id: &str, args: &Value) -> Result<String, String> {
     let session = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_owned())?;
-    if session["archived"] == true { return Err("This conversation is archived.".into()); }
-    match session["link"]["kind"].as_str() {
-        Some("side") => return Err("ask_user is not available in side conversations.".into()),
-        Some("automation") => return Err("ask_user is not available to scheduled runs.".into()),
-        Some("task") if crate::is_unattended(&session["link"]) => return Err("ask_user is not available to scheduled runs.".into()),
-        _ => {}
-    }
+    may_ask(st, &session).map_err(str::to_owned)?;
     let (title, questions) = validate_args(args)?;
     let id = Uuid::new_v4().to_string();
     let expires_at = expiry_at(st);
@@ -101,6 +137,20 @@ pub async fn ask_user_tool(st: &AppState, session_id: &str, args: &Value) -> Res
     st.db
         .insert_question(&id, session_id, &provider_request_id, &title, &questions, Some(&expires_at))
         .map_err(|error| format!("The question could not be recorded: {error}"))?;
+    // The question belongs to the assignment whose turn asked it. The id comes
+    // from the daemon's own ledger lookup, never from the tool's arguments, and a
+    // question with no owner stays unlinked (a legacy card, or a conversation that
+    // carries no assignment).
+    if let Some(row) = delegations::question_owner_row(st, session_id).await {
+        if let Some(delegation_id) = row["id"].as_str() {
+            let _ = st.db.question_set_delegation(&id, delegation_id);
+        }
+    }
+    // The Manager of a side conversation that asked this is told once, with no
+    // way to answer: the wake is spawned, so a slow delivery can never delay or
+    // fail the question's own answer.
+    let (attention_st, attention_session, attention_id, attention_title) =
+        (st.clone(), session_id.to_owned(), id.clone(), title.clone());
     st.emit(
         "permission.requested",
         json!({
@@ -119,6 +169,9 @@ pub async fn ask_user_tool(st: &AppState, session_id: &str, args: &Value) -> Res
         }),
     )
     .await;
+    tokio::spawn(async move {
+        crate::delegations::attention(&attention_st, &attention_session, &attention_id, "question", &attention_title).await;
+    });
     Ok(SHOWN.to_owned())
 }
 
@@ -206,14 +259,47 @@ fn validate_args(args: &Value) -> Result<(String, Value), String> {
 /// Expired cards are never treated as answered; a later reply is a conflict.
 pub async fn sweep(st: &AppState) {
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let expired = match st.db.expire_due_questions(&now) { Ok(expired) => expired, Err(_) => return };
+    let mut expired = st.db.expire_due_questions(&now).unwrap_or_default();
+    // A card whose `resolving` claim never released (a storage error between the
+    // claim and the answer) can no longer be answered: it is expired here so it
+    // stops holding its assignment open, and its own conversation is told.
+    expired.extend(st.db.question_expire_stalled().unwrap_or_default());
     for row in expired {
         let id = row["id"].as_str().unwrap_or("");
         let session_id = row["sessionId"].as_str().unwrap_or("");
         st.emit("permission.resolved", json!({"permissionId": id, "choice": "expired", "status": "expired"})).await;
         if !session_id.is_empty() {
             team::note(st, session_id, EXPIRED_NOTICE, json!({"kind": "question_expired"})).await;
+            // A delegated bot's assignment is held open by its question, so an
+            // expiry it never hears about would leave the assignment running for
+            // ever. It is prompted to carry on, without an answer, but only while
+            // the question's own assignment is still running; the hold this
+            // leaves is released when the follow-up turn starts, or by its bound.
+            let side = st.db.session_detail(session_id).ok().is_some_and(|session| session["link"]["kind"] == "side");
+            if side && delegations::question_row(st, session_id, id).is_some_and(|row| row["status"] == "running") {
+                let _ = st.db.question_mark_answer_pending(id, true);
+                deliver_answer(st, session_id, EXPIRED_PROMPT.to_owned(), id).await;
+            }
+            delegations::question_resolved(st, session_id, id, "expired").await;
         }
+    }
+    release_dropped_answers(st).await;
+}
+
+/// An answer marked pending whose turn can never start (its queue item was deleted
+/// or dropped, and the conversation is idle) would keep its assignment waiting
+/// until the 30-minute bound — and, while it is set, every later turn end of that
+/// conversation stays silent. Past a short settle window the ones nothing can
+/// start are released here, and an assignment whose own turn already ended takes
+/// that outcome and reports it, instead of showing as running for ever.
+async fn release_dropped_answers(st: &AppState) {
+    let before = (Utc::now() - Duration::minutes(2)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    for row in st.db.question_pending_answers(&before).unwrap_or_default() {
+        let (Some(id), Some(session_id)) = (row["id"].as_str(), row["sessionId"].as_str()) else { continue };
+        if delegations::question_row(st, session_id, id).is_none() { continue; }
+        if st.db.queue_has_question_answer(session_id, id).unwrap_or(false) { continue; }
+        if delegations::active_turn(st, session_id).await.is_some() { continue; }
+        delegations::dropped_answer(st, session_id, id).await;
     }
 }
 
@@ -221,6 +307,19 @@ pub async fn sweep(st: &AppState) {
 /// called: the outcome travels back to the agent as a normal queued prompt.
 pub async fn reply_mcp_question(st: &AppState, id: &str, session_id: &str, choice: &str, p: &Value) -> Result<Value, DispatchError> {
     let data = st.db.permission_get(id).map_err(|_| derr("conflict", "That question is no longer available.", StatusCode::CONFLICT))?;
+    // The answer belongs to the conversation that asked: the card's own session
+    // is the authority, never the caller's argument.
+    let session_id = data["sessionId"].as_str().filter(|id| !id.is_empty()).unwrap_or(session_id);
+    // A delegated question whose own assignment is already over can never be read:
+    // the child is not running any more, so the card is closed here and the owner
+    // is told why. The question's own row decides, never the conversation's newest.
+    let side = st.db.session_detail(session_id).ok().is_some_and(|row| row["link"]["kind"] == "side");
+    if side && delegations::question_row(st, session_id, id).is_some_and(|row| delegations::is_terminal(&row)) {
+        let _ = st.db.resolve_question(id, "dismissed");
+        st.emit("permission.resolved", json!({"permissionId": id, "choice": "dismissed"})).await;
+        delegations::question_resolved(st, session_id, id, "closed").await;
+        return Err(derr("conflict", "This assignment has ended, so the question was closed.", StatusCode::CONFLICT));
+    }
     let answered = choice == "answer";
     let text = if answered {
         let answers = p["answers"].as_object().map(|map| map.iter().map(|(key, value)| (key.clone(), match value {
@@ -238,8 +337,13 @@ pub async fn reply_mcp_question(st: &AppState, id: &str, session_id: &str, choic
             bloblex_storage::StorageError::AgentConflict => derr("conflict", "That question is no longer pending.", StatusCode::CONFLICT),
             other => derr("internal", &other.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
         })?;
+    // The answer now holds its assignment open until it has started a turn of its
+    // own: the question's turn, which is still finishing, no longer counts as
+    // finished work, and the queued answer's turn is the one that ends the row.
+    let _ = st.db.question_mark_answer_pending(id, true);
     deliver_answer(st, session_id, text, id).await;
     st.emit("permission.resolved", json!({"permissionId": id, "choice": choice})).await;
+    delegations::question_resolved(st, session_id, id, if answered { "answered" } else { "dismissed" }).await;
     Ok(json!({"resolved": true}))
 }
 
@@ -280,5 +384,10 @@ async fn deliver_answer(st: &AppState, session_id: &str, text: String, question_
     let params = json!({"text": text, "attachments": [], "meta": meta});
     if st.db.queue_add_front(session_id, &params).is_ok() {
         crate::queue::emit_changed(st, session_id).await;
+        return;
     }
+    // Neither a turn nor a queue item took the answer: nothing will ever start the
+    // turn it was holding the assignment open for, so the hold is released here
+    // instead of keeping the assignment waiting for a turn that cannot come.
+    let _ = st.db.question_mark_answer_pending(question_id, false);
 }

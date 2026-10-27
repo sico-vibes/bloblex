@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async () => undefined,
   previewMode: false,
   rpc: h.rpc,
@@ -337,13 +339,15 @@ describe('sidebar usage analytics', () => {
 
   it('mounts the message outline when an initially empty selected session receives its first messages', async () => {
     h.fetchSnapshot.mockResolvedValue({ ...snapshot(), sessions:[{ ...sessions[0], messages:[] }] })
-    let receive: ((event: DaemonEvent) => void) | undefined
-    h.listenForDaemonEvents.mockImplementation(async (handler: (event: DaemonEvent) => void) => { receive = handler; return vi.fn() })
+    // Every listener hears the event, as with the real event bus: App is not the only one.
+    const listeners: Array<(event: DaemonEvent) => void> = []
+    const receive = (event: DaemonEvent) => { for (const listener of listeners) listener(event) }
+    h.listenForDaemonEvents.mockImplementation(async (handler: (event: DaemonEvent) => void) => { listeners.push(handler); return vi.fn() })
     const view = startApp()
     await view.settle()
     expect(view.host.querySelector('[aria-label="Conversation message outline"]')).toBeNull()
     await act(async () => {
-      receive?.({ v:1, type:'session.changed', sequence:5, payload:{ session:{ ...sessions[0], messages:[
+      receive({ v:1, type:'session.changed', sequence:5, payload:{ session:{ ...sessions[0], messages:[
         { id:'first-1', role:'user', text:'First message' },
         { id:'first-2', role:'assistant', text:'Second message' },
         { id:'first-3', role:'user', text:'Third message' },

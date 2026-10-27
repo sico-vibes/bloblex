@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './ui/App'
 import { DictationBubble } from './ui/DictationBubble'
+import { startWindowBackdrop } from './ui/windowBackdrop'
 import './ui/theme.css'
 import './ui/styles.css'
 import './ui/approval.css'
@@ -23,6 +24,8 @@ import './ui/themes/frost.css'
 import './ui/themes/haze.css'
 
 const dictation = new URLSearchParams(window.location.search).has('dictation')
+// The native frosted backdrop belongs to the main window only (the helper also skips the companion).
+if (!dictation) startWindowBackdrop()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>{dictation ? <DictationBubble /> : <App />}</React.StrictMode>,

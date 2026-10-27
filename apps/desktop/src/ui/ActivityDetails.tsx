@@ -2,10 +2,11 @@
 // reply that opens into each step, and each step opens into its details
 // (command and output, tool input and result, search query, file and diff).
 // Shown only when Settings → Experimental → "Agent activity" is on.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileText, Globe, ShieldAlert, Terminal, Wrench } from 'lucide-react'
 import type { JsonRecord } from '../types'
 import { activityCategory, activityInput, activitySummary, activityToolName, type ActivityGroup, type ConversationItem } from './conversation'
+import { TAIL_LINES, lastLine, maskSecrets, outputStreaming, tailOf, useActivityProvider } from './liveOutput'
 import './ActivityDetails.css'
 
 const TEAM_TOOLS: Record<string, string> = {
@@ -96,10 +97,36 @@ function StepIcon({ item }: { item: ConversationItem }) {
   return <Wrench size={13} aria-hidden="true" />
 }
 
+/** Command output as the coding agent reported it: the last lines while it runs, everything it kept once done. */
+function OutputBlock({ value, running }: { value: string; running: boolean }) {
+  const [all, setAll] = useState(false)
+  const box = useRef<HTMLPreElement | null>(null)
+  const tail = tailOf(value)
+  const shown = all || !tail.cut ? value : tail.text
+  useEffect(() => {
+    const node = box.current
+    if (running && node && node.scrollHeight - node.scrollTop - node.clientHeight < 48) node.scrollTop = node.scrollHeight
+  }, [shown, running])
+  return <div className="activity-step-block">
+    <span>{running ? 'Live output' : 'Output'}{tail.cut && !all ? ` · last ${TAIL_LINES} lines` : ''}</span>
+    <pre ref={box} className={running ? 'live' : undefined} tabIndex={0} aria-label={running ? 'Live command output' : 'Command output'}>{shown}</pre>
+    {tail.cut && <button type="button" className="ghost-button small" onClick={() => setAll((current) => !current)}>{all ? 'Show only the end' : 'Show everything kept'}</button>}
+  </div>
+}
+
 function StepDetail({ item, onDiff }: { item: ConversationItem; onDiff?: (path: string, content: string) => void }) {
   const detail = detailOf(item)
+  const provider = useActivityProvider()
+  const running = stateOf(item) === 'running'
   const blocks: Array<{ label: string; value: string; mono?: boolean }> = []
-  const add = (label: string, value: unknown, mono = true) => { const content = text(value); if (content) blocks.push({ label, value: content, mono }) }
+  let hidden = false
+  const add = (label: string, value: unknown, mono = true) => {
+    const content = text(value)
+    if (!content) return
+    const safe = maskSecrets(content)
+    hidden ||= safe.masked
+    blocks.push({ label, value: safe.text, mono })
+  }
   add('Command', detail.command ?? activityInput(item).command)
   add('Tool', detail.tool, false)
   add('Input', detail.input)
@@ -108,18 +135,29 @@ function StepDetail({ item, onDiff }: { item: ConversationItem; onDiff?: (path: 
   add('URL', detail.url)
   add('Path', detail.path)
   add('Progress', detail.progress, false)
-  add('Output', detail.output)
+  const output = text(detail.output)
+  const safeOutput = output ? maskSecrets(output) : null
+  hidden ||= !!safeOutput?.masked
   add('Result', detail.result)
   add('Error', detail.error)
   add('Status', detail.resultStatus, false)
   const diff = text(detail.diff)
-  if (!blocks.length && !diff) return <p className="activity-step-empty">The agent did not report details for this step.</p>
+  const isCommand = activityCategory(item) === 'command'
+  const waitingNote = running && isCommand && !output ? outputStreaming(provider).note : null
+  if (!blocks.length && !diff && !safeOutput && !waitingNote) return <p className="activity-step-empty">The agent did not report details for this step.</p>
   return <div className="activity-step-detail">
-    {blocks.map((block) => <div key={block.label} className="activity-step-block">
+    {blocks.filter((block) => ['Command', 'Tool', 'Input', 'Query', 'Pattern', 'URL', 'Path', 'Progress'].includes(block.label)).map((block) => <div key={block.label} className="activity-step-block">
+      <span>{block.label}</span>
+      {block.mono ? <pre>{block.value}</pre> : <p>{block.value}</p>}
+    </div>)}
+    {safeOutput && <OutputBlock value={safeOutput.text} running={running} />}
+    {waitingNote && <p className="activity-step-note">{waitingNote}</p>}
+    {blocks.filter((block) => !['Command', 'Tool', 'Input', 'Query', 'Pattern', 'URL', 'Path', 'Progress'].includes(block.label)).map((block) => <div key={block.label} className="activity-step-block">
       <span>{block.label}</span>
       {block.mono ? <pre>{block.value}</pre> : <p>{block.value}</p>}
     </div>)}
     {typeof detail.exitCode === 'number' && <small>Exit code {detail.exitCode}</small>}
+    {hidden && <small className="activity-step-note">Possible keys and passwords are hidden here. The agent's full output is unchanged.</small>}
     {diff && <div className="activity-step-block"><span>Diff</span><pre className="diff">{diff}</pre>{onDiff && <button type="button" className="ghost-button small" onClick={() => onDiff(text(detail.path) ?? 'Reported change', diff)}>Open diff</button>}</div>}
   </div>
 }
@@ -132,6 +170,7 @@ function Step({ item, onDiff }: { item: ConversationItem; onDiff?: (path: string
       <span className="activity-step-icon"><StepIcon item={item} /></span>
       <span className="activity-step-title">{activityTitle(item)}</span>
       {state === 'running' && <span className="activity-step-state">Running</span>}
+      {state === 'running' && typeof detailOf(item).output === 'string' && <span className="activity-step-live" aria-hidden="true">{lastLine(maskSecrets(String(detailOf(item).output)).text)}</span>}
       {state === 'failed' && <span className="activity-step-state failed">Failed</span>}
       {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
     </button>

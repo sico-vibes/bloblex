@@ -547,7 +547,12 @@ impl CodexAdapter {
                     });
                 }
                 if !reader.intentional_shutdown.load(Ordering::Acquire) {
-                    let _ = session.events.enqueue(AgentEvent::Error { message: "Codex app-server exited unexpectedly".into() });
+                    // Only a session with a turn in flight lost work. A session
+                    // whose turn already ended keeps its terminal outcome; a
+                    // process exit is not a turn failure for it.
+                    if active {
+                        let _ = session.events.enqueue(AgentEvent::Error { message: "Codex app-server exited unexpectedly".into() });
+                    }
                 }
             }
             reader.shutdown().await;
@@ -1352,6 +1357,9 @@ async fn account_rate_limits(r: &RuntimeSpec) -> Result<Value, AdapterError> {
 
 #[async_trait]
 impl AgentAdapter for CodexAdapter {
+    // Prompt for a live thread sends `p["model"]` in every `turn/start`
+    // (`prompt`, ~1561-1563), so the same thread carries the new model.
+    fn model_switch(&self) -> ModelSwitch { ModelSwitch::KeepsSession }
     async fn model_catalog(&self, r: &RuntimeSpec) -> Result<ModelCatalog, AdapterError> {
         let pages = catalog_pages(r).await?;
         let mut models = Vec::new();

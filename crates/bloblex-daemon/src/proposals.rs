@@ -66,7 +66,7 @@ pub fn tool_schemas() -> Vec<Value> {
             "propose_bot" => {
                 props.insert("tags".into(), tag_schema());
                 props.insert("thinking".into(), json!({"type":["string","null"],"description":"Effort id; null uses the model default."}));
-                props.insert("look".into(), json!({"type":["object","null"],"description":"Look as returned by read_blob: shape, seed, traits, bot, icon (logo, logo-tint, logo-mono, px-robot, px-cat, px-ghost, px-alien, px-fox, px-frog, px-owl, px-bunny, px-bear, px-octopus, px-mushroom, px-slime, px-wizard, px-duck, px-rocket, px-bolt). Haze look: the bot's mark. logo, logo-tint and logo-mono show the runtime's logo in its own colours, the bot colour or one colour; px-* are pixel icons."}));
+                props.insert("look".into(), json!({"type":["object","null"],"description":"Look as returned by read_blob: shape, seed, traits, bot, icon (logo, logo-tint, logo-mono, px-robot, px-cat, px-ghost, px-alien, px-fox, px-frog, px-owl, px-bunny, px-bear, px-octopus, px-mushroom, px-slime, px-wizard, px-duck, px-rocket, px-bolt, char-albert-einstein, char-nikola-tesla, char-cleopatra, char-superman, char-sherlock-holmes, char-robin-hood, char-thor, char-hulk, char-marie-curie, char-joan-of-arc, char-amelia-earhart, char-sun-wukong, char-frida-kahlo, char-captain-marvel, char-ada-lovelace, char-ludwig-van-beethoven, char-charlie-chaplin, char-william-shakespeare, char-queen-elizabeth-i, char-master-chief, char-sonic, char-anubis, char-wolfgang-amadeus-mozart, char-arthur-morgan, char-count-dracula, char-hua-mulan, char-gandalf, char-benjamin-franklin, char-kratos). Haze look: the bot's mark. logo, logo-tint and logo-mono show the runtime's logo in its own colours, the bot colour or one colour; px-* are pixel icons; char-* selects one of the Haze character portraits in its original colours."}));
                 props.insert("approvalMode".into(), json!({"type":"string","enum":["ask","auto"]}));
             }
             "assign_task" => {
@@ -161,9 +161,10 @@ async fn validate_bot(st: &AppState, args: &Value) -> Result<Value, String> {
     let model = optional_str(map, "model", 200)?;
     let project = optional_str(map, "project", 200)?;
     let project = if project.is_empty() { project } else { crate::team::project_named(st,&project)?["id"].as_str().unwrap_or("").to_owned() };
-    if !st.runtimes.read().await.iter().any(|runtime| runtime["provider"].as_str() == Some(provider.as_str())) {
-        return Err(format!("No {provider} runtime is installed."));
-    }
+    let runtime_id = st.runtimes.read().await.iter()
+        .find(|runtime| runtime["provider"].as_str() == Some(provider.as_str()))
+        .and_then(|runtime| runtime["id"].as_str().map(str::to_owned))
+        .ok_or_else(|| format!("No {provider} runtime is installed."))?;
     let agents = st.db.agent_list(false, None).map_err(|error| error.to_string())?;
     if agents.len() >= MAX_TEAM {
         return Err(format!("The team already has {} bots; Bitbots allows at most 12. Archive one before creating another.", agents.len()));
@@ -176,6 +177,11 @@ async fn validate_bot(st: &AppState, args: &Value) -> Result<Value, String> {
     for key in ["thinking", "look", "approvalMode"] { if let Some(value) = args.get(key) { payload[key] = value.clone(); } }
     if model.is_empty() { payload["model"] = Value::Null; }
     validate_bot_options(&payload)?;
+    // Validate the same catalogue constraints used by agent.create before
+    // showing an approval card. Unknown IDs must not become promises that can
+    // only fail after the owner approves; never substitute another model.
+    crate::validate_agent_catalog(st, &runtime_id, &payload).await
+        .map_err(|error| format!("{} Choose an available model and effort from the coding agent's catalogue.", error.1.message))?;
     Ok(payload)
 }
 
@@ -541,8 +547,10 @@ async fn apply_task(st: &AppState, session_id: &str, payload: &Value) -> Result<
     }
     let brief = format!("{}\n\nDone goal:\n{}\n\nReport back:\n{}", payload["brief"].as_str().unwrap_or(""), payload["doneGoal"].as_str().unwrap_or(""), payload["reportBack"].as_str().unwrap_or(""));
     let topic = payload["topic"].as_str().filter(|topic| !topic.is_empty()).map(str::to_owned).unwrap_or_else(|| crate::team::topic_from(payload["brief"].as_str().unwrap_or("Task")));
-    let delegation = crate::team::delegate(st, session_id, &json!({"blob": bot, "message": brief, "projectPath": project_path,"topic":topic,"conversation":payload["conversation"]})).await.map_err(invalid)?;
-    let verb = if delegation.started { "started a task for" } else { "queued a task for" };
+    let delegation = crate::team::delegate_approved(st, session_id, &json!({"blob": bot, "message": brief, "projectPath": project_path,"topic":topic,"conversation":payload["conversation"]})).await.map_err(invalid)?;
+    // A replayed approval must not read as a second task: it names the assignment
+    // that already exists.
+    let verb = if delegation.duplicate.is_some() { "had already sent this task to" } else if delegation.started { "started a task for" } else { "queued a task for" };
     Ok((json!({"sideSessionId": delegation.side, "topic": delegation.title, "bot": delegation.target_name, "started": delegation.started, "projectPath": project_path}), format!("{verb} {}", delegation.target_name)))
 }
 
@@ -954,20 +962,6 @@ fn validate_task_target(st: &AppState, manager: &Value, payload: &Value) -> Resu
         }
     }
     Ok(())
-}
-
-pub async fn propose_message(st: &AppState, session_id: &str, args: &Value) -> Result<String,String> {
-    let map = args.as_object().ok_or("The message must be an object.")?;
-    reject_unknown(map,&["blob","message","topic","conversation","project","doneGoal","reportBack"],"the message")?;
-    let mut task = args.clone();
-    task.as_object_mut().unwrap().remove("blob"); task.as_object_mut().unwrap().remove("message");
-    task["bot"] = args["blob"].clone(); task["brief"] = args["message"].clone();
-    if task["conversation"].as_str().is_none_or(|c| c.trim().is_empty()) && task["topic"].as_str().is_none_or(|t| t.trim().is_empty()) {
-        let manager = manager_of_session(st,session_id)?;
-        let target = crate::team::blob_named(st,args["blob"].as_str().unwrap_or(""))?;
-        if let Some(id) = st.db.side_session_for(target["id"].as_str().unwrap_or(""),manager["id"].as_str().unwrap_or(""),session_id).map_err(|error| error.to_string())? { task["conversation"] = json!(id); }
-    }
-    assign_task(st,session_id,&task).await
 }
 
 pub async fn propose_open(st: &AppState, session_id: &str, args: &Value) -> Result<String,String> {

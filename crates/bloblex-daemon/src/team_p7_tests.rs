@@ -17,6 +17,14 @@ async fn fixture() -> (AppState, String, String) {
 async fn call(st: &AppState, sid: &str, name: &str, args: Value) -> Value {
     mcp_rpc(st, sid, "mcp.tools.call", &json!({"name":name,"arguments":args})).await.unwrap()
 }
+/// A runtime row and a fake adapter, so a direct delegation can open its side
+/// conversation without spawning a real coding agent.
+async fn install_delegation(st: &mut AppState) {
+    let runtime = json!({"id":"p7-rt","provider":"codex","status":"online","executablePath":"unused-test-runtime","launchArgs":[]});
+    st.db.upsert_runtime(&runtime).unwrap();
+    *st.runtimes.write().await = vec![runtime];
+    st.adapters = std::sync::Arc::new(crate::Adapters { acp: std::sync::Arc::new(P7Adapter), codex: std::sync::Arc::new(P7Adapter), claude: std::sync::Arc::new(P7Adapter) });
+}
 fn pending(st: &AppState) -> Value { st.db.proposals_pending().unwrap().last().unwrap().clone() }
 async fn approve(st: &AppState) -> Value {
     crate::proposals::decide(st, &json!({"id":pending(st)["id"],"decision":"approve"})).await.unwrap()
@@ -47,6 +55,46 @@ async fn p7_update_bot_requires_approval_rechecks_lock_and_restricts_fields() {
 }
 
 #[tokio::test]
+async fn p7_manager_messages_a_teammate_immediately_with_no_proposal_or_task() {
+    let (mut st,boss,worker)=fixture().await;
+    install_delegation(&mut st).await;
+    let before=st.db.session_list(false).unwrap().len();
+    let sent=call(&st,"p7-boss","message_blob",json!({"blob":worker,"message":"Please check the build and report back.","topic":"Build check"})).await;
+    assert_ne!(sent["isError"],true,"{sent}");
+    // Delivered at once, with no approval card and no board task.
+    assert!(st.db.proposals_pending().unwrap().is_empty(),"no pending proposal");
+    assert_eq!(st.db.task_list(None,None,None,None).unwrap().len(),0,"no task is created");
+    assert_eq!(st.db.session_list(false).unwrap().len(),before+1,"the side conversation opens");
+    let side=st.db.side_session(&worker,&boss).unwrap().expect("the teammate's side conversation");
+    let detail=st.db.session_detail(&side).unwrap();
+    assert_eq!(detail["link"]["kind"],"side");
+    assert_eq!(detail["link"]["peerAgentId"],boss.as_str());
+    assert_eq!(detail["link"]["originSessionId"],"p7-boss");
+    // The sender records the delegation it sent, so the Manager can report it.
+    let notice=st.db.session_detail("p7-boss").unwrap()["messages"].as_array().cloned().unwrap_or_default();
+    assert!(notice.iter().any(|m| m["meta"]["kind"]=="delegation" && m["meta"]["sideSessionId"]==side.as_str()),"{notice:?}");
+    // A consequential operation still waits for the owner's approval.
+    let rename=call(&st,"p7-boss","update_blob",json!({"blob":worker,"role":"Lead"})).await;
+    assert_ne!(rename["isError"],true);
+    assert_eq!(pending(&st)["kind"],"bot");
+    assert!(st.db.agent_get(&worker).unwrap()["role"].as_str().is_none_or(str::is_empty),"nothing changed before approval");
+}
+
+#[tokio::test]
+async fn p7_description_tells_the_manager_a_message_needs_no_approval() {
+    let (st,_,_)=fixture().await;
+    let tools=mcp_rpc(&st,"p7-boss","mcp.tools.list",&json!({})).await.unwrap();
+    let message=tools["tools"].as_array().unwrap().iter().find(|tool| tool["name"]=="message_blob").unwrap().clone();
+    let description=message["description"].as_str().unwrap_or("");
+    assert!(description.contains("sent at once"), "{description}");
+    assert!(description.contains("no approval"), "{description}");
+    assert!(message["inputSchema"]["required"].as_array().unwrap().iter().all(|key| key != "doneGoal" && key != "reportBack"));
+    let instructions=runtime_instructions(&st,&st.db.manager_agent().unwrap().unwrap(),&json!({"kind":"main"}),std::path::Path::new("."));
+    assert!(instructions.contains("message_blob"), "the Manager is told to delegate with message_blob");
+    assert!(!instructions.contains("messaging, opening a conversation"), "messaging is no longer listed as a pending approval");
+}
+
+#[tokio::test]
 async fn p7_project_edits_are_proposals_and_unknown_projects_refused() {
     let (st,_,_) = fixture().await;
     let project=st.db.project_create("Portal",Some(".")).unwrap().0;
@@ -60,17 +108,27 @@ async fn p7_project_edits_are_proposals_and_unknown_projects_refused() {
 }
 
 #[tokio::test]
-async fn p7_manager_message_and_start_require_task_contract_and_approval() {
-    let (st,_,worker)=fixture().await;
-    for tool in ["message_blob","start_conversation","assign_task"] {
-        let args=if tool=="message_blob" { json!({"blob":worker,"message":"Research it","doneGoal":"Sources checked","reportBack":"Findings with sources","topic":"Research the market"}) } else { json!({"bot":worker,"brief":"Research it","doneGoal":"Sources checked","reportBack":"Findings with sources","topic":"Research the market"}) };
+async fn p7_manager_messages_a_teammate_at_once_while_start_and_assign_stay_approved() {
+    let (mut st,_,worker)=fixture().await;
+    install_delegation(&mut st).await;
+    // A message is sent at once: no approval card, no task draft, and the side
+    // conversation exists immediately.
+    let before=st.db.session_list(false).unwrap().len();
+    let sent=call(&st,"p7-boss","message_blob",json!({"blob":worker,"message":"Research it","topic":"Research the market"})).await;
+    assert_ne!(sent["isError"],true,"{sent}");
+    assert!(sent.to_string().contains("Sent to Scout"),"{sent}");
+    assert!(st.db.proposals_pending().unwrap().is_empty(),"a message is not a proposal");
+    assert_eq!(st.db.session_list(false).unwrap().len(),before+1,"the side conversation opens at once");
+    // Consequential delegation still needs the owner's approval and the contract.
+    for tool in ["start_conversation","assign_task"] {
+        let args=json!({"bot":worker,"brief":"Research it","doneGoal":"Sources checked","reportBack":"Findings with sources","topic":"Research the market"});
         let count=st.db.session_list(false).unwrap().len();
         let result=call(&st,"p7-boss",tool,args).await;
         assert_ne!(result["isError"],true,"{tool}: {result}");
         assert_eq!(pending(&st)["payload"]["doneGoal"],"Sources checked");
         assert_eq!(pending(&st)["payload"]["reportBack"],"Findings with sources");
-        assert_eq!(st.db.session_list(false).unwrap().len(),count);
-        let bad=if tool=="message_blob" {json!({"blob":worker,"message":"Missing contract"})} else {json!({"bot":worker,"brief":"Missing contract"})};
+        assert_eq!(st.db.session_list(false).unwrap().len(),count,"nothing is delivered before approval");
+        let bad=json!({"bot":worker,"brief":"Missing contract"});
         assert_eq!(call(&st,"p7-boss",tool,bad).await["isError"],true);
     }
     assert_eq!(call(&st,"p7-worker","start_conversation",json!({})).await["isError"],true);
@@ -135,15 +193,11 @@ impl bloblex_agent_core::AgentAdapter for P7Adapter {
 
 #[tokio::test]
 async fn p7_approved_parallel_tasks_carry_contract_and_follow_up_uses_same_conversation() {
-    let (mut st,_,worker)=fixture().await;
-    st.adapters = std::sync::Arc::new(crate::Adapters { acp: std::sync::Arc::new(P7Adapter), codex: std::sync::Arc::new(P7Adapter), claude: std::sync::Arc::new(P7Adapter) });
+    let (mut st,boss,worker)=fixture().await;
+    install_delegation(&mut st).await;
     let mut sides=Vec::new();
-    for tool in ["assign_task","start_conversation","message_blob"] {
-        let mut args = json!({"brief":"Research the market","bot":worker,"doneGoal":"Three checked sources","reportBack":"Findings with links","topic":"Research the market"});
-        if tool=="message_blob" {
-            args.as_object_mut().unwrap().remove("brief"); args.as_object_mut().unwrap().remove("bot");
-            args["message"]=json!("Research the market"); args["blob"]=json!(worker);
-        }
+    for tool in ["assign_task","start_conversation"] {
+        let args = json!({"brief":"Research the market","bot":worker,"doneGoal":"Three checked sources","reportBack":"Findings with links","topic":"Research the market"});
         assert_ne!(call(&st,"p7-boss",tool,args).await["isError"],true);
         let result=approve(&st).await;
         let side=result["result"]["sideSessionId"].as_str().unwrap().to_owned();
@@ -157,10 +211,24 @@ async fn p7_approved_parallel_tasks_carry_contract_and_follow_up_uses_same_conve
         assert!(row["messages"].to_string().contains("Three checked sources"));
         assert!(row["messages"].to_string().contains("Findings with links"));
     }
+    // A message needs no approval: it continues the same conversation at once,
+    // and its provenance stays the Manager conversation that started it.
     let count=st.db.session_list(false).unwrap().len();
-    assert_ne!(call(&st,"p7-boss","message_blob",json!({"blob":worker,"message":"Check another source","conversation":sides[0],"doneGoal":"Source checked","reportBack":"Source and verdict"})).await["isError"],true);
-    assert_eq!(approve(&st).await["result"]["sideSessionId"],sides[0]);
-    assert_eq!(st.db.session_list(false).unwrap().len(),count);
+    let sent=call(&st,"p7-boss","message_blob",json!({"blob":worker,"message":"Check another source","conversation":sides[0]})).await;
+    assert_ne!(sent["isError"],true,"{sent}");
+    assert!(st.db.proposals_pending().unwrap().is_empty(),"a message creates no proposal");
+    assert_eq!(st.db.session_list(false).unwrap().len(),count,"a follow-up reuses the conversation");
+    let link=st.db.session_detail(&sides[0]).unwrap()["link"].clone();
+    assert_eq!(link["originSessionId"],"p7-boss");
+    assert_eq!(link["peerAgentId"],boss.as_str());
+    for _ in 0..100 {
+        let delivered = st.db.session_detail(&sides[0]).unwrap()["messages"].to_string().contains("Check another source");
+        // The teammate is still busy with its first brief, so the message waits in the team queue.
+        let queued = st.team.queued.lock().await.get(&sides[0]).is_some_and(|items| items.iter().any(|item| item.text.contains("Check another source")));
+        if delivered || queued { return; }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the direct message never reached the existing conversation or its team queue");
 }
 
 #[tokio::test]
@@ -260,14 +328,27 @@ async fn p7_task_routing_refuses_wrong_project_or_missing_folder() {
 }
 
 #[tokio::test]
-async fn p7_archived_manager_cannot_fall_back_to_ordinary_message_routing() {
+async fn p7_archived_manager_conversation_cannot_message_or_make_unapproved_writes() {
     let (mut st,_,worker)=fixture().await;
-    st.adapters = std::sync::Arc::new(crate::Adapters { acp: std::sync::Arc::new(P7Adapter), codex: std::sync::Arc::new(P7Adapter), claude: std::sync::Arc::new(P7Adapter) });
-    st.db.session_archive("p7-boss",true).unwrap();
+    install_delegation(&mut st).await;
     let count=st.db.session_list(false).unwrap().len();
-    let result=call(&st,"p7-boss","message_blob",json!({"blob":worker,"message":"Research","doneGoal":"Done","reportBack":"Evidence"})).await;
-    assert_eq!(result["isError"],true,"archiving must not turn the Manager into an ordinary sender");
-    assert_eq!(st.db.session_list(false).unwrap().len(),count);
+    st.db.session_archive("p7-boss",true).unwrap();
+    let after_archive=st.db.session_list(false).unwrap().len();
+    assert_eq!(after_archive,count-1,"the archived conversation leaves the list");
+    // The archived guard survives the removal of the messaging approval.
+    let result=call(&st,"p7-boss","message_blob",json!({"blob":worker,"message":"Research","topic":"Research"})).await;
+    assert_eq!(result["isError"],true,"an archived Manager conversation cannot send");
+    assert_eq!(st.db.session_list(false).unwrap().len(),after_archive,"nothing is delivered");
+    // Consequential writes still refuse an archived Manager conversation.
+    for (tool,args) in [
+        ("update_blob",json!({"blob":worker,"role":"Lead"})),
+        ("propose_bot",json!({"name":"Extra","provider":"codex"})),
+        ("assign_task",json!({"bot":worker,"brief":"Research","doneGoal":"Done","reportBack":"Evidence"})),
+        ("set_conversation_permission",json!({"conversation":"p7-worker","mode":"auto"})),
+    ] {
+        assert_eq!(call(&st,"p7-boss",tool,args).await["isError"],true,"{tool} must stay approved");
+    }
+    assert!(st.db.proposals_pending().unwrap().is_empty());
 }
 
 // P7 audit B1: an approved permission change must not pin model, effort or mode

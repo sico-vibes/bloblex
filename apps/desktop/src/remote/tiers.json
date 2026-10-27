@@ -44,6 +44,13 @@
       "params": null
     },
     {
+      "method": "session.repository",
+      "class": "never",
+      "minTier": null,
+      "why": "Raw repository diffs can contain environment values and credentials from files on the host, and the remote redaction keeps diff text as it is, so they stay on the host. The desktop rail reads them locally.",
+      "params": null
+    },
+    {
       "method": "runtime.list",
       "class": "read",
       "minTier": "viewer",
@@ -286,6 +293,13 @@
       "class": "chat",
       "minTier": "chat",
       "why": "Adds or removes an emoji reaction.",
+      "params": null
+    },
+    {
+      "method": "message.image",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Serves one image the owner sent, from that message's own record in that conversation. The caller names a message and an image position, never a file path, and remote clients do not send attachments in v1.",
       "params": null
     },
     {
@@ -646,6 +660,13 @@
       "params": null
     },
     {
+      "method": "session.model.plan",
+      "class": "never",
+      "minTier": null,
+      "why": "It only exists to prepare a model change, and a remote device must not change a conversation's model.",
+      "params": null
+    },
+    {
       "method": "session.permissions.set",
       "class": "never",
       "minTier": null,
@@ -945,6 +966,48 @@
       "minTier": null,
       "why": "Permanent bot and conversation deletion is local-only.",
       "params": null
+    },
+    {
+      "method": "delegation.list",
+      "class": "never",
+      "minTier": null,
+      "why": "Assignments carry the host's absolute workspace and worktree paths, which the remote redaction does not reduce yet, so they stay on the host. The desktop reads them locally.",
+      "params": null
+    },
+    {
+      "method": "delegation.cancel",
+      "class": "never",
+      "minTier": null,
+      "why": "Stopping an assignment cancels a teammate's running turn or withdraws a queued brief; only the owner at the desktop may do that.",
+      "params": null
+    },
+    {
+      "method": "delegation.cancelGroup",
+      "class": "never",
+      "minTier": null,
+      "why": "Stopping a group of assignments cancels teammates' turns; only the owner at the desktop may do that.",
+      "params": null
+    },
+    {
+      "method": "session.workspace",
+      "class": "never",
+      "minTier": null,
+      "why": "The workspace report carries the host's absolute folder, repository and worktree paths, which the remote redaction does not reduce, so it stays on the host.",
+      "params": null
+    },
+    {
+      "method": "media.preview",
+      "class": "never",
+      "minTier": null,
+      "why": "It returns file bytes from the host's project folder (images, audio, video, PDFs, text); attachments and file content stay off remote in this version.",
+      "params": null
+    },
+    {
+      "method": "session.checkpoints",
+      "class": "never",
+      "minTier": null,
+      "why": "The per-turn change report lists file paths and diff counts from the host's repository, which the remote redaction does not reduce, so it stays on the host.",
+      "params": null
     }
   ],
   "events": {
@@ -1000,7 +1063,8 @@
     "remote.activity": "drop",
     "task.changed": "drop",
     "task.run.changed": "drop",
-    "task.run.finished": "drop"
+    "task.run.finished": "drop",
+    "delegation.updated": "drop"
   },
   "settingsAllowlist": [
     "appearance.style",

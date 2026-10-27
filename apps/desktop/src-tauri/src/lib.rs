@@ -30,6 +30,8 @@ mod harness_updates;
 mod clipboard;
 mod speech;
 mod power;
+mod backdrop;
+mod pty;
 mod migrate;
 
 #[cfg(test)]
@@ -496,7 +498,7 @@ async fn daemon_rpc(
 
 /// A lost transport can be retried once for observational startup calls only.
 fn retry_startup_read(method: &str, error: &str) -> bool {
-    matches!(method, "app.snapshot" | "runtime.refresh" | "runtime.models" | "runtime.capabilities" | "usage.summary" | "settings.get")
+    matches!(method, "app.snapshot" | "runtime.refresh" | "runtime.models" | "runtime.capabilities" | "usage.summary" | "settings.get" | "message.image")
         && (error.starts_with("Daemon request failed:")
             || error == "The local Bitbots daemon is not running."
             || error == "The local Bitbots daemon stopped unexpectedly.")
@@ -2979,6 +2981,8 @@ pub fn run() {
         .manage(updates::UpdateService::default())
         .manage(speech::SpeechState::default())
         .manage(power::PowerState::default())
+        .manage(backdrop::BackdropState::default())
+        .manage(pty::PtyService::default())
         .setup(|app| {
             log_shell("info", concat!("desktop started version ", env!("CARGO_PKG_VERSION")));
             let mut start_at_last_position = false;
@@ -3026,6 +3030,7 @@ pub fn run() {
             updates::start_background_checker(app.handle());
             build_tray(app.handle())?;
             if let Some(main) = app.get_webview_window("main") {
+                backdrop::restore(app.handle(), &main);
                 let main_for_event = main.clone();
                 let app_for_event = app.handle().clone();
                 main.on_window_event(move |event| {
@@ -3039,6 +3044,11 @@ pub fn run() {
                             }
                         } else {
                             let _ = main_for_event.hide();
+                        }
+                    } else if let WindowEvent::Destroyed = event {
+                        // No shell survives the window that could show it.
+                        if let Some(terminals) = app_for_event.try_state::<pty::PtyService>() {
+                            terminals.shutdown();
                         }
                     }
                 });
@@ -3117,7 +3127,14 @@ pub fn run() {
             updates::updates_check,
             updates::updates_install,
             power::set_keep_awake,
-            power::keep_awake_state
+            power::keep_awake_state,
+            backdrop::window_backdrop_apply,
+            backdrop::window_backdrop_state,
+            pty::terminal_open,
+            pty::terminal_write,
+            pty::terminal_resize,
+            pty::terminal_close,
+            pty::terminal_list
         ])
         .build(tauri::generate_context!())
         .expect("Bitbots desktop application failed to start")
@@ -3132,6 +3149,9 @@ pub fn run() {
                 }
                 if let Some(state) = app.try_state::<AppState>() {
                     state.stop_child();
+                }
+                if let Some(terminals) = app.try_state::<pty::PtyService>() {
+                    terminals.shutdown();
                 }
             }
         });

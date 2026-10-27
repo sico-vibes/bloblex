@@ -221,14 +221,14 @@ export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, on
     original?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' })
   }
   if (role === 'thinking') return null
-  if (meta?.kind === 'delegation' || meta?.kind === 'blob_reply') {
+  if (meta?.kind === 'delegation' || meta?.kind === 'blob_reply' || meta?.kind === 'blob_update') {
     const id = meta.kind === 'delegation' ? meta.peerAgentId : meta.fromAgentId
     const peer = agents.find((agent) => agent.id === id)
     const name = (meta.kind === 'delegation' ? meta.peerName : meta.fromName) ?? peer?.name ?? 'Teammate'
     const failed = meta.kind === 'delegation' && meta.direction === 'failed'
     return <div className="companion-team-chip-row">
       <button type="button" className={`companion-team-chip${failed ? ' failed' : ''}`} style={peer ? { ['--chip-accent' as string]: agentColorHex(peer.color) } : undefined} disabled={!meta.sideSessionId} title={text.trim() ? text.trim().slice(0, 280) : undefined} onClick={() => onOpenSide(meta.sideSessionId)} aria-label={`${meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'} ${name}. Open the conversation`}>
-        <span>{meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : 'Message from'}</span>{peer && <Face agent={peer} size={14} />}<b>{name}</b>{meta.sideSessionId && <ArrowUpRight size={11} aria-hidden="true" className="companion-team-chip-open" />}
+        <span>{meta.kind === 'delegation' ? (failed ? 'Could not reach' : 'Messaged') : meta.kind === 'blob_update' ? 'Waiting for you' : 'Message from'}</span>{peer && <Face agent={peer} size={14} />}<b>{name}</b>{meta.sideSessionId && <ArrowUpRight size={11} aria-hidden="true" className="companion-team-chip-open" />}
       </button>
     </div>
   }

@@ -1,7 +1,7 @@
 // Composer footer controls: permission mode, attachment tray and the shared
 // popover behaviour used by the model, effort and context controls.
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { Check, ChevronDown, Hand, ImageIcon, LoaderCircle, Plus, ShieldCheck, X, CircleAlert } from 'lucide-react'
+import { Check, ChevronDown, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, X, CircleAlert } from 'lucide-react'
 import type { Agent, ApprovalMode, Session } from '../types'
 import { rpc } from '../tauri'
 import { ConfirmDialog } from './BlobPage'
@@ -50,6 +50,18 @@ export function sessionApprovalMode(session: Session, agent: Agent | null): { mo
   return { mode: inherited === 'auto' || inherited === 'bypass' ? inherited : 'ask', pinned: false }
 }
 
+/**
+ * The value written to the bot for a menu choice. Null means "follow the bot's
+ * own default", so it is written only when the owner picks that default.
+ * Full access always persists `bypass`: writing null there would clear the
+ * bot's setting and drop the conversation back to the global default, which can
+ * be Ask.
+ */
+export function permissionWrite(next: ApprovalMode, botMode: ApprovalMode): ApprovalMode | null {
+  if (next === 'bypass') return 'bypass'
+  return next === botMode ? null : next
+}
+
 function ModeIcon({ mode, size = 14 }: { mode: ApprovalMode; size?: number }) {
   if (mode === 'bypass') return <CircleAlert size={size} aria-hidden="true" />
   if (mode === 'auto') return <ShieldCheck size={size} aria-hidden="true" />
@@ -87,13 +99,13 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
   // not a conversation is open. An open conversation is then brought in line by
   // clearing its own pin, so it follows the bot from the next turn. The bot's
   // answer replaces the optimistic value, and a failure leaves the old one.
-  const apply = async (next: ApprovalMode | null) => {
+  const apply = async (write: ApprovalMode | null) => {
     const before = session
     setSaving(true)
     if (!agent) { setSaving(false); onError(new Error('Choose a bot first.')); return }
     if (!before.id.startsWith('draft:')) onSessionUpdated({ ...before, modelLock: { ...(before.modelLock ?? {}), approvalMode: undefined } })
     try {
-      const updated = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, approvalMode: next })
+      const updated = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, approvalMode: write })
       if (updated.agent?.id) onAgentUpdated?.(updated.agent)
       if (!before.id.startsWith('draft:')) {
         const result = await rpc<{ session?: Session }>('session.permissions.set', { sessionId: before.id, approvalMode: null })
@@ -105,7 +117,7 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
     close(true)
     if (next === mode && pinned) return
     if (next === 'bypass') { setConfirmBypass(true); return }
-    void apply(next === blobMode ? null : next)
+    void apply(permissionWrite(next, blobMode))
   }
   const copy = APPROVAL_MODE_COPY[mode]
   // FIX39 item 19: a mode the Manager proposed and the owner approved is marked
@@ -125,9 +137,9 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
         <span className="composer-menu-text"><strong>{APPROVAL_MODE_COPY[item].title}{item === blobMode && <small className="composer-menu-tag">{Noun} default</small>}</strong><small>{APPROVAL_MODE_COPY[item].detail}</small></span>
         {item === mode && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
       </button>)}
-      <p className="composer-menu-note">{note ?? `Applies to this ${noun} from now on.`}</p>
+      <p className="composer-menu-note">{note ?? `Applies to this ${noun} from now on, starting with the next message. A turn already running keeps the mode it started with.`}</p>
     </div>}
-    {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. This is the ${noun}'s own setting, so every conversation is affected.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(blobMode === 'bypass' ? null : 'bypass') }} onCancel={() => setConfirmBypass(false)} />}
+    {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. This is the ${noun}'s own setting, so every conversation is affected.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(permissionWrite('bypass', blobMode)) }} onCancel={() => setConfirmBypass(false)} />}
   </div>
 }
 
@@ -150,6 +162,44 @@ export function AttachButton({ supported, disabled, count, onFiles }: { supporte
   </>
 }
 
+/**
+ * The one attachment control. A single paperclip opens a small menu with the two
+ * kinds of attachment, which travel differently: an image is read, checked and
+ * sent as bytes (only to coding agents that accept images, up to the per-message
+ * limit); a document, audio or video file is sent as a path only, which Bitbots
+ * does not read and the coding agent opens if its permissions allow. Each choice
+ * is disabled on its own, with the reason shown, so the control itself stays
+ * available whenever either kind is. Drag and paste still add images directly.
+ */
+export function AttachMenu({ imagesSupported, imagesDisabled, imageCount, fileDisabled, onImages, onPickFile }: { imagesSupported: boolean; imagesDisabled: boolean; imageCount: number; fileDisabled: boolean; onImages: (files: File[]) => void; onPickFile: () => void }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
+  usePopoverDismiss(open, rootRef, close)
+  useEffect(() => { if (open) requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()) }, [open])
+  const full = imageCount >= MAX_COMPOSER_ATTACHMENTS
+  const imageOff = imagesDisabled || !imagesSupported || full
+  const imageNote = !imagesSupported ? 'This coding agent does not accept images.' : full ? `Up to ${MAX_COMPOSER_ATTACHMENTS} images per message.` : 'PNG, JPEG, GIF or WebP, sent with your message.'
+  return <div ref={rootRef} className="composer-popover-anchor">
+    <button ref={triggerRef} type="button" className="composer-icon-button" aria-haspopup="menu" aria-expanded={open} aria-label="Attach" title="Attach an image or a file" disabled={imageOff && fileDisabled} onClick={() => setOpen((value) => !value)}><Paperclip size={16} aria-hidden="true" /></button>
+    {open && <div ref={menuRef} className="composer-menu attach-menu align-left" role="menu" aria-label="Attach to this message" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
+      <div className="composer-menu-heading">Attach</div>
+      <button type="button" role="menuitem" className="composer-menu-item rich" disabled={imageOff} onClick={() => { close(false); inputRef.current?.click() }}>
+        <span className="composer-menu-icon"><ImageIcon size={15} aria-hidden="true" /></span>
+        <span className="composer-menu-text"><strong>Image</strong><small>{imageNote}</small></span>
+      </button>
+      <button type="button" role="menuitem" className="composer-menu-item rich" disabled={fileDisabled} onClick={() => { close(false); onPickFile() }}>
+        <span className="composer-menu-icon"><FileText size={15} aria-hidden="true" /></span>
+        <span className="composer-menu-text"><strong>File by path</strong><small>Document, audio or video. Bitbots does not read it; the coding agent opens it if its permissions allow.</small></span>
+      </button>
+    </div>}
+    <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; if (files.length) onImages(files) }} />
+  </div>
+}
+
 export function AttachmentTray({ attachments, onRemove }: { attachments: ComposerAttachment[]; onRemove: (id: string) => void }) {
   if (!attachments.length) return null
   return <ul className="composer-attachments" aria-label="Attached images">
@@ -162,10 +212,76 @@ export function AttachmentTray({ attachments, onRemove }: { attachments: Compose
   </ul>
 }
 
-export function MessageAttachments({ attachments }: { attachments: unknown }) {
+export function MessageAttachments({ attachments, sessionId, messageId }: { attachments: unknown; sessionId?: string; messageId?: string }) {
   const list = Array.isArray(attachments) ? attachments.filter((item): item is { name: string } => !!item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string') : []
   if (!list.length) return null
-  return <ul className="message-attachments" aria-label="Attached images">{list.map((item, index) => <li key={`${item.name}-${index}`}><ImageIcon size={13} aria-hidden="true" /><span>{item.name}</span></li>)}</ul>
+  // Without the message's own identity the thumbnail has no ownership-checked
+  // source, so the older filename chip stands in.
+  if (!sessionId || !messageId) return <ul className="message-attachments" aria-label="Attached images">{list.map((item, index) => <li key={`${item.name}-${index}`}><ImageIcon size={13} aria-hidden="true" /><span>{item.name}</span></li>)}</ul>
+  return <ul className="message-images" aria-label="Attached images">{list.map((item, index) => <MessageImage key={`${item.name}-${index}`} sessionId={sessionId} messageId={messageId} index={index} name={item.name} />)}</ul>
+}
+
+/**
+ * One sent image. The bytes come from `message.image`, which serves only an
+ * image that message recorded in this conversation; a missing or damaged file
+ * shows a placeholder instead of a broken picture, and a click opens a viewer
+ * that closes on Escape or the backdrop and returns focus to the thumbnail.
+ */
+export function MessageImage({ sessionId, messageId, index, name }: { sessionId: string; messageId: string; index: number; name: string }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    let live = true
+    // A reload mounts the transcript before the local daemon answers, so a
+    // "not ready yet" refusal is retried a few times; a file that is really
+    // gone shows the placeholder at once.
+    const load = async (attempt: number): Promise<void> => {
+      try {
+        const result = await rpc<{ dataUrl?: unknown }>('message.image', { sessionId, messageId, index })
+        if (!live) return
+        if (typeof result?.dataUrl === 'string' && result.dataUrl.startsWith('data:image/')) { setSrc(result.dataUrl); setFailure(null); return }
+        setFailure('This image could not be read.')
+      } catch (reason) {
+        if (!live) return
+        const text = String(reason)
+        // A refusal that means "not ready yet" is retried a few times; once
+        // they are used up the row settles on a placeholder rather than spinning.
+        if (!transientImageFailure(text)) { setFailure(text); return }
+        if (attempt >= 6) { setFailure('The local daemon did not answer. Reopen this conversation to try again.'); return }
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        if (live) await load(attempt + 1)
+      }
+    }
+    void load(0)
+    return () => { live = false }
+  }, [sessionId, messageId, index])
+  const state = src ? 'ready' : failure && !transientImageFailure(failure) ? 'missing' : 'loading'
+  const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => closeRef.current?.focus())
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true) } }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [open])
+  if (state === 'missing') return <li className="message-image placeholder" role="img" aria-label={`${name} is no longer available`} title={failure ?? undefined}><span className="message-image-placeholder"><ImageOff size={18} aria-hidden="true" /><span>{name}</span><small>Not available</small></span></li>
+  if (state === 'loading' || !src) return <li className="message-image loading" aria-busy="true" aria-label={`Loading ${name}`}><LoaderCircle size={16} className="spinning" aria-hidden="true" /></li>
+  return <li className="message-image-wrap">
+    <button ref={triggerRef} type="button" className="message-image" aria-label={`Open ${name}`} title={name} onClick={() => setOpen(true)}><img src={src} alt={name} /></button>
+    {open && <div className="message-image-viewer" role="dialog" aria-modal="true" aria-label={`${name}, enlarged`} onClick={() => close(true)}>
+      <button ref={closeRef} type="button" className="message-image-viewer-close" aria-label="Close image" onClick={() => close(true)}><X size={16} aria-hidden="true" /></button>
+      <figure onClick={(event) => event.stopPropagation()}><img src={src} alt={name} /><figcaption>{name}</figcaption></figure>
+    </div>}
+  </li>
+}
+
+/** A refusal that means "not yet" (the local daemon is still starting or restarting). */
+export function transientImageFailure(reason: unknown): boolean {
+  const text = String(reason)
+  return /daemon is not running|Daemon request failed|not connected|not ready|timed out/i.test(text)
 }
 
 export const MAX_COMPOSER_ATTACHMENTS = 8

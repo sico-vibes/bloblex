@@ -4,6 +4,7 @@ import type { Agent, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
+import { presentedSessionState } from './sessionOutcome'
 import { isSideSession, isWaitingDelegation, sessionIsBusy } from './teamSelectors'
 import './workingBotsPanel.css'
 
@@ -21,8 +22,9 @@ export function taskStatus(session: Session): string {
   if (session.turns === undefined && session.messages === undefined) return 'Loading'
   if (session.state === 'cancelled' || last?.state === 'cancelled') return 'Cancelled'
   // Any finished turn that did not complete is a failure, whatever the provider called it.
-  if (session.state === 'error' || (last && last.state !== 'completed' && last.state !== 'working')) return 'Failed'
-  if (last?.state === 'completed' || session.state === 'completed' || session.messages?.some(m => m.role === 'assistant' && m.status !== 'streaming')) return 'Done'
+  const settled = presentedSessionState(session)
+  if (settled === 'error' || (last && last.state !== 'completed' && last.state !== 'working')) return 'Failed'
+  if (last?.state === 'completed' || settled === 'completed' || session.messages?.some(m => m.role === 'assistant' && m.status !== 'streaming')) return 'Done'
   // A hydrated session with no recorded outcome is still in flight.
   return 'Waiting'
 }

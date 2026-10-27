@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Session } from '../types'
 
@@ -8,7 +10,7 @@ const rpc = vi.hoisted(() => vi.fn())
 vi.mock('../tauri', () => ({ rpc }))
 vi.mock('./BlobPage', () => ({ ConfirmDialog: ({ title, confirmLabel, onConfirm, onCancel }: { title: string; confirmLabel: string; onConfirm: () => void; onCancel: () => void }) => <div role="dialog"><h2>{title}</h2><button onClick={onCancel}>Cancel</button><button onClick={onConfirm}>{confirmLabel}</button></div> }))
 
-import { AttachButton, AttachmentTray, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode } from './ComposerControls'
+import { AttachButton, AttachmentTray, MessageAttachments, PermissionModeControl, permissionWrite, prepareImageBytes, sessionApprovalMode, transientImageFailure } from './ComposerControls'
 import { SessionExecutionControls } from './SessionExecutionControls'
 
 const agent: Agent = { id:'agent', name:'Codex', description:'', instructions:'', color:'sky', runtimeId:'runtime', model:'alpha', thinking:'low', serviceTier:null, customArgs:[], customEnv:{}, maxConcurrency:1, defaultProject:null, sortOrder:0, archived:false, createdAt:'now', updatedAt:'now', approvalMode:'ask', effectiveApprovalMode:'ask' }
@@ -97,6 +99,46 @@ describe('conversation permission mode', () => {
     expect(open.querySelector('[role="menu"]')).not.toBeNull()
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })) })
     expect(open.querySelector('[role="menu"]')).toBeNull()
+  })
+
+  // FIX43: Full access is always persisted, even when the bot already defaults to it.
+  it('persists bypass for Full access from every starting state and never writes null', async () => {
+    expect(permissionWrite('bypass', 'bypass')).toBe('bypass')
+    expect(permissionWrite('bypass', 'ask')).toBe('bypass')
+    expect(permissionWrite('ask', 'ask')).toBeNull()
+    expect(permissionWrite('auto', 'ask')).toBe('auto')
+    expect(permissionWrite('ask', 'auto')).toBe('ask')
+
+    // A bot whose own default is already Full access: choosing it again must
+    // still write bypass, not null, or the setting is cleared and Ask returns.
+    const bypassAgent: Agent = { ...agent, approvalMode: 'bypass', effectiveApprovalMode: 'bypass' }
+    const updated = vi.fn()
+    const agentUpdated = vi.fn()
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => method === 'agent.update'
+      ? { agent: { ...bypassAgent, approvalMode: params.approvalMode } }
+      : { session: { ...session, modelLock: { ...session.modelLock, approvalMode: undefined } } })
+    const drained: Session = { ...session, modelLock: { model: 'alpha', thinking: 'low', approvalMode: 'ask' } }
+    const host = mount(<PermissionModeControl session={drained} agent={bypassAgent} disabled={false} onSessionUpdated={updated} onAgentUpdated={agentUpdated} onError={() => undefined} />)
+    await act(async () => { host.querySelector<HTMLButtonElement>('.permission-pill')!.click() })
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[2].click() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === 'Allow full access')!.click() })
+    await flush()
+    expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'bypass' })
+    expect(rpc.mock.calls.filter(([method, params]) => method === 'agent.update' && (params as { approvalMode?: unknown }).approvalMode === null)).toHaveLength(0)
+    expect(updated).toHaveBeenCalledWith(expect.objectContaining({ id: 'session' }))
+  })
+
+  it('restores the previous mode when the write fails', async () => {
+    const updated = vi.fn()
+    const onError = vi.fn()
+    rpc.mockImplementation(async () => { throw new Error('conflict: The bot is locked.') })
+    const host = mount(<PermissionModeControl session={session} agent={agent} disabled={false} onSessionUpdated={updated} onAgentUpdated={() => undefined} onError={onError} />)
+    await act(async () => { host.querySelector<HTMLButtonElement>('.permission-pill')!.click() })
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[1].click() })
+    await flush()
+    // The optimistic unpin is undone with the exact session the control started from.
+    expect(updated).toHaveBeenLastCalledWith(session)
+    expect(onError).toHaveBeenCalled()
   })
 
   // FIX39 item 13 / P5 audit S2.
@@ -212,6 +254,89 @@ describe('composer attachments', () => {
     const host = mount(<MessageAttachments attachments={[{ name:'diagram.png', mediaType:'image/png' }, { nope:true }, null]} />)
     expect([...host.querySelectorAll('li')].map((item) => item.textContent)).toEqual(['diagram.png'])
     expect(mount(<MessageAttachments attachments={null} />).childElementCount).toBe(0)
+  })
+
+  it('shows a sent image as a thumbnail from its own message, opens the viewer and returns focus', async () => {
+    rpc.mockImplementation(async () => ({ dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }))
+    const host = mount(<MessageAttachments attachments={[{ name:'shot.png', mediaType:'image/png', path:'C:/elsewhere/shot.png' }]} sessionId="session" messageId="message-1" />)
+    await flush()
+    // The renderer names the message, never a file path.
+    expect(rpc).toHaveBeenCalledWith('message.image', { sessionId:'session', messageId:'message-1', index:0 })
+    const thumb = host.querySelector<HTMLButtonElement>('.message-image')!
+    expect(thumb.getAttribute('aria-label')).toBe('Open shot.png')
+    expect(host.querySelector<HTMLImageElement>('.message-image img')?.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=')
+    await act(async () => { thumb.click() })
+    const viewer = host.querySelector('.message-image-viewer')!
+    expect(viewer.getAttribute('role')).toBe('dialog')
+    expect(viewer.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Close image')
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })) })
+    expect(host.querySelector('.message-image-viewer')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Open shot.png')
+    // The backdrop closes it too.
+    await act(async () => { host.querySelector<HTMLButtonElement>('.message-image')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('.message-image-viewer')!.click() })
+    expect(host.querySelector('.message-image-viewer')).toBeNull()
+  })
+
+  it('shows a placeholder instead of a broken picture when the image is gone', async () => {
+    rpc.mockImplementation(async () => { throw new Error('not_found: The image file is no longer available.') })
+    const host = mount(<MessageAttachments attachments={[{ name:'gone.png', mediaType:'image/png' }]} sessionId="session" messageId="message-1" />)
+    await flush()
+    expect(host.querySelector('.message-image img')).toBeNull()
+    expect(host.querySelector('.message-image.placeholder')?.getAttribute('aria-label')).toBe('gone.png is no longer available')
+    expect(host.querySelector('.message-image-placeholder')?.textContent).toContain('Not available')
+  })
+
+  it('retries only a "not ready yet" refusal, and shows a placeholder at once for a missing file', async () => {
+    expect(transientImageFailure('The local Bitbots daemon is not running.')).toBe(true)
+    expect(transientImageFailure('Daemon request failed: connection refused')).toBe(true)
+    expect(transientImageFailure('not_found: The image file is no longer available.')).toBe(false)
+    rpc.mockImplementationOnce(async () => { throw new Error('The local Bitbots daemon is not running.') })
+      .mockImplementationOnce(async () => ({ dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }))
+    const host = mount(<MessageAttachments attachments={[{ name:'shot.png' }]} sessionId="session" messageId="message-1" />)
+    // While the daemon starts, the row keeps loading rather than claiming the image is gone.
+    expect(host.querySelector('.message-image.placeholder')).toBeNull()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 900)) })
+    await flush()
+    expect(rpc.mock.calls.filter(([method]) => method === 'message.image')).toHaveLength(2)
+    expect(host.querySelector('.message-image img')).not.toBeNull()
+    // A missing file is final: no retry loop, the placeholder stands.
+    rpc.mockReset()
+    rpc.mockImplementation(async () => { throw new Error('not_found: The image file is no longer available.') })
+    const gone = mount(<MessageAttachments attachments={[{ name:'gone.png' }]} sessionId="session" messageId="message-1" />)
+    await flush()
+    expect(gone.querySelector('.message-image-placeholder')?.textContent).toContain('Not available')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 900)) })
+    expect(rpc.mock.calls.filter(([method]) => method === 'message.image')).toHaveLength(1)
+  })
+
+  it('sizes the remove control for a 24px target with a focus ring and centred glyph', () => {    const css = readFileSync(resolve(process.cwd(), 'src/ui/composer.css'), 'utf8')
+    const rule = css.match(/\n\.composer-attachment-remove \{[^}]*\}/)?.[0] ?? ''
+    expect(rule).toContain('width: 24px')
+    expect(rule).toContain('height: 24px')
+    expect(rule).toContain('place-items: center')
+    expect(rule).toContain('padding: 0')
+    expect(css).toMatch(/\.composer-attachment-remove:focus-visible \{[^}]*var\(--focus-ring\)/)
+    // The tray's own button is the only remove target, and it keeps its label.
+    const host = mount(<AttachmentTray attachments={[{ id:'a', name:'shot.png', previewUrl:'blob:a', path:'p', status:'ready' }]} onRemove={() => undefined} />)
+    const button = host.querySelector<HTMLButtonElement>('.composer-attachment-remove')!
+    expect(button.getAttribute('aria-label')).toBe('Remove shot.png')
+    expect(button.querySelector('svg')).not.toBeNull()
+  })
+
+  it('sizes the effort popover from its content instead of a fixed width', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/ui/composer.css'), 'utf8')
+    const popover = css.match(/\n\.session-effort-popover \{[^}]*\}/)?.[0] ?? ''
+    expect(popover).toContain('width: max-content')
+    expect(popover).toContain('min-width: min(320px, calc(100vw - 24px))')
+    expect(popover).toContain('max-width: min(460px, calc(100vw - 24px))')
+    expect(css).not.toMatch(/\.session-effort-popover\.has-ultra \{[^}]*width:/)
+    // Every level label stays whole: no ellipsis or clipping, and the row wraps in a narrow window.
+    const labels = css.match(/\n\.session-effort-labels button > span \{[^}]*\}/)?.[0] ?? ''
+    expect(labels).toContain('white-space: nowrap')
+    expect(labels).not.toContain('text-overflow')
+    expect(css).toMatch(/\.session-effort-labels \{[^}]*flex-wrap: wrap/)
   })
 
   it('rejects non-image files before staging and keeps small images unchanged', async () => {

@@ -3,7 +3,8 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlobLook } from '../blob/look'
-import { setBitbotsEnabled } from '../blob/bitbots'
+import { CHARACTER_ASSETS } from '../blob/haze/characters'
+import { setBitbotsEnabled, setThemeStyle } from '../blob/bitbots'
 import { LookEditor } from './LookEditor'
 
 vi.mock('../blob/BlobCanvas', () => ({
@@ -24,9 +25,41 @@ function mount(look: BlobLook, locked = false) {
 const click = (element: Element | null | undefined) => act(() => { (element as HTMLElement).click() })
 
 beforeEach(() => { setBitbotsEnabled(false); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true) })
-afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { for (const { root, host } of mounted.splice(0)) { act(() => root.unmount()); host.remove() } act(() => setThemeStyle('blobots')); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('look editor', () => {
+  it('shows Haze character choices only in Haze and preserves the selected portrait when locked', () => {
+    act(() => setThemeStyle('haze'))
+    const { host } = mount({ shape: 'circle', icon: 'char-kratos' }, true)
+    const character = host.querySelector<HTMLButtonElement>('[aria-label="Kratos"]')!
+    expect(character.getAttribute('aria-checked')).toBe('true')
+    expect(character.disabled).toBe(true)
+    expect(character.querySelector('.haze-character-image')?.getAttribute('src')).toBe(CHARACTER_ASSETS['char-kratos'].static)
+    act(() => setThemeStyle('bitbots'))
+    const other = mount({ shape: 'circle', icon: 'char-kratos' })
+    expect(other.host.querySelector('.haze-character-grid')).toBeNull()
+    expect(other.host.querySelector('[aria-label="Kratos"]')).toBeNull()
+  })
+
+  it('selects and arrow-navigates provider-null characters with one reachable tab stop', () => {
+    act(() => setThemeStyle('haze'))
+    let queuedFrame: FrameRequestCallback | undefined
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { queuedFrame = callback; return 1 })
+    const { host, render, onLookChange } = mount({ shape: 'circle', icon: 'char-albert-einstein' })
+    const panel = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Icon"]')!
+    const radios = [...panel.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    expect(radios.filter((radio) => radio.tabIndex === 0)).toHaveLength(1)
+    const selected = host.querySelector<HTMLButtonElement>('[aria-label="Albert Einstein"]')!
+    expect(selected.disabled).toBe(false)
+    click(selected)
+    expect(onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', icon: 'char-albert-einstein' })
+    act(() => selected.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+    expect(onLookChange).toHaveBeenLastCalledWith({ shape: 'circle', icon: 'char-nikola-tesla' })
+    act(() => queuedFrame?.(0))
+    act(() => render({ shape: 'circle', icon: 'char-nikola-tesla' }))
+    expect(document.activeElement).toBe(host.querySelector('[aria-label="Nikola Tesla"]'))
+  })
+
   it('previews every shape in the blob and picks one by click or arrow keys', () => {
     const { host, onLookChange } = mount({ shape: 'circle', seed: 'pololo' })
     const radios = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-label="Bot shape"] [role="radio"]')]

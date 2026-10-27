@@ -36,7 +36,7 @@ fn main() {
             _ => {}
         }
     }
-    let crash_enabled = matches!(mode.as_str(), "crash" | "crash-reject")
+    let crash_enabled = matches!(mode.as_str(), "crash" | "crash-reject" | "crash-mixed")
         && pidfile.as_ref().is_some_and(|path| !std::path::Path::new(path).exists());
     if let Some(path) = pidfile.as_ref() {
         std::fs::write(path, std::process::id().to_string()).unwrap();
@@ -287,7 +287,9 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(delay));
                 for note in delayed { out_line!(note); }
             });
-        } else if method == "turn/start" && matches!(mode.as_str(), "crash" | "crash-reject") && crash_enabled {
+        } else if method == "turn/start" && matches!(mode.as_str(), "crash" | "crash-reject" | "crash-mixed") && crash_enabled
+            && (mode != "crash-mixed" || v["params"]["input"][0]["text"] == "crash")
+        {
             for note in notes.into_iter().filter(|note| note["method"] == "turn/started") { out_line!(note); }
         } else {
             for note in notes {

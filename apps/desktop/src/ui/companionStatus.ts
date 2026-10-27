@@ -1,6 +1,7 @@
 import { usageLimitLabel } from './errorCopy'
 import type { BlobMood } from '../blob/BlobCanvas'
 import type { Runtime, Session } from '../types'
+import { presentedSessionState } from './sessionOutcome'
 
 /** Short labels for the compact bar, one per resting/attention mood. The full
  *  status line stays descriptive; the island bar keeps to these words. */
@@ -43,9 +44,10 @@ export function deriveCompanionStatus(input: { connected: boolean; runtime?: Run
   if (session?.state === 'retrying') return { mood: 'working', label: 'Retrying…' }
   if (session?.state === 'rate_limited') return { mood: 'rate_limited', label: 'Rate limited' }
   if (session?.state === 'sleeping') return { mood: 'sleeping', label: 'Sleeping' }
-  if (session?.state === 'error' || session?.state === 'failed') return { mood: 'error', label: 'Needs attention' }
+  const sessionState = presentedSessionState(session)
+  if (sessionState === 'error' || sessionState === 'failed') return { mood: 'error', label: 'Needs attention' }
   if (input.composing) return { mood: 'listening', label: 'Ready for your message' }
-  if (session?.state === 'completed') return idleMs === null || idleMs < SUCCESS_HOLD_MS ? { mood: 'success', label: 'Done' } : restingStatus(idleMs, 'Done')
+  if (sessionState === 'completed') return idleMs === null || idleMs < SUCCESS_HOLD_MS ? { mood: 'success', label: 'Done' } : restingStatus(idleMs, 'Done')
   if (session?.state === 'cancelled' || session?.state === 'canceled') return idleMs === null ? { mood: 'idle', label: 'Cancelled' } : restingStatus(idleMs, 'Cancelled')
 
   const activeTurn = [...(session?.turns ?? [])].reverse().find((turn) => ['working', 'running', 'starting', 'pending'].includes(String(turn.state ?? '').toLowerCase()))

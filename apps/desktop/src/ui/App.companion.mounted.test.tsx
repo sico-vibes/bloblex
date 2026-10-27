@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../desktopIntegrations', () => ({ autostartEnabled: async () => false, setAutostartEnabled: async () => undefined, sendDesktopNotification: async () => undefined, flashMainWindow: async () => undefined }))
 vi.mock('../tauri', () => ({
   inDesktop: true,
+  listenForTerminalOutput: async () => () => undefined,
+  listenForTerminalExit: async () => () => undefined,
   setApprovalBadge: async () => undefined,
   previewMode: false,
   rpc: h.rpc,
@@ -394,7 +396,7 @@ describe('companion drag and usage labels', () => {
     // Text turns the same button into "Queue message".
     await press(view.host, 'Queue message')
     await view.settle()
-    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Then run lint' })
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { clientMessageId: expect.stringMatching(/^m-/), sessionId: 'session-claude', text: 'Then run lint' })
     expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
     expect(view.host.querySelector('.companion-queue-note')?.textContent).toBe('1 queued · sends when this turn ends')
   })
@@ -428,7 +430,7 @@ describe('companion drag and usage labels', () => {
     await typeAndSend('Steer this turn', false)
     expect(h.rpc).toHaveBeenCalledWith('session.steer', { sessionId: 'session-claude', text: 'Steer this turn' })
     await typeAndSend('Queue this one', true)
-    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { sessionId: 'session-claude', text: 'Queue this one' })
+    expect(h.rpc).toHaveBeenCalledWith('session.queue.add', { clientMessageId: expect.stringMatching(/^m-/), sessionId: 'session-claude', text: 'Queue this one' })
   })
 
   it('denies an approval on Escape without collapsing the companion', async () => {
@@ -521,8 +523,10 @@ describe('side conversations across windows', () => {
     h.listenForActiveSession.mockImplementation(async (handler: (sessionId: string | null) => void) => { handlers.push(handler); return vi.fn() })
     const mainWindow = startApp()
     await mainWindow.settle()
-    // The "Messaged" chip opens the conversation between the two bots.
-    await act(async () => { mainWindow.host.querySelector<HTMLButtonElement>('.team-chip')!.click() })
+    // The assignment card opens the conversation between the two bots.
+    const head = mainWindow.host.querySelector<HTMLButtonElement>('.delegation-group .delegation-head')!
+    if (head.getAttribute('aria-expanded') !== 'true') await act(async () => { head.click() })
+    await act(async () => { mainWindow.host.querySelector<HTMLButtonElement>('.delegation-group .delegation-open')!.click() })
     await mainWindow.settle()
     expect(mainWindow.host.querySelector('.side-header')).not.toBeNull()
     await deliver(mainWindow, 'session-claude')

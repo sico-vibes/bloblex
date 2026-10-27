@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, ListChecks, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
 import { BlobCanvas, type BlobMood } from '../blob/BlobCanvas'
@@ -27,7 +27,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAu
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
-import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, UpdateChip, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
 import { ProposalCard } from './ProposalCard'
@@ -46,17 +46,21 @@ import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs, SOUNDS_CHANGED_EVENT, SOUND_VOLUME_CHANGED_EVENT } from './soundPrefs'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
-import { busyDelivery, busySendMode, BUSY_SEND_SETTING, sendWithDelivery, steerRuntimeId, useSteerAvailable, type BusySendMode } from './busySend'
+import { busyDelivery, busySendMode, BUSY_SEND_SETTING, newClientMessageId, sendWithDelivery, steerRuntimeId, useSteerAvailable, type BusySendMode } from './busySend'
 import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
+import { PullRequestDialog } from './PullRequestDialog'
+import { pullRequestPrompt, type RepositoryState } from './sessionRepository'
 import { WorkingBotsPanel } from './WorkingBotsPanel'
+import { DelegationGroup } from './DelegationGroup'
+import { buildDelegationRows, delegationRuns, newestNoticeBySide, useDelegations } from './delegations'
 import { ChangeBanner } from './ChangeBanner'
 import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
-import { friendlyError } from './errorCopy'
+import { friendlyError, friendlyErrorText } from './errorCopy'
 import { changedFields, createDraft, createParams, daemonCodeOf, draftFromAgent, teamParams, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, duplicateAgentName, legacySessions, nextAgentAfterArchive, placeAgentOrder, projectGroups, reorderAgentInProject, runtimeUsable, sessionDisplayTitle, sessionSelectionTarget } from './rosterSelectors'
 import { conversationMarkdown } from './conversationMarkdown'
@@ -65,7 +69,7 @@ import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { DictationButton } from './DictationButton'
 import { DictationIsland, type IslandPhase } from './DictationIsland'
-import { configureDictation, DEFAULT_SPEECH_MODEL_ID, normalizeEngineChoice, setDictationEnginePrefs, type DictationEngineInfo } from './dictation'
+import { configureDictation, DEFAULT_SPEECH_MODEL_ID, normalizeEngineChoice, setDictationEnginePrefs } from './dictation'
 import { ArchivedBots } from './ArchivedBots'
 import { UpdateBadge } from './UpdateBadge'
 import { SettingsSheet, type SettingsPageId } from './SettingsSheet'
@@ -76,6 +80,7 @@ import { useClock } from './useClock'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { initialiseSeen, isUnread, markSeen, unreadNeedsApproval, type SeenSessions } from './sessionSeen'
 import { notificationAllowed, notificationForTransition } from './notificationTransitions'
+import { presentedSessionState } from './sessionOutcome'
 import { flashMainWindow, sendDesktopNotification } from '../desktopIntegrations'
 import { currentWindow, currentWebviewWindow, invokeNative, isNative, listenNative } from '../transport/nativeBridge'
 import { usePlatform } from '../transport/platform'
@@ -106,6 +111,7 @@ import { hydrateDensity, hydrateHints, hydrateTour, useHintSeen } from './uiPref
 import { recordInstructionVersion } from './instructionHistory'
 import { SessionExecutionControls } from './SessionExecutionControls'
 import { composerMaxHeight, useAutosizeTextarea } from './useAutosize'
+import { getDraft, holdDraft, releaseDraft, restoreDraft, setDraft as saveDraft, setDraftFocus, useDraft } from './draftStore'
 import { ContextWindowIndicator } from './ContextWindowIndicator'
 import { QuotaBar } from './QuotaBar'
 import { planProgress, planSteps } from './planProgress'
@@ -115,12 +121,18 @@ import { TourHost } from './tour/TourHost'
 import { ContextualHints } from './tour/ContextualHints'
 import { startTour } from './tour/startTour'
 import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
-import { QueueBanner } from './PromptQueue'
-import { AttachButton, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
+import { ComposerStatus } from './PromptQueue'
+import { AttachMenu, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
 import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
 import { SlashCommandChip, SlashMenu } from './SlashMenu'
 import { COMPANION_SLASH_ACTIONS, commandMessage, leadingCommand, requestExecutionPicker, slashItems, slashQuery, type SlashCommand, type SlashItem, type SlashSkill } from './slashCommands'
 import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
+import { MediaPreview, isPreviewablePath, setMediaScope } from './MediaPreview'
+import { setActivityProvider } from './liveOutput'
+import { TerminalDock } from './TerminalDock'
+import { NeedsYou } from './NeedsYou'
+import { FileReferenceChip } from './FileReferenceChip'
+import { fileReferenceText, splitFileReference, type LocalFileRef } from './fileReference'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
@@ -238,6 +250,7 @@ export function App() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [schedulesOpen, setSchedulesOpen] = useState(false)
   const [tasksOpen, setTasksOpen] = useState(false)
+  const [terminalDockOpen, setTerminalDockOpen] = useState(false)
   const [handoffOpen, setHandoffOpen] = useState(false)
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [handoffError, setHandoffError] = useState<string | null>(null)
@@ -298,7 +311,6 @@ export function App() {
   const [sessionDeleteTarget, setSessionDeleteTarget] = useState<Session | null>(null)
   const [rosterAnnouncement, setRosterAnnouncement] = useState('')
   const [archiveNotice, setArchiveNotice] = useState<string | null>(null)
-  const [composer, setComposer] = useState('')
   /** The `/command` being typed, the command picked for this message and this bot's skills. */
   const [slash, setSlash] = useState<{ start: number; query: string; index: number } | null>(null)
   const [slashCommand, setSlashCommand] = useState<SlashCommand | null>(null)
@@ -307,18 +319,22 @@ export function App() {
   const replyTargetRef = useRef<ReplyTarget | null>(null)
   replyTargetRef.current = replyTarget
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
+  // A document, audio or video file attached by path. Bitbots does not read it; the message names it and the agent opens it itself.
+  const [localFile, setLocalFile] = useState<LocalFileRef | null>(null)
+  const [localFileError, setLocalFileError] = useState<string | null>(null)
   const attachmentsRef = useRef<ComposerAttachment[]>([])
   attachmentsRef.current = attachments
   const [clipboardReadPending, setClipboardReadPending] = useState(false)
   const clipboardReadGeneration = useRef(0)
   const [composerDropActive, setComposerDropActive] = useState(false)
-  const [dictationPartial, setDictationPartial] = useState('')
   const composerTypingRef = useRef(false)
   const [appliedModelState, setAppliedModelState] = useState<AppliedModelState | null>(null)
   const appliedModelRequest = useRef(0)
   const [busy, setBusy] = useState(false)
   /** Messages sent but not yet confirmed by the daemon: shown at once as "Sending…" so the composer never waits. */
   const [pendingSends, setPendingSends] = useState<PendingSend[]>([])
+  /** The composer's queue rows stay folded until the owner asks for them. */
+  const [queueExpanded, setQueueExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [usageSheet, setUsageSheet] = useState(false)
   const [usagePeriod, setUsagePeriod] = useState<'today' | 'month'>('today')
@@ -328,6 +344,8 @@ export function App() {
   const now = useClock(10_000)
   const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
+  /** The repository the owner is about to ask a pull request for; set by the Changes card's Create PR. */
+  const [pullRequestFor, setPullRequestFor] = useState<{ sessionId: string; repository: RepositoryState } | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [pendingBlobImport, setPendingBlobImport] = useState<SharedBlob | null>(null)
@@ -397,7 +415,6 @@ export function App() {
   const [pins, setPins] = useState<SidebarPins>(() => companion ? emptyPins() : readPins())
   const updatePins = (change: (current: SidebarPins) => SidebarPins) => setPins((current) => { const next = change(current); writePins(next); return next })
   const composerRef = useRef<HTMLTextAreaElement>(null)
-  useAutosizeTextarea(composerRef, composer, composerMaxHeight)
   const messageListRef = useRef<HTMLElement>(null)
   /** The outline only appears once the conversation is long enough to scroll. */
   const [conversationScrollable, setConversationScrollable] = useState(false)
@@ -586,13 +603,32 @@ export function App() {
       ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
       ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id && !isSideSession(session)).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
       ?? null)
+  /** How the next message reaches a running turn, for the rest of this turn: set from the composer's Steer / After this turn choice, cleared when the turn ends or the conversation changes. */
+  const [busyOverride, setBusyOverride] = useState<BusySendMode | null>(null)
+  const selectedLive = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  useEffect(() => { setBusyOverride(null) }, [selectedSession?.id, selectedLive])
   const selectedSessionIdRef = useRef<string | null>(selectedSession?.id ?? null)
   selectedSessionIdRef.current = selectedSession?.id ?? null
+  // The unsent text belongs to the conversation (or to a bot's new-chat draft) it was typed in, and survives navigation, restarts and the companion (draftStore.ts).
+  const composerKey = sideSession ? null : selectedSession?.id ?? null
+  const composerKeyRef = useRef(composerKey)
+  composerKeyRef.current = composerKey
+  const [composer, setComposer] = useDraft(composerKey)
+  useAutosizeTextarea(composerRef, composer, composerMaxHeight)
   detailsSessionIdRef.current = selectedSession?.id ?? null
   // Remember every conversation's blob, so a removed id can still be traced to its owner.
   for (const session of sessions) sessionOwnersRef.current.set(session.id, session.agentId ?? null)
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
+  // Ctrl+` shows or hides the terminal, the same key as in editors.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Backquote') { event.preventDefault(); setTerminalDockOpen((open) => !open) } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  useEffect(() => { setActivityProvider(selectedSession?.provider ?? selectedRuntime?.provider ?? null) }, [selectedSession?.provider, selectedRuntime?.provider])
+  // Local files that messages mention are previewed from this conversation's folder only.
+  useEffect(() => { setMediaScope(selectedSession && !isDraftSession(selectedSession) ? { sessionId: selectedSession.id, projectPath: selectedSession.projectPath ?? null } : null) }, [selectedSession?.id, selectedSession?.projectPath])
   const waitingCount = waitingBlobCount(snapshot, permissionClock)
   useEffect(() => {
     if (companion || !inDesktop) return
@@ -681,14 +717,14 @@ export function App() {
   useEffect(() => {
     if (!snapshot || companion) return
     if (!notificationStatesBooted.current) {
-      notificationStates.current = new Map(sessions.map((session) => [session.id, session.state ?? 'idle']))
+      notificationStates.current = new Map(sessions.map((session) => [session.id, presentedSessionState(session) ?? 'idle']))
       notificationStatesBooted.current = true
       return
     }
     if (!notificationSettingLoaded) return
     for (const session of sessions) {
       const previous = notificationStates.current.get(session.id)
-      const next = session.state ?? 'idle'
+      const next = presentedSessionState(session) ?? 'idle'
       notificationStates.current.set(session.id, next)
       if (!previous || previous === next) continue
       const notification = notificationForTransition(previous, next)
@@ -708,6 +744,15 @@ export function App() {
   ].filter((id) => !(mainAttention && id === selectedSession?.id)))
   // Without the experimental activity setting only failed turns stay visible; the working indicator shows progress.
   const groupedConversationItems = groupConversationActivity(activityDetails || sideSession ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn'))
+  // Messages this conversation's bot sent to teammates read as one assignment card per turn, with the daemon's recorded status.
+  const delegationLedger = useDelegations(selectedSession && !isDraftSession(selectedSession) ? selectedSession.id : null, connection === 'connected')
+  const { runs: delegationRunMap, folded: delegationFolded } = delegationRuns(groupedConversationItems)
+  const delegationQuestions = new Set((snapshot?.permissions ?? []).filter((permission) => permission.kind === 'question' && typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!))
+  const delegationApprovals = new Set((snapshot?.permissions ?? []).filter((permission) => typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!))
+  const newestLegacyBySide = newestNoticeBySide(delegationRunMap)
+  const missingDelegationIds = [...delegationRunMap.values()].flat().flatMap((notice) => notice.delegationId && !delegationLedger.records.has(notice.delegationId) ? [notice.delegationId] : [])
+  const missingDelegationKey = delegationLedger.available && delegationLedger.loaded ? missingDelegationIds.join(',') : ''
+  useEffect(() => { if (missingDelegationKey) delegationLedger.ensure(missingDelegationKey.split(',')) }, [missingDelegationKey, delegationLedger.ensure])
   // A side conversation only shows its own requests, never the leader's.
   const activePermission = sideSessionId
     ? selectPendingPermission((snapshot?.permissions ?? []).filter((permission) => permission.sessionId === sideSessionId), sideSessionId, sideSessionId, permissionClock)
@@ -721,6 +766,8 @@ export function App() {
   const waitingDelegation = isWaitingDelegation(sessionMessages)
   const steerAvailable = useSteerAvailable(steerRuntimeId(selectedSession?.state, selectedSession?.runtimeId), connection === 'connected', `${selectedSession?.state}:${steerRevision}`)
   useEffect(() => { setDeliveryNotice(null) }, [selectedSession?.id, selectedSession?.state])
+  // The queue rows fold again for another conversation, so the card stays compact.
+  useEffect(() => { setQueueExpanded(false) }, [selectedSession?.id])
   const agentName = sideSession ? sideAgent?.name ?? 'Teammate' : activeSelectedAgent?.name ?? (selectedRuntime ? labelize(selectedRuntime.provider) : 'No runtime selected')
   const outlineItems = outlineItemsFromMessages(
     groupedConversationItems.filter((item): item is ConversationItem & { kind: 'message' } => item.kind === 'message'),
@@ -1272,7 +1319,7 @@ export function App() {
     lastOpenId.current = selectedSession?.id ?? null
     if (!previous || previous === selectedSession?.id || companion) return
     const left = sessionsRef.current.find((session) => session.id === previous)
-    if (!left || !isEmptyConversation(left) || pendingSendsRef.current.some((item) => item.sessionId === previous)) return
+    if (!left || !isEmptyConversation(left) || pendingSendsRef.current.some((item) => item.sessionId === previous) || getDraft(previous).trim()) return
     if ((snapshot?.queues?.[previous]?.items ?? []).length > 0) return
     void rpc('session.delete.schedule', { sessionId: previous }).then(() => {
       setSnapshot((current) => current ? { ...current, sessions: (current.sessions ?? []).filter((session) => session.id !== previous) } : current)
@@ -1739,6 +1786,10 @@ export function App() {
       const peerId = meta.peerAgentId
       return <DelegationChip key={key} peer={agents.find((agent) => agent.id === peerId)} name={meta.peerName ?? 'Teammate'} topic={typeof meta.topic === 'string' ? meta.topic : undefined} failed={meta.direction === 'failed'} detail={meta.direction === 'failed' ? text : undefined} text={text} onOpenConversation={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : peerId ? () => openBlobConversation(peerId) : undefined} />
     }
+    if (role === 'user' && meta?.kind === 'blob_update') {
+      const update = meta as { fromAgentId?: string; fromName?: string; sideSessionId?: string; requestKind?: string; title?: string }
+      return <UpdateChip key={key} from={agents.find((agent) => agent.id === update.fromAgentId)} name={update.fromName ?? 'Teammate'} kind={update.requestKind === 'question' ? 'question' : 'approval'} title={typeof update.title === 'string' ? update.title : undefined} onOpenConversation={update.sideSessionId ? () => openSideConversation(update.sideSessionId) : undefined} />
+    }
     if (role === 'user' && meta?.kind === 'blob_reply') {
       const fromId = meta.fromAgentId
       return <ReplyChip key={key} from={agents.find((agent) => agent.id === fromId)} name={meta.fromName ?? 'Teammate'} text={text} onOpenConversation={meta.sideSessionId ? () => openSideConversation(meta.sideSessionId) : fromId ? () => openBlobConversation(fromId) : undefined} />
@@ -1831,10 +1882,11 @@ export function App() {
 
   /**
    * Sends without holding the composer: the draft clears at once and the
-   * message shows as "Sending…" until the daemon confirms it. If the daemon
-   * refuses, the draft comes back (unless you already typed something new) and
-   * the reason shows inline. A second message while one is still on its way
-   * goes to the queue, like a message sent during a turn.
+   * message shows as "Sending…" until the daemon confirms it. The row carries
+   * three explicit states: sending, saved (it clears as the daemon's own message
+   * appears) and failed (the reason stays on the row, with Try again and Edit).
+   * A second message while one is still on its way goes to the queue, like a
+   * message sent during a turn.
    */
   const sendPrompt = async (dueAt?: string, opposite = false) => {
     const text = composer.trim()
@@ -1842,8 +1894,14 @@ export function App() {
     // A picked or hand-typed leading `/command` travels as a `command` with the
     // message stored exactly as typed.
     const sentCommand = slashCommand ?? leadingCommand(text, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' })
-    const outbound = sentCommand && slashCommand ? commandMessage(sentCommand, text) : text
+    const typed = sentCommand && slashCommand ? commandMessage(sentCommand, text) : text
+    const sentFile = localFile
+    const outbound = sentFile ? `${typed || 'Please look at this local file.'}
+
+${fileReferenceText(sentFile)}` : typed
     if ((!outbound && ready.length === 0) || clipboardReadPending || attachments.some((item) => item.status === 'staging') || !selectedSession || !runtimeUsable(selectedRuntime)) return
+    // The box this text was typed in. Navigation can move on while the conversation is created or the daemon answers, so every later step uses this key, never the open one.
+    const originKey = composerKey
     // The first message of a locally drafted conversation is what creates it: the
     // daemon stores the row then (and titles it from this text).
     let target = selectedSession
@@ -1856,7 +1914,7 @@ export function App() {
     const sessionId = target.id
     // Only plain messages can steer. Scheduled messages and pending sends keep
     // their durable ordering, and richer messages keep their context in Queue.
-    const delivery = busyDelivery(busyMode, opposite, target.state, steerAvailable, !!(ready.length || sentCommand || conversationRefs.length || replyTarget))
+    const delivery = busyDelivery(busyOverride ?? busyMode, opposite, target.state, steerAvailable, !!(ready.length || sentCommand || conversationRefs.length || replyTarget || sentFile))
     const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
     const method = dueAt || pendingSends.some((item) => item.sessionId === sessionId) ? 'session.queue.add'
       : live ? delivery.mode === 'steer' ? 'session.steer' : 'session.queue.add' : 'session.prompt'
@@ -1867,34 +1925,85 @@ export function App() {
     const sentChip = slashCommand
     const sentAttachmentIds = new Set(ready.map((item) => item.id))
     const refs = sentRefs.filter((ref) => outbound.includes(`#${ref.title}`)).map((ref) => ref.id)
+    const params = { sessionId, text: outbound, ...(sentCommand ? { command: { kind: sentCommand.kind, name: sentCommand.name } } : {}), ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}), ...(method !== 'session.steer' ? { clientMessageId: newClientMessageId() } : {}) }
     const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    setComposer('')
+    const heldId = holdDraft(originKey, text)
     setSlash(null)
     setSlashCommand(null)
     setConversationRefs([])
     setReplyTarget(null)
     setAttachments((current) => current.filter((item) => !sentAttachmentIds.has(item.id)))
-    if (method === 'session.prompt') setPendingSends((current) => [...current, { id: pendingId, sessionId, text: outbound, attachments: ready.length, at: Date.now() }])
+    setLocalFile(null)
+    setLocalFileError(null)
+    // Queue and steer calls are not transcript messages, so no pending row stands in for them.
+    const pending: PendingSend | null = method === 'session.prompt' ? { id: pendingId, sessionId, text: outbound, attachments: ready.length, at: Date.now(), status: 'sending', method, params, files: ready, originKey, heldId } : null
+    if (pending) setPendingSends((current) => [...current, pending])
     setError(null)
+    const deliver = deliverPendingSend
+    if (!pending) {
+      try {
+        const sent = await sendWithDelivery(method, params)
+        releaseDraft(originKey, heldId)
+        for (const item of ready) URL.revokeObjectURL(item.previewUrl)
+        if (sent.fallback) setDeliveryNotice('Queued because this turn could not accept steering. It sends after the turn ends.')
+        if (sent.queued) void loadQueue(sessionId)
+        await refresh()
+      } catch (reason) {
+        setError(messageOf(reason))
+        // Back into the box it came from, unless something new was typed there. The chips and images belong to the open box only.
+        const restored = restoreDraft(originKey, heldId)
+        if (restored && [originKey, sessionId].includes(composerKeyRef.current)) {
+          setSlashCommand(sentChip)
+          setConversationRefs(sentRefs)
+          setReplyTarget(sentReplyTarget)
+          setAttachments((current) => [...ready, ...current.filter((item) => !sentAttachmentIds.has(item.id))])
+        } else for (const item of ready) URL.revokeObjectURL(item.previewUrl)
+      }
+      return
+    }
+    await deliver(pending)
+  }
+
+  /** Sends one pending row again, keeping its failure reason when it fails again. */
+  /** `confirmResend` is only passed for a row the daemon said may already have been delivered, after the owner chose Send again. */
+  const deliverPendingSend = async (item: PendingSend, confirmResend = false) => {
+    setPendingSends((current) => current.map((row) => row.id === item.id ? { ...row, status: 'sending', error: undefined, ambiguous: false } : row))
     try {
-      const sent = await sendWithDelivery(method, { sessionId, text: outbound, ...(sentCommand ? { command: { kind: sentCommand.kind, name: sentCommand.name } } : {}), ...(dueAt ? { dueAt } : {}), ...(ready.length ? { attachments: ready.map((item) => ({ path: item.path, name: item.name })) } : {}), ...(refs.length ? { conversationRefs: refs } : {}), ...(sentReplyTarget ? { replyTo: { sourceSessionId: sentReplyTarget.sourceSessionId, messageId: sentReplyTarget.messageId } } : {}) })
-      for (const item of ready) URL.revokeObjectURL(item.previewUrl)
+      const sent = await sendWithDelivery(item.method, confirmResend ? { ...item.params, confirmResend: true } : item.params)
+      releaseDraft(item.originKey, item.heldId)
+      for (const file of item.files ?? []) URL.revokeObjectURL(file.previewUrl)
       if (sent.fallback) setDeliveryNotice('Queued because this turn could not accept steering. It sends after the turn ends.')
-      if (sent.queued) void loadQueue(sessionId)
+      if (sent.queued) void loadQueue(item.sessionId)
+      setPendingSends((current) => current.filter((row) => row.id !== item.id))
       await refresh()
     } catch (reason) {
-      setError(messageOf(reason))
-      // Put the draft back where it was, unless something new has been typed since.
-      if (!composerRef.current?.value.trim()) {
-        setComposer(text)
-        setSlashCommand(sentChip)
-        setConversationRefs(sentRefs)
-        setReplyTarget(sentReplyTarget)
-        setAttachments((current) => [...ready, ...current.filter((item) => !sentAttachmentIds.has(item.id))])
-      } else for (const item of ready) URL.revokeObjectURL(item.previewUrl)
-    } finally {
-      setPendingSends((current) => current.filter((item) => item.id !== pendingId))
+      // The daemon could not confirm delivery: the message may have reached the bot, so it is never sent again on its own.
+      const unknown = daemonCodeOf(reason) === 'delivery_unknown'
+      setPendingSends((current) => current.map((row) => row.id === item.id ? { ...row, status: 'failed', ambiguous: unknown, error: unknown ? AMBIGUOUS_SEND_COPY : refusalText(reason) } : row))
     }
+  }
+
+  /**
+   * The owner confirmed the pull request dialog: send the request to this conversation's coding agent as
+   * an ordinary message (queued behind a running turn). It rejects with the daemon's reason, so the
+   * dialog never reports success for a message that was not accepted. Nothing here touches the repository.
+   */
+  const requestPullRequest = async (sessionId: string, repository: RepositoryState) => {
+    const target = sessions.find((item) => item.id === sessionId)
+    if (!target || isDraftSession(target)) throw new Error('Open the conversation first.')
+    const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
+    const sent = await sendWithDelivery(live ? 'session.queue.add' : 'session.prompt', { sessionId, text: pullRequestPrompt(repository) })
+    if (sent.queued) void loadQueue(sessionId)
+    await refresh()
+  }
+
+  /** Puts a failed message back in the composer so it can be changed and sent again. */
+  const editFailedSend = (item: PendingSend) => {
+    setPendingSends((current) => current.filter((row) => row.id !== item.id))
+    // The text is going back into the box to be edited: the held copy is no longer needed.
+    releaseDraft(item.originKey, item.heldId)
+    if (!getDraft(item.sessionId).trim()) saveDraft(item.sessionId, item.text)
+    if (item.files?.length) setAttachments((current) => [...(item.files ?? []), ...current.filter((existing) => !(item.files ?? []).some((file) => file.id === existing.id))])
   }
 
   const clearAttachments = (only?: ReadonlySet<string>) => {
@@ -1973,6 +2082,19 @@ export function App() {
     setSlashCommand(null)
   }, [selectedSession?.id])
 
+  const sendPromptRef = useRef<(dueAt?: string, opposite?: boolean) => Promise<unknown>>(async () => undefined)
+  /** Change direction: stop the running turn, wait until it has really ended, then send the box as a new message. Never a silent fallback to the queue. */
+  const interruptAndSend = async () => {
+    const target = selectedSession
+    if (!target || isDraftSession(target)) return
+    try { await doRpc('session.cancel', { sessionId: target.id }) } catch { return }
+    const stateOf = () => snapshotRef.current?.sessions?.find((item) => item.id === target.id)?.state ?? ''
+    const live = () => ['working', 'starting', 'waiting_permission', 'cancelling'].includes(stateOf())
+    for (let waited = 0; waited < 12000 && live(); waited += 250) await new Promise((resolve) => window.setTimeout(resolve, 250))
+    await refresh().catch(() => undefined)
+    if (live()) { setError('The turn is still stopping, so your message was not sent. It is still in the box; send it once the turn has stopped.'); return }
+    await sendPromptRef.current()
+  }
   const cancelTurn = async (session: Session | null = selectedSession) => {
     if (!session) return
     try { await doRpc('session.cancel', { sessionId: session.id }); void refreshTrayMenu().catch(() => undefined); await refresh() } catch { /* inline */ }
@@ -1993,7 +2115,7 @@ export function App() {
     try { await doRpc(method, { sessionId: selectedSession.id, ...params }) } catch { /* inline */ }
     void loadQueue(selectedSession.id)
   }
-  const sendQueuedNow = (id: string) => void queueRpc('session.queue.send_now', { id })
+  const sendQueuedNow = (id: string, confirmResend = false) => void queueRpc('session.queue.send_now', { id, ...(confirmResend ? { confirmResend: true } : {}) })
   const deleteQueued = (id: string) => void queueRpc('session.queue.delete', { id })
   const updateQueued = (id: string, text: string) => void queueRpc('session.queue.update', { id, text })
   const reorderQueued = (ids: string[]) => void queueRpc('session.queue.reorder', { ids })
@@ -2140,6 +2262,8 @@ export function App() {
     if (main) void setActiveSession(main.id)
     setBlobPage((page) => page && page.agentId !== agent.id ? null : page)
   }
+  /** The box a bot opens into: its main conversation, or its new-chat draft when it has none (the same rule selectAgent applies). */
+  const draftKeyForAgent = (agent: Agent) => mainSessionFor(sessions, agent.id)?.id ?? draftSessionFor(agent).id
   /** Jump to a blob and its latest conversation; the delegation chips link here. */
   const openBlobConversation = (agentId: string) => {
     const agent = agents.find((item) => item.id === agentId && !item.archived)
@@ -2276,7 +2400,8 @@ export function App() {
     const manager = managerOf(agents)
     if (!manager) return false
     selectAgent(manager)
-    setComposer(text)
+    // The starter goes to the Manager's own box, wherever the open one is.
+    saveDraft(draftKeyForAgent(manager), text)
     window.setTimeout(() => composerRef.current?.focus(), 0)
     return true
   }
@@ -2321,15 +2446,16 @@ export function App() {
         const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(state ?? '')
         const delivery = busyDelivery(busyMode, opposite, state, companionSteerAvailable, hasContext || !!command)
         const method = live ? delivery.mode === 'steer' ? 'session.steer' : 'session.queue.add' : 'session.prompt'
-        return sendWithDelivery(method, { sessionId, text, ...(command ? { command: { kind: command.kind, name: command.name } } : {}) }).then(({ queued, fallback }) => { setDeliveryNotice(fallback ? 'Queued because this turn could not accept steering.' : live ? delivery.reason : null); if (queued) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
+        return sendWithDelivery(method, { sessionId, text, ...(command ? { command: { kind: command.kind, name: command.name } } : {}), ...(method !== 'session.steer' ? { clientMessageId: newClientMessageId() } : {}) }).then(({ queued, fallback }) => { setDeliveryNotice(fallback ? 'Queued because this turn could not accept steering.' : live ? delivery.reason : null); if (queued) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
       }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} onSelectConversation={(chosen) => { setSideSessionId(null); setSelectedAgentId(String(chosen.agentId ?? '')); setSelectedSessionId(chosen.id); void setActiveSession(chosen.id) }} slashSkills={slashSkills} />
     </>
   }
 
   const selectedMood = deriveCompanionStatus({ connected: connection === 'connected', runtime: selectedRuntime, session: selectedSession, composing: !!composer.trim(), now }).mood
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
+  sendPromptRef.current = sendPrompt
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
-  const composerDelivery = busyDelivery(busyMode, false, selectedSession?.state, steerAvailable, !!(attachments.length || slashCommand || leadingCommand(composer, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) || conversationRefs.length || replyTarget))
+  const composerDelivery = busyDelivery(busyOverride ?? busyMode, false, selectedSession?.state, steerAvailable, !!(attachments.length || slashCommand || leadingCommand(composer, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) || conversationRefs.length || replyTarget))
   const promptQueue = selectedSession ? snapshot?.queues?.[selectedSession.id] : undefined
   const hasScheduledPrompt = !!promptQueue?.items.some((item) => item.kind === 'send_later')
   const [queueNowMs, setQueueNowMs] = useState(() => Date.now())
@@ -2490,7 +2616,7 @@ export function App() {
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
+        <TeamSidebar needsYou={<NeedsYou permissions={snapshot?.permissions ?? []} sessions={sessions} agents={agents} now={permissionClock} onOpen={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void createProject(),
@@ -2558,6 +2684,7 @@ export function App() {
 
             <ApprovalPill mode={headerMode} />
             {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
+            {!sideSession && <button className={`icon-button ${terminalDockOpen ? 'active' : ''}`} title="Terminal (Ctrl+`)" aria-label="Toggle terminal" aria-pressed={terminalDockOpen} onClick={() => setTerminalDockOpen((open) => !open)}><SquareTerminal size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
@@ -2579,6 +2706,10 @@ export function App() {
             <div className="conversation-layout">
               <div className="chat-column">
               {groupedConversationItems.length === 0 && visiblePendingSends.length === 0 && !waitingDelegation && !sideSession ? <div className="session-first-state"><BlobCanvas color={accent || '#e6e9ee'} size={112} mood={selectedMood} effectOverscanTop={118} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} label={activeSelectedAgent?.name ?? agentName} /><h2>{runtimeReady ? 'Ready when you are.' : 'This bot needs attention.'}</h2><p>{runtimeReady ? currentProjectName ? <>Ask {agentName} to explore <code>{currentProjectName}</code> or make a change.</> : <>Ask {agentName} a question or make a change.</> : selectedRuntime?.status === 'error' ? 'Open Settings → Coding agents. Update or repair this CLI, then choose Scan again.' : 'Open Settings → Coding agents and scan again before starting a conversation.'}</p></div> : groupedConversationItems.map((item, index) => {
+                if (delegationFolded.has(item.id)) return null
+                const delegationRun = delegationRunMap.get(item.id)
+                if (delegationRun) return <div key={item.id} id={`conversation-message-${encodeURIComponent(item.id)}`}><DelegationGroup originSessionId={selectedSession?.id} onFollowUp={(row) => { setComposer((current) => `${current ? `${current}
+` : ''}Check on ${row.name}'s work on "${row.topic}" and tell me where it stands.`); requestAnimationFrame(() => composerRef.current?.focus()) }} rows={buildDelegationRows(delegationRun, delegationLedger.records, sessions, agents, delegationApprovals, newestLegacyBySide, Date.now(), delegationQuestions)} onOpen={openSideConversation} /></div>
                 const team = item.kind === 'message' ? teamItem(item.value!, item.id) : null
                 const content = item.kind === 'activity-group'
                   ? <ActivitySummaryLine group={item} onDiff={(path, content) => setDiffViewer({ path, content })} />
@@ -2588,7 +2719,7 @@ export function App() {
                 const message = item.kind === 'message' ? item.value : undefined
                 const text = originalMessageText(message?.content ?? message?.text)
                 const messageMeta = message?.meta && typeof message.meta === 'object' ? message.meta as Record<string, unknown> : {}
-                const hasUserOrAssistantMessage = (message?.role === 'user' || message?.role === 'assistant') && !['blob_reply', 'blob_message', 'delegation', 'auto_retry'].includes(String(messageMeta.kind ?? ''))
+                const hasUserOrAssistantMessage = (message?.role === 'user' || message?.role === 'assistant') && !['blob_reply', 'blob_update', 'blob_message', 'delegation', 'auto_retry'].includes(String(messageMeta.kind ?? ''))
                 const actions = experiments.messageActions && !sideSession && hasUserOrAssistantMessage
                 const userMessage = message?.role === 'user'
                 const groupStart = !!message && !userMessage && (index === 0 || isPreviousItemNonMessageOrUser(groupedConversationItems, index))
@@ -2605,11 +2736,15 @@ export function App() {
                   {files.length > 0 && <ChangeReview files={files} dismissed={reviewDismissals[selectedSession.id] ?? []} onKeep={(id) => dismissReviewFile(selectedSession.id, id)} onRevert={(file) => setRevertTarget({ sessionId: selectedSession.id, file })} onDiff={(path, content) => setDiffViewer({ path, content })} />}
                 </Fragment>
               })}
-              {visiblePendingSends.map((item) => <article key={item.id} className="message-row user pending" aria-label="You, sending" aria-busy="true">
-                <div className="message-content"><div className="message-bubble-wrap"><div className="message-bubble"><SafeMessageText text={item.text} /></div></div><div className="message-pending-note" role="status">{item.attachments ? `Sending with ${item.attachments} ${item.attachments === 1 ? 'file' : 'files'}…` : 'Sending…'}</div></div>
+              {visiblePendingSends.map((item) => <article key={item.id} className={`message-row user pending ${item.status}`} aria-label="You, sending" aria-busy={item.status === 'sending'}>
+                <div className="message-content"><div className="message-bubble-wrap"><div className="message-bubble"><SafeMessageText text={item.text} /></div></div>
+                  {item.status === 'sending'
+                    ? <div className="message-pending-note" role="status">{item.attachments ? `Sending with ${item.attachments} ${item.attachments === 1 ? 'file' : 'files'}…` : 'Sending…'}</div>
+                    : <div className="message-pending-note failed" role="alert"><CircleAlert size={12} aria-hidden="true" /><span>{item.error || 'This message could not be sent.'}</span><button type="button" className="queue-link" onClick={() => void deliverPendingSend(item, item.ambiguous === true)}>{item.ambiguous ? 'Send again' : 'Try again'}</button><button type="button" className="queue-link" onClick={() => editFailedSend(item)}>Edit</button></div>}
+                </div>
               </article>)}
               {activePermission && (activePermission.kind === 'proposal'
-                ? <ProposalCard key={activePermission.id} request={activePermission} managerName={managerOf(agents)?.name} projects={projects} onDecided={() => void refresh()} onError={setError} />
+                ? <ProposalCard key={activePermission.id} request={activePermission} managerName={managerOf(agents)?.name} projects={projects} runtimes={snapshot?.runtimes ?? []} onDecided={() => void refresh()} />
                 : activePermission.kind === 'question'
                 ? <QuestionCard request={activePermission} onAnswer={(answers) => answerQuestion(activePermission, answers)} onDismiss={() => void answerQuestion(activePermission, null)} />
                 : <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />)}
@@ -2623,18 +2758,20 @@ export function App() {
           </div>
           {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : <div className="composer-wrap">
             {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
-            {dictationPartial && <div className="dictation-partial" role="status" aria-label={`Listening: ${dictationPartial}`}><span className="dictation-partial-dot" aria-hidden="true" />{dictationPartial}</div>}
-            {promptQueue && promptQueue.items.length > 0 && <QueueBanner items={promptQueue.items} paused={promptQueue.paused} sessionBusy={sessionBusy} nowMs={queueNowMs} disabled={connection !== 'connected'} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onResume={resumeQueue} onCancelRetry={cancelAutoRetry} />}
-            {sessionBusy && <div className="composer-send-mode" role="status">{composerDelivery.mode === 'steer' ? 'Steer · reaches this turn now' : 'Queue · sends after this turn'}<span> · Ctrl+Enter / ⌘+Enter sends the other way</span>{deliveryNotice && <span className="composer-send-reason">{deliveryNotice}</span>}</div>}
             <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
+              <ComposerStatus steerChoice={steerAvailable} onModeChange={setBusyOverride} onInterrupt={turnLive && composer.trim() && !busy ? () => void interruptAndSend() : undefined} items={promptQueue?.items ?? []} paused={promptQueue?.paused ?? false} sessionBusy={sessionBusy} mode={composerDelivery.mode} notice={deliveryNotice} nowMs={queueNowMs} disabled={connection !== 'connected'} expanded={queueExpanded && (promptQueue?.items.length ?? 0) > 0} onToggle={() => setQueueExpanded((value) => !value)} onResume={resumeQueue} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onCancelRetry={cancelAutoRetry} />
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
+              {(localFile || localFileError) && <div className="composer-file-ref" role="group" aria-label="Attached file">
+                {localFile && <span className="composer-file-chip" title={localFile.path}><Paperclip size={12} aria-hidden="true" /><strong>{localFile.fileName}</strong><small>{formatBytes(localFile.sizeBytes)} · sent as a path</small><button type="button" aria-label={`Remove ${localFile.fileName}`} onClick={() => { setLocalFile(null); setLocalFileError(null) }}><X size={12} aria-hidden="true" /></button></span>}
+                {localFileError && <span className="composer-file-error" role="alert">{localFileError}</span>}
+              </div>}
               {clipboardReadPending && <p className="clipboard-paste-status" role="status">Preparing pasted image…</p>}
               {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
               {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true }} onBlur={() => { composerTypingRef.current = false }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true; setDraftFocus(composerKey, true) }} onBlur={() => { composerTypingRef.current = false; setDraftFocus(composerKey, false) }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
                 if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
                 if (slash && slashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : slashCandidates.length - 1)) % slashCandidates.length }); return }
@@ -2652,19 +2789,19 @@ export function App() {
                   if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
                 }
                 if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt(undefined, event.ctrlKey || event.metaKey) }
-              }} placeholder={`Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={busy || selectedSession.state === 'waiting_permission' || !runtimeReady} rows={1} />
+              }} placeholder={!runtimeReady ? `${agentName}'s coding agent is not ready` : selectedSession.state === 'waiting_permission' ? `Answer the request above, or queue a message for ${agentName}` : sessionBusy ? composerDelivery.mode === 'steer' ? `Steer ${agentName} now` : `Queue a message for ${agentName}` : activeSelectedAgent?.systemRole === 'manager' && !(selectedSession.messages ?? []).some((message) => message.role === 'user') ? `Tell ${agentName} what needs doing. Type @ to name a bot` : `Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={busy || !runtimeReady} rows={1} />
               <div className="composer-control-strip" data-tour="controls">
                 <div className="composer-controls-start">
-                  <AttachButton supported={imagesSupported} disabled={connection !== 'connected' || busy || !runtimeReady} count={attachments.length} onFiles={addAttachments} />
+                  <AttachMenu imagesSupported={imagesSupported} imagesDisabled={connection !== 'connected' || busy || !runtimeReady} imageCount={attachments.length} fileDisabled={connection !== 'connected' || busy || !runtimeReady || !selectedSession} onImages={addAttachments} onPickFile={() => { void (async () => { try { const path = await selectLocalFile(); if (!path) return; const info = await inspectLocalFile(path); setLocalFile({ fileName: info.fileName, path: info.path, sizeBytes: info.sizeBytes }); setLocalFileError(null) } catch (reason) { setLocalFileError(messageOf(reason)) } })() }} />
                   <button type="button" data-tour="plan" className={`composer-pill plan-pill ${planOn ? 'on' : ''}`} aria-pressed={planOn} aria-label="Plan mode" title={planOn ? 'Plan mode: the agent proposes a plan before changing anything' : 'Turn on plan mode'} disabled={connection !== 'connected' || sessionBusy} onClick={() => void setPlanMode(!planOn)}><ClipboardList size={14} aria-hidden="true" /><span>Plan</span></button>
                   <PermissionModeControl session={selectedSession} agent={activeSelectedAgent} disabled={connection !== 'connected' || activeSelectedAgent?.locked === true} locked={activeSelectedAgent?.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />
                 </div>
                 <div className="composer-controls-end">
                   {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} locked={activeSelectedAgent.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />}
                   <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
-                  {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
+                  {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
-                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || clipboardReadPending || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={clipboardReadPending ? 'Preparing the pasted image' : connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer this turn now. Ctrl+Enter queues instead.' : 'Add to the queue. Ctrl+Enter sends the other way where supported.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : <ArrowUp size={17} />}</button>
+                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || clipboardReadPending || (!composer.trim() && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={clipboardReadPending ? 'Preparing the pasted image' : connection !== 'connected' ? 'Waiting for the connection' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer this turn now. Ctrl+Enter queues instead.' : 'Add to the queue. Ctrl+Enter sends the other way where supported.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : sessionBusy && composerDelivery.mode === 'queue' ? <ListPlus size={17} /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
@@ -2672,6 +2809,7 @@ export function App() {
           </div>}
         </>}
         </>}
+        {!tasksOpen && <TerminalDock open={terminalDockOpen} projectPath={selectedSession && !isDraftSession(selectedSession) ? selectedSession.projectPath ?? null : null} onHide={() => setTerminalDockOpen(false)} onError={(message) => setError(message)} />}
       </section>
 
       <aside className="context-pane" aria-label="Conversation details" aria-hidden={!detailsVisible} inert={!detailsVisible}>
@@ -2680,7 +2818,7 @@ export function App() {
           <h2>{agentName}</h2>
           <p>{selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected')}</p>
         </section>
-        <SessionRail workingBots={<WorkingBotsPanel sessions={sessions} agents={agents} selectedId={sideSessionId} onOpen={openSideConversation} />} session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
+        <SessionRail agents={agents} isManager={activeSelectedAgent?.systemRole === 'manager'} onOpenSessionById={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} onOpenSchedules={() => setSchedulesOpen(true)} active={detailsVisible} botName={activeSelectedAgent?.name ?? 'The bot'} canCreatePr={connection === 'connected' && !!selectedSession && !isDraftSession(selectedSession) && !selectedSession.archived && runtimeUsable(selectedRuntime)} onCreatePr={(repository) => selectedSession && setPullRequestFor({ sessionId: selectedSession.id, repository })} workingBots={<WorkingBotsPanel sessions={sessions} agents={agents} selectedId={sideSessionId} onOpen={openSideConversation} />} session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
       {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet && !quickSwitcherOpen && !whatsNewOpen} />}
@@ -2688,7 +2826,7 @@ export function App() {
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} claudeWorkflowsEnabled={claudeWorkflowsEnabled} onClaudeWorkflowsChange={setClaudeWorkflowsEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} />}
+      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} claudeWorkflowsEnabled={claudeWorkflowsEnabled} onClaudeWorkflowsChange={setClaudeWorkflowsEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} onOpenSession={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); setSettingsSheet(false); setSettingsFocus(null); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />}
       {messageMenu && selectedSession?.id === messageMenu.sessionId && <MessageContextMenu position={messageMenu} canRetry={messageMenu.latest && connection === 'connected' && runtimeReady && !busy && !sessionBusy} onClose={closeMessageMenu} onRetry={() => {
         void doRpc('session.prompt', {
           sessionId: messageMenu.sessionId,
@@ -2728,7 +2866,8 @@ export function App() {
           const draftText = typeof result.draft === 'string' ? result.draft : ''
           setHandoffOpen(false)
           selectAgent(target)
-          requestAnimationFrame(() => { setComposer(draftText); composerRef.current?.focus() })
+          saveDraft(draftKeyForAgent(target), draftText)
+          requestAnimationFrame(() => composerRef.current?.focus())
         } catch (reason) { setHandoffError(messageOf(reason)) } finally { setHandoffBusy(false) }
       })()} />}
       {whatsNewOpen && !companion && <WhatsNewDialog onClose={() => setWhatsNewOpen(false)} onOpenLink={(url) => void openSafeLink(url)} />}
@@ -2746,6 +2885,7 @@ export function App() {
         }
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
+      {pullRequestFor && selectedSession?.id === pullRequestFor.sessionId && <PullRequestDialog repository={pullRequestFor.repository} botName={activeSelectedAgent?.name ?? 'The bot'} busy={['working', 'starting', 'waiting_permission', 'cancelling'].includes(selectedSession.state ?? '')} onSend={() => requestPullRequest(pullRequestFor.sessionId, pullRequestFor.repository)} onClose={() => setPullRequestFor(null)} />}
       {archivedBotsOpen && <ArchivedBots onClose={() => setArchivedBotsOpen(false)} onRestore={restoreAgent} onDelete={setPurgeTarget} />}
       {purgeTarget && <ConfirmDialog title={`Permanently delete ${agents.find((agent) => agent.id === purgeTarget.id)?.name || purgeTarget.name || 'this bot'}?`} body="This permanently removes the bot, all its conversations, and every side-conversation it took part in, including those shown under other bots. Its scheduled automations and private memory are also removed. This cannot be undone. Project files and the coding agent's own history are kept. Stop any running work first." confirmLabel="Delete bot and conversations" cancelLabel="Keep bot" holdToConfirm successTitle="Bot deleted" successBody="The bot and its conversations were permanently removed from Bitbots." onConfirm={async () => { await rpc('agent.purge', { agentId: purgeTarget.id, confirm: true }); await refresh() }} onComplete={() => setPurgeTarget(null)} onCancel={() => setPurgeTarget(null)} />}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restore it from Archived bots in your profile menu."} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
@@ -2826,6 +2966,8 @@ function EmptyConversation({ connected, hasRuntime, hasAgent, runtimeReady, runt
 
 /** Your own message, with @mentions of team blobs shown as their avatar and name in their colour. */
 function UserMessageText({ text, agents, references, onOpenReference }: { text: string; agents: readonly Agent[]; references?: Array<{ id: string; title: string }> | null; onOpenReference?: (sessionId: string) => void }) {
+  const split = splitFileReference(text)
+  if (split.file) return <>{split.body && <UserMessageText text={split.body} agents={agents} references={references} onOpenReference={onOpenReference} />}<FileReferenceChip file={split.file} /></>
   type Segment = { text: string; agent?: Agent; reference?: { id: string; title: string } }
   const segments: Segment[] = splitReferences(text, references).flatMap((part): Segment[] => part.reference ? [part] : splitMentions(part.text, agents))
   if (!segments.some((segment) => segment.agent || segment.reference)) return <SafeMessageText text={text} />
@@ -2857,7 +2999,7 @@ function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents 
   return <article id={id} tabIndex={-1} className={`message-row ${isUser ? 'user' : 'agent'} ${showAvatar ? 'group-start' : ''}`} aria-label={isUser ? 'You' : agentName} data-mood={isError ? 'error' : mood} data-accent={accent || undefined} onContextMenu={onContextMenu}>
     <div className="message-content">
       {replyTarget && <ReplyContextStrip target={replyTarget} compact available={replyAvailable} onJump={onJumpToMessage} />}
-      {isUser && <MessageAttachments attachments={message.attachments} />}
+      {isUser && <MessageAttachments attachments={message.attachments} sessionId={sourceSessionId} messageId={typeof message.id === 'string' ? message.id : undefined} />}
       <div className="message-bubble-wrap">{isTool ? <div className={`activity-card ${isError ? 'error' : ''}`}><div className="activity-heading"><Terminal size={14} /><strong>{labelize(toolName ?? eventType.replace('.', ' '))}</strong><span>{isError ? 'Failed' : formatUnknownSafe(String(message.status ?? ''), 'Activity')}</span></div><p>{text || (typeof message.command === 'string' ? message.command : typeof message.summary === 'string' ? message.summary : 'Details are unavailable for this event.')}</p>{typeof message.path === 'string' && <code>{message.path}</code>}</div> : text || !(isUser && Array.isArray(message.attachments) && message.attachments.length) ? <div className={`message-bubble ${isError ? 'message-error' : ''}`}>{isUser && text ? <UserMessageText text={text} agents={agents} references={Array.isArray(message.references) ? message.references as Array<{ id: string; title: string }> : null} onOpenReference={onOpenReference} /> : <SafeMessageText text={text || 'Message content unavailable.'} />}</div> : null}
       <MessageReactionBadges reactions={message.reactions} onRemove={onToggleReaction} /></div>
       {stamp && <div className="message-time">{stamp}</div>}
@@ -2865,7 +3007,26 @@ function MessageItem({ id, message, accent, agentName, showAvatar, mood, agents 
   </article>
 }
 
-type PendingSend = { id: string; sessionId: string; text: string; attachments: number; at: number }
+type PendingSend = {
+  id: string
+  sessionId: string
+  text: string
+  attachments: number
+  at: number
+  /** `sending` until the daemon answers; `failed` keeps the reason and offers Try again. */
+  status: 'sending' | 'failed'
+  error?: string
+  /** The daemon could not confirm delivery, so the message may already be with the bot. */
+  ambiguous?: boolean
+  method: string
+  params: Record<string, unknown>
+  /** The staged images, kept so a failed row can retry or return to the composer. */
+  files?: ComposerAttachment[]
+  /** The draft box the text was sent from; it is held there until the daemon accepts the message. */
+  originKey?: string | null
+  /** Which hold in that box is this message's, so only its own answer can release it. */
+  heldId?: string | null
+}
 
 function TextPromptDialog({ title, label, value, confirmLabel, onSubmit, onCancel }: { title: string; label: string; value: string; confirmLabel: string; onSubmit: (value: string) => void | Promise<void>; onCancel: () => void }) {
   const { ref, close } = useDialogAccessibility(onCancel)
@@ -2990,6 +3151,8 @@ function mergeHydratedSession(snapshot: Snapshot, id: string, fullSession: Sessi
 
 function ActivityItem({ item, onDiff, runtime, onSignedIn }: { item: ConversationItem; onDiff?: (path: string, content: string) => void; runtime?: Runtime | null; onSignedIn?: () => void }) {
   const activity = item.activity ?? {}
+  const [previewing, setPreviewing] = useState(false)
+  const previewPath = item.activityKind === 'file' && typeof activity.path === 'string' && isPreviewablePath(activity.path) ? activity.path : null
   const file = item.activityKind === 'file'
   const failed = ['error', 'failed', 'rejected'].includes(String(activity.state ?? activity.status ?? '').toLowerCase()) || item.activityKind === 'turn'
   const rawTurnDetail = String(activity.summary ?? activity.detail ?? activity.output ?? activity.command ?? '')
@@ -3003,7 +3166,10 @@ function ActivityItem({ item, onDiff, runtime, onSignedIn }: { item: Conversatio
     {friendly?.detail && <p>{friendly.detail}</p>}
     {friendly?.action?.kind === 'sign-in' && runtime && <SignInHelp provider={runtime.provider} runtimeId={runtime.id} onChecked={onSignedIn} />}
     {detail && <p>{detail}</p>}
+    {item.activityKind === 'turn' && activity.delivery === 'unknown' && <p className="activity-delivery-note">Bitbots could not confirm the bot received this message, so it may have reached it. It will not be sent again on its own; check the conversation before sending it again.</p>}
     {typeof activity.exitCode === 'number' && <small>Exit code {activity.exitCode}</small>}
+    {previewPath && <button type="button" className="ghost-button small activity-diff-button" aria-expanded={previewing} onClick={() => setPreviewing((value) => !value)}>{previewing ? 'Hide preview' : 'Preview file'}</button>}
+    {previewing && previewPath && <MediaPreview path={previewPath} />}
     {typeof activity.diff === 'string' && <button type="button" className="ghost-button small activity-diff-button" onClick={() => onDiff?.(String(activity.path ?? activity.filePath ?? activity.title ?? 'Reported change'), activity.diff as string)}>View reported diff</button>}
     {typeof activity.output === 'string' && activity.output !== detail && <details className="activity-detail"><summary>Output</summary><pre>{activity.output}</pre></details>}
     {item.activityKind === 'turn' && rawTurnDetail && rawTurnDetail !== friendly?.detail && <details className="activity-detail"><summary>Details</summary><pre>{rawTurnDetail}</pre></details>}
@@ -3089,12 +3255,15 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     const requested = previewParams?.get('view')
     return requested === 'activity' || requested === 'settings' ? requested : 'chat'
   })
-  const [draft, setDraft] = useState('')
+  // The companion shares the main window's per-conversation drafts (draftStore.ts), so a half-written message follows the bot between windows.
+  const draftKey = session?.id ?? null
+  const draftKeyRef = useRef(draftKey)
+  draftKeyRef.current = draftKey
+  const [draft, setDraft] = useDraft(draftKey)
   const draftRef = useRef<HTMLTextAreaElement>(null)
   useAutosizeTextarea(draftRef, draft, 132)
   const [slash, setSlash] = useState<{ start: number; query: string; index: number } | null>(null)
   const [slashCommand, setSlashCommand] = useState<SlashCommand | null>(null)
-  const [dictationPartial, setDictationPartial] = useState('')
   const [sending, setSending] = useState(false)
   const [confused, setConfused] = useState(false)
   const [dropPhase, setDropPhase] = useState<DropPhase>('idle')
@@ -3121,9 +3290,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const [dictationPhase, setDictationPhase] = useState<'idle' | IslandPhase>('idle')
   const [dictationError, setDictationError] = useState('')
   const [dictationLevel, setDictationLevel] = useState(0)
-  const [dictationEngine, setDictationEngine] = useState<DictationEngineInfo | null>(null)
   const [dictationWarming, setDictationWarming] = useState(false)
-  const [dictationFinals, setDictationFinals] = useState('')
   const [dictationClock, setDictationClock] = useState<{ since: number | null; stoppedAt: number | null }>({ since: null, stoppedAt: null })
   const dictationHeard = useRef(false)
   const fileRequest = useRef(0)
@@ -3236,7 +3403,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     if (!previous.startsWith(`${session?.id}:`)) return
     if (lastMessage?.role !== 'user' && lastMessage?.role !== 'thinking') playCompanionCue('pop')
   }, [lastMessageKey, lastMessage?.role, session?.id])
-  useEffect(() => { fileRequest.current++; setDraft(''); setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null); setDropError(null) }, [runtime?.id, session?.id])
+  useEffect(() => { fileRequest.current++; setDroppedFile(null); setFileInfo(null); setPreparingFile(false); setFileError(null); setDropError(null) }, [runtime?.id, session?.id])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
@@ -3471,18 +3638,19 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     if (!requested) return
     const sentCommand = slashCommand ?? leadingCommand(requested, { skills: slashSkills, isManager: agent?.systemRole === 'manager' })
     const body = sentCommand && slashCommand ? commandMessage(sentCommand, requested) : requested
-    const prompt = droppedFile && fileInfo ? `${body}\n\nLocal file reference selected by the user: ${fileInfo.fileName} (${fileInfo.path}, ${formatBytes(fileInfo.sizeBytes)}). File contents were not read by Bitbots. The provider may only access this path if its own process permissions and working directory allow it.` : body
+    const prompt = droppedFile && fileInfo ? `${body}\n\n${fileReferenceText(fileInfo)}` : body
     // The draft clears at once; the composer stays usable while the daemon confirms.
-    const sentDraft = draft
+    const originKey = draftKey
     setSending(true)
     setDropError(null)
-    setDraft('')
+    const heldId = holdDraft(originKey, draft.trim())
     setSlash(null)
     setSlashCommand(null)
     playCompanionCue('send')
-    try { await onSendPrompt(session.id, prompt, sentCommand, opposite, !!droppedFile); setDroppedFile(null); setFileInfo(null); setFileError(null) }
+    try { await onSendPrompt(session.id, prompt, sentCommand, opposite, !!droppedFile); releaseDraft(originKey, heldId); setDroppedFile(null); setFileInfo(null); setFileError(null) }
     catch (reason) {
-      if (!draftRef.current?.value.trim()) { setDraft(sentDraft); setSlashCommand(slashCommand) }
+      // Back into the box it came from; the command chip only if that box is still open.
+      if (restoreDraft(originKey, heldId) && draftKeyRef.current === originKey) setSlashCommand(slashCommand)
       if (fileInfo) setFileError(messageOf(reason)); else setDropError(messageOf(reason))
     }
     finally { setSending(false) }
@@ -3628,8 +3796,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
         setDictationSurface(isCompanion ? 'companion' : 'none')
         if (isCompanion) {
           dictationHeard.current = false
-          setDictationEngine(null)
-          setDictationPhase('listening'); setDictationError(''); setDictationFinals(''); setDictationWarming(false)
+          setDictationPhase('listening'); setDictationError(''); setDictationWarming(false)
           setDictationClock({ since: Date.now(), stoppedAt: null })
           playDictationCue('record-start')
         }
@@ -3640,7 +3807,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
         if (type === 'loading') setDictationWarming(true)
         else if (type === 'loaded') setDictationWarming(false)
         else if (type === 'partial') { if (text) dictationHeard.current = true }
-        else if (type === 'final') { if (text) { dictationHeard.current = true; setDictationFinals((current) => (current ? `${current} ${text}` : text)) } }
+        else if (type === 'final') { if (text) dictationHeard.current = true }
         else if (type === 'processing') { setDictationClock((clock) => ({ ...clock, stoppedAt: Date.now() })); setDictationPhase('processing'); playDictationCue('processing-start') }
         else if (type === 'stopped') {
           setDictationWarming(false)
@@ -3655,10 +3822,6 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
         }
       }))
       add(await listenNative<{ level: number }>('bloblex-dictation-level', (payload) => setDictationLevel(payload.level)))
-      add(await listenNative<{ engine: DictationEngineInfo['engine']; fallback?: boolean; reason?: string | null }>('bloblex-dictation-engine', (payload) => {
-        if (dictationSurfaceRef.current !== 'companion') return
-        setDictationEngine({ engine: payload.engine, fallback: payload.fallback === true, reason: payload.reason ?? null })
-      }))
     })().catch(() => undefined)
     return () => { disposed = true; unsubs.forEach((unlisten) => unlisten()) }
   }, [])
@@ -3700,14 +3863,16 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const statusLine = confused ? 'A little dizzy… back to normal shortly' : visibleError ?? (preparingFile ? 'Checking local file access…' : moodLabel ?? activity)
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
+  useEffect(() => { setActivityProvider(session?.provider ?? runtime?.provider ?? null) }, [session?.provider, runtime?.provider])
+  // The companion window is its own page, so it sets its own conversation for local file previews.
+  useEffect(() => { setMediaScope(session && !isDraftSession(session) ? { sessionId: session.id, projectPath: session.projectPath ?? null } : null) }, [session?.id, session?.projectPath])
   // While a turn is live the one button queues what is typed, or stops the turn when the box is empty.
   const companionDelivery = busyDelivery(busyMode, false, session?.state, steerAvailable, !!(droppedFile || slashCommand || leadingCommand(draft, { skills: slashSkills, isManager: agent?.systemRole === 'manager' })))
   const queuesPrompt = sessionBusy && (!!draft.trim() || !!droppedFile)
   const stopsTurn = sessionBusy && !queuesPrompt
   const focusBlob = (size: number) => <BlobCanvas color={color} size={size} mood={displayMood} fileStage={fileStage} look={agent ? agentLook(agent) : null} soundCues={soundsEnabled} label={name} onDizzy={beginConfused} onDizzyRecovery={recoverFromConfused} />
   const dictating = dictationSurface === 'companion' && dictationPhase !== 'idle'
-  const dictationText = `${dictationFinals}${dictationFinals && dictationPartial ? ' ' : ''}${dictationPartial}`
-  const dictationIsland = dictating ? <DictationIsland variant="companion" engine={dictationEngine} phase={dictationPhase as IslandPhase} level={dictationLevel} since={dictationClock.since} stoppedAt={dictationClock.stoppedAt} text={dictationText} warming={dictationWarming} errorText={dictationError} /> : null
+  const dictationIsland = dictating ? <DictationIsland variant="companion" phase={dictationPhase as IslandPhase} level={dictationLevel} since={dictationClock.since} stoppedAt={dictationClock.stoppedAt} warming={dictationWarming} errorText={dictationError} /> : null
   const chatShown = mode === 'home' && view === 'chat' && !permission
 
   // The pieces each layout arranges: the classic island and the Haze shell show the same conversation, approvals, activity and settings.
@@ -3718,7 +3883,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
                 onNext={() => { const at = Math.max(0, permissionQueue.findIndex((item) => item.id === permission.id)); onPickPermission?.(permissionQueue[(at + 1) % permissionQueue.length]?.id ?? permission.id) }}
                 onLater={() => { playCompanionCue('tick'); onSnoozePermission?.(permission.id) }} />}
               {permission.kind === 'proposal'
-                ? <ProposalCard key={permission.id} request={permission} managerName={managerOf(agents)?.name} projects={projects} onDecided={(decision) => playCompanionCue(decision === 'approve' ? 'approve' : 'tick')} onError={(message) => onError?.(message)} />
+                ? <ProposalCard key={permission.id} request={permission} managerName={managerOf(agents)?.name} projects={projects} runtimes={runtimes} onDecided={(decision) => playCompanionCue(decision === 'approve' ? 'approve' : 'tick')} />
                 : permission.kind === 'question'
                 ? <QuestionCard request={permission} onAnswer={(answers) => { playCompanionCue('approve'); return onAnswerQuestion?.(permission, answers) }} onDismiss={() => void onAnswerQuestion?.(permission, null)} />
                 : <ApprovalCard permission={permission} variant="companion" onReply={(choice) => replyToPermission(permission, choice)} />}
@@ -3748,7 +3913,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
                 {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
                 {slash && companionSlashCandidates.length > 0 && <SlashMenu items={companionSlashCandidates} activeIndex={slash.index} onPick={pickCompanionSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
-                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onChange={(event) => { const value = event.target.value; setDraft(value); const caret = event.target.selectionStart ?? value.length; const found = slashQuery(value, caret); setSlash(found ? { ...found, index: 0 } : null) }} onKeyDown={(event) => {
+                <textarea ref={draftRef} className="chat-input" aria-label="Message agent" placeholder={!runtimeUsable(runtime) ? 'Coding agent unavailable · Open Settings to recover' : connected ? `Ask ${name}…` : 'Daemon disconnected'} value={draft} onFocus={() => setDraftFocus(draftKey, true)} onBlur={() => setDraftFocus(draftKey, false)} onChange={(event) => { const value = event.target.value; setDraft(value); const caret = event.target.selectionStart ?? value.length; const found = slashQuery(value, caret); setSlash(found ? { ...found, index: 0 } : null) }} onKeyDown={(event) => {
                   if (event.key === 'Backspace' && slashCommand && !draft) { event.preventDefault(); setSlashCommand(null); return }
                   if (slash && companionSlashCandidates.length) {
                     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : companionSlashCandidates.length - 1)) % companionSlashCandidates.length }); return }
@@ -3764,7 +3929,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
                 </div>
                 <div className="companion-composer-end">
                 {session && <ContextWindowIndicator used={session.contextUsed} size={session.contextSize} contextModel={session.contextModel} contextEstimated={session.contextEstimated} model={contextModel} isNewConversation={(session.messages ?? []).length === 0} quota={contextQuota} />}
-                {platform.nativeSpeech && speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} onPartial={setDictationPartial} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
+                {platform.nativeSpeech && speechEnabled && <DictationButton owner="companion" modelId={speechModel} autoStart={dictateOnOpen} onAutoStarted={() => setDictateOnOpen(false)} onFinal={(text) => setDraft((current) => (current ? `${current} ${text}` : text))} disabled={!connected || !runtimeUsable(runtime) || !session || sending || session.state === 'waiting_permission'} />}
                 <button className="send-btn" type={stopsTurn ? 'button' : 'submit'} disabled={!session || sending || !runtimeUsable(runtime) || preparingFile || (!draft.trim() && !droppedFile && !sessionBusy)} onClick={stopsTurn ? cancelCompanionTurn : undefined} aria-label={queuesPrompt ? companionDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : sessionBusy ? 'Cancel turn' : 'Send message'} title={queuesPrompt ? companionDelivery.mode === 'steer' ? 'Steer this turn now' : 'Send after this turn' : undefined}>{sending ? <LoaderCircle size={13} className="spinning" /> : stopsTurn ? <Square size={10} fill="currentColor" /> : <ArrowUp size={14} />}</button>
                 </div>
                 </div>
@@ -3917,6 +4082,13 @@ function fileNameForPath(path: string) { return path.split('\\').pop()?.split('/
 function formatBytes(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB` }
 
 function formatCount(value: number) { return new Intl.NumberFormat(undefined, { notation: value >= 10_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value) }
+
+/** The user-facing sentence for a message the daemon refused, never a raw code. */
+const AMBIGUOUS_SEND_COPY = 'Bitbots could not confirm the bot received this. It may already have reached it, so check the conversation before sending it again.'
+
+function refusalText(reason: unknown) {
+  return friendlyErrorText(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'The local daemon request failed.')
+}
 
 function messageOf(reason: unknown) {
   const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'The local daemon request failed.'

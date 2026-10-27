@@ -18,7 +18,7 @@
 import { parsePermissionsPolicy, type PermissionsPolicy } from '../approvalContract'
 import type { UsageAnalyticsRequest } from '../analyticsTypes'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
-import type { DaemonEvent, JsonRecord, Snapshot } from '../types'
+import type { DaemonEvent, JsonRecord, Snapshot, WindowBackdrop } from '../types'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import type { SettingsPageName } from '../ui/settingsIndex'
 import type { UpdateCheckResult, UpdateInfo, UpdatePhaseState, UpdatePreferences, UpdateProgress, UpdatesState } from '../updatesContract'
@@ -342,3 +342,22 @@ export async function listenForSpeechDownload(handler: (progress: { modelId: str
 // The remote client's own surface, for a phone shell that needs it.
 export { createRemoteTransport }
 export type { RemoteTransport, RemoteConnectionStatus }
+
+// Terminals are a native, local-only feature: a paired phone never gets a shell on the host.
+export type TerminalShell = 'powershell' | 'pwsh' | 'cmd'
+export type TerminalOpened = { id: string; pid: number | null; shell: string; cwd: string }
+export type TerminalInfo = TerminalOpened & { running: boolean; exitCode: number | null }
+export type TerminalOutput = { id: string; seq: number; data: string }
+export type TerminalExit = { id: string; exitCode: number | null }
+export async function terminalOpen(projectPath: string, options: { cwd?: string | null; shell?: TerminalShell; cols?: number; rows?: number } = {}): Promise<TerminalOpened> { void projectPath; void options; throw notAvailable() }
+export async function terminalWrite(id: string, data: string): Promise<void> { void id; void data; throw notAvailable() }
+export async function terminalResize(id: string, cols: number, rows: number): Promise<void> { void id; void cols; void rows; throw notAvailable() }
+export async function terminalClose(id: string): Promise<void> { void id; throw notAvailable() }
+export async function terminalList(): Promise<TerminalInfo[]> { return [] }
+export async function listenForTerminalOutput(handler: (output: TerminalOutput) => void): Promise<UnlistenFn> { void handler; return () => undefined }
+export async function listenForTerminalExit(handler: (exit: TerminalExit) => void): Promise<UnlistenFn> { void handler; return () => undefined }
+
+/** A device has no native window, so there is no frosted backdrop to apply or read. */
+const NO_DEVICE_BACKDROP: WindowBackdrop = { effect: 'none', active: false, transparencyOff: false, reason: 'Not running in the desktop app.' }
+export async function applyWindowBackdrop(enabled: boolean, dark: boolean): Promise<WindowBackdrop> { void enabled; void dark; return NO_DEVICE_BACKDROP }
+export async function windowBackdropState(): Promise<WindowBackdrop> { return NO_DEVICE_BACKDROP }

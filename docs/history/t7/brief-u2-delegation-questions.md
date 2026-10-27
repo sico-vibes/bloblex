@@ -1,0 +1,52 @@
+# Lane U2 brief: bot-to-bot assignments that stay attached to their own turn, and questions that cannot cross assignments
+
+Worktree `D:\u2` (branch `lane/u2`), cut from `main` with the owner's dirty baseline applied **and with the unmerged lane R patch (`t6`) already applied on top** (4 files: `delegations.rs`, `questions.rs`, `main.rs` QuestionAnswer hook, `bloblex-storage/src/lib.rs` question helpers). Its report is in `target/lane/t6-report.md`. You are an OpenCode lane. The Director (Claude) reviews your diff and merges it. Nothing in `t6` has been run or tested by anyone.
+
+## Hard rules (owner, 27 October 2026; they override the repo gates)
+
+- **No tests of any kind.** Do not run `cargo test`, `cargo check --tests`, `cargo clippy --all-targets`, `npm test`, vitest, any app, browser, probe or screenshot. Do not add, edit or delete any test or `#[cfg(test)]` code (`team_p7_tests.rs`, `team_p10_tests.rs` and the test modules in `main.rs` are off limits). Allowed check: `cargo check -p bloblex-daemon -p bloblex-storage` (production targets, no `--tests`). Tests you cannot see compiling may be stale: list the ones that reference anything you changed (`rg` for the symbol) in the report.
+- **No git writes**: no commit, add, stash, reset, checkout, rebase, push, branch. Do not touch any other worktree or any running process. Never print secrets, tokens or message content; new logs/events carry ids and counts only.
+- Work log `target/lane/worklog.md` (update as you go); final report `target/lane/report.md`. Keep tool output small.
+- Own Cargo target (this worktree's `target`). `$env:RUST_MIN_STACK='33554432'`.
+- Golden rules: the daemon owns decisions; the Manager can never answer or approve in the owner's place; unattended runs bring their own caps; no fabricated progress; no claim of exactly-once anywhere (say "at most once per id, durable, idempotent on replay" and only what the code proves).
+
+## Files you own
+
+`crates/bloblex-daemon/src/delegations.rs`, `questions.rs`, `team.rs` (non-test code), `proposals.rs`, the `AgentEvent::QuestionRequested` branch and the `ApprovalRequested`/question card creation in `main.rs` (around line 4262; and nothing else in `main.rs` except a one-line dispatch change if you truly need it), and in `crates/bloblex-storage/src/lib.rs` only the question, delegation and `permission_requests` helper functions and their schema/index migration. **Do not edit**: `update_session_model`, `session_prompt_impl`, `queue.rs`, `retry.rs`, `tasks.rs`, adapters, anything under `apps/` or `docs/`. Lanes U1 (model switching, prompt idempotency) and U3 (restart reconciliation) edit those in parallel.
+
+## Item 1: review the `t6` patch independently, then fix what is wrong
+
+Read `target/lane/t6-report.md`, then the code it changed. Re-derive each claim from the code, not from the report. Specifically try to break these (write down in the report each one you examined and the verdict with `file:line`):
+
+1. `delegations::after_turn` now returns `TurnEnd::Waiting` when a different turn of the same conversation is live (top of the function). Can a **failed** turn whose automatic retry has not yet started (`retry` waits a bounded time for its decision, see `retry_dropped` and the retry hook) ever be swallowed so the Manager never learns the assignment failed? Trace `retry.rs` to the point where the retry turn is created.
+2. `answer_started` is called from `session_prompt_impl` when `origin == PromptOrigin::QuestionAnswer`. Confirm it cannot run for a question whose card has a different `delegationId`, and that the `tokio::spawn`ed `adopt` cannot overwrite a newer `sideTurnId` (look at `delegation_mark_running`'s guard in storage).
+3. `question_holds_open` treats `resolving` as holding. A card can be left `resolving` if `resolve_question` fails after `begin_permission_reply`. Add a bounded way out: when the card has been `resolving` longer than a short bound (use `QUESTION_ANSWER_HOLD` or a smaller constant you justify), treat it as not holding and let the next sweep return it to `pending` or dismiss it. `permission_requests` may not store a timestamp; find what it does store (`rg "begin_permission_reply" crates/bloblex-storage`) and either use it or add a `resolvingAt` field inside the card's JSON `data` (no table migration) set by `begin_permission_reply`.
+4. Two assignments in one side conversation, both with a pending question: cancel one, answer the other; walk both orders and confirm each row ends once with the correct reply (the report claims it; verify).
+5. `reply_mcp_question` and `sweep` call `question_mark_answer_pending(id, true)`. Is there any path where the flag is set and the answer is never delivered **and** nothing clears it before the 30 minute bound (for example `deliver_answer` failing, a deleted queue item)? If so, clear it on that failure path.
+
+## Item 2: native provider questions get the same assignment link
+
+The `AgentEvent::QuestionRequested` branch (`main.rs` around line 4262) creates the card for questions a provider asks through its own protocol (Claude `AskUserQuestion`, Codex `request_user_input`). Today those cards are created **without** `question_owner_row` / `question_set_delegation`, so in a side conversation with two open assignments they are unlinked (`t6-report.md`, "Cases I could not make fully safe", gap 1). Link them exactly as `ask_user_tool` does (`questions.rs`, `delegations::question_owner_row` then `st.db.question_set_delegation`), also for the Manager wake (`delegations::attention`) and for `question_resolved`. The answer path for a native question (the adapter's `answer_question`, not a new turn) must still release the row correctly: confirm whether a native answer starts a new turn at all (read how `permission.reply` dispatches native question cards vs `mcp:` ones, `main.rs` ~1202-1216) and keep `answer_pending` consistent with that (no hold if no new turn will start).
+
+## Item 3: `retry_dropped` and the assignment's turn list
+
+`t6-report.md` gap 4: `delegations::retry_dropped` finds the row by the failed turn id, but a row's `sideTurnId` now moves to each answer turn. Make it find the open row that owns **or previously owned** the failed turn (add a small durable list of the turn ids an assignment has used, or look the failed turn up through the side conversation's turns and pick the single open row; choose the least invasive option, keep it idempotent, never guess when two open rows are possible).
+
+## Item 4: Manager assignment reliability (evidence from `team.rs`)
+
+Read `team.rs:617-760` (`message_blob`, `delegate`). Fix these, each minimal and each with a plain error or note a user would understand:
+
+1. **Duplicate tool calls.** A provider can replay a `message_blob` tool call (resume, retry). Today each call records a new delegation and delivers the brief again. Make `delegate` idempotent per `(originSessionId, originTurnId, sideSessionId, sha256(message))`: when an open or just-finished row with the same key exists, return that delegation (same `side`, `title`, `started` taken from the row) and do not record or deliver again. Implement the lookup with a bounded storage query; store the hash in the row (additive column or inside its JSON, following how `delegations` rows are defined; migration additive and idempotent). When `originTurnId` is absent do not dedupe.
+2. **Target availability.** `delegate` resolves a target from `agent_list(false, None)` but never says why a target cannot work now. Before creating a side conversation, check and refuse with a specific sentence: target archived or hidden (cannot be reached), target locked (`bot_is_locked`, refer to how `update_session_model` refuses a locked bot and reuse `locked_bot_error` wording if it fits), target's runtime missing or unusable (use the same runtime lookup `new_session` uses, `provider_unavailable`), and delegation paused globally if such a flag exists (`rg "automations.paused\|global_pause" crates/bloblex-daemon/src`). The message tells the Manager what it can do ("Ask the user to unlock it", "Pick another teammate"). Do not change approval rules or add any bypass.
+3. **Visible queued state.** When `started` is false (queued behind another conversation or a global slot) the Manager's reply already says so; make sure the ledger row carries the real reason (`busy` conversation vs `slots` full) in a field the UI can show (`delegation.list` DTO, additive, camelCase). Read `delegations.rs` DTO building.
+4. **Parent wake semantics.** Confirm from the code and report: when a child finishes, fails, is cancelled, is interrupted by a restart, or asks a question, exactly how the originating Manager session is woken or notified, whether the wake is durable across a restart (look at `delegation_queued_for_recovery`, `reply_state`, `wake_request`), and which of those cases have no wake today. Fix only gaps you can fix without changing the approval rules; list the rest.
+5. **Scoped stop.** `delegation.cancel` / `cancelGroup` must stay scoped to the exact assignment ids; confirm `cancel_row` cannot cancel a turn that belongs to a different assignment in the same side conversation (it calls the session cancel). If it can, make it cancel the live turn only when `sideTurnId` equals the live turn, otherwise end the row without cancelling the session.
+
+## Item 5: bounded reads
+
+The `t6` helpers query `permission_requests` by `json_extract(data,'$.delegationId')`. Add an expression index with `CREATE INDEX IF NOT EXISTS` in the existing migration path (look at `ensure_tasks_schema` and `migrate()` for the pattern) so those lookups are not table scans. `delegation_list_for_side` is called several times per turn end: if it can be a single indexed query, check the existing index on `delegations(side_session_id)` and add it if missing.
+
+## Acceptance and report
+
+- `cargo check -p bloblex-daemon -p bloblex-storage` clean, no new warnings.
+- Report `target/lane/report.md`: for every numbered item the verdict (found, fixed, not a problem, not fixable now) with `path:line` and the reasoning; the exact new/changed contracts (events, DTO fields, error messages); the race analysis for each change, written as an interleaving ("A does X while B does Y, therefore ..."); decisions not specified here; the list of existing tests that reference what you changed (names only); every gap you could not close, stated plainly. Last 15 lines of each `cargo check`. No claim of behaviour you did not read in code.

@@ -26,10 +26,27 @@ cargo test -p bloblex-desktop --lib
 - In a fresh worktree or clone, run `npm run build` in `apps/desktop` before `cargo test -p bloblex-desktop`: `tauri::generate_context!()` fails with "The `frontendDist` configuration is set to `../dist` but this path doesn't exist". Afterwards revert the line-ending churn in `apps/desktop/src-tauri/gen/schemas/` (`git checkout --`), or the release script refuses the unclean checkout (beta.36).
 - From the root, run `npm test` (or `npx vitest` inside `apps/desktop`), never a bare `npx vitest run` at the root: it collects the test files of every worktree under `.claude/worktrees` and reports thousands of false failures (beta.36: 4,079 failed files).
 - The Codex sandbox cannot let Vite write its temp config through a `node_modules` junction (`EPERM`): add `--configLoader runner` to `vite build` and `vitest run` there, or run the gate yourself.
+- `cargo test --workspace` stops at the first crate that fails, so later crates never run. Add `--no-fail-fast` when you need every failure (2026-10-27).
+- A `../tauri` export missing from a test's `vi.mock` factory makes every App-mounting test in that file fail with the same "No "x" export is defined" error, which hides the real failures behind it. After adding the export, expect more failures to appear (2026-10-27: 121 hid 32).
+
+## T3 wave verification (2026-10-26)
+
+Owner rule: no tests and no screenshots in that wave. What was run instead: `npx tsc -p apps/desktop --noEmit`, `npm run build` and `npm run build:remote` in `apps/desktop`, and `cargo check -p bloblex-daemon -p bloblex-storage -p bloblex-desktop` (with `TAURI_CONFIG='{"bundle":{"externalBin":[]}}'` and a stub `apps/desktop/dist/index.html`) from `D:\t3`. `team_p10_tests.rs` still compiles through a `#[cfg(test)]` shim of `prepare_worktree`.
+
+## T7 wave verification (2026-10-27)
+
+No tests were run in the wave itself: only production-only `tsc`, `vite build` and `cargo check`. Round 2 (same day) added the wake/cancel/pause lane (`D:/v1`) and the ambiguous-send/limited lane (`D:/v2`); the exact unverified cases are in `docs/history/t7/REPORT-round2.md`.
+
+## T3 and T7 gates restored (2026-10-27, Claude, main checkout)
+
+The full gates now pass on the uncommitted T3 and T7 work: `npm run typecheck`, `npm test` (1,481), `cargo test --workspace --exclude bloblex-desktop` (939), `cargo clippy --workspace --exclude bloblex-desktop --all-targets -D warnings`, `npm run build` and `npm run build:remote`. **Not run:** `cargo test -p bloblex-desktop` (needs a short path, see above). What the fixes were, and which tests changed because the behaviour changed on purpose, is in `lessons.md` under the same date.
+
 
 ## Live development without releases (2026-10-20)
 
 Run `npm run desktop:dev` from a checkout without an apostrophe. The launcher builds/stages the daemon and hook, uses Vite on a free port from 1420–1435 and identifier `com.bitbots.desktop.dev`, and now defaults `BLOBLEX_DB_PATH` to `<CARGO_TARGET_DIR>/dev-data/bloblex.db`. An explicit override is retained. Development skips migration of the installed shared store and autostart entry. UI edits refresh through Vite; daemon edits still require rebuilding, restaging and restarting the development shell. No installer or release is required. Keep test projects separate too: a private database does not isolate project-file edits.
+
+For rapid Haze UI review (26 October 2026), `D:/bitbots-review46/Run Bitbots Review.cmd` now runs Tauri dev with `review-hotreload.json`, Vite on 1420, and the existing isolated review database. React/CSS/SVG edits in the haze-avatar-review checkout refresh automatically; compiled review EXEs do not. Tauri dev runs `target/debug/bloblex-desktop.exe` (not the renamed packaged `BitbotsReview.exe`). Backend/native changes still require a build and restart. No UI sweep is implied by restarting this review app.
 
 The fixture preview is not a live client. The remote PWA is a separate restricted interface. Full browser parity needs a trusted local bridge and separation of daemon connectivity from `inDesktop` guards; never expose the capability or enable broad CORS to achieve it. Keep production bundle checks: Vite dev can hide CSS chunking bugs.
 

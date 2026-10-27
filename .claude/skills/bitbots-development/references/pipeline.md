@@ -2,6 +2,18 @@
 
 Last reviewed: 2026-10-22. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
 
+## T3 wave (owner, 26 October 2026)
+
+Director UI in `D:\t3`; OpenCode `opencode-go/deepseek-v4.1-flash#high` lanes in `D:\t3p` (native terminal), `D:\t3d` (delegation, workspace), `D:\t3m` (media, checkpoints), each cut from `main` with the dirty baseline applied (see "Lane on a dirty tree"). **Owner rule for this wave: no application tests, no screenshots, no browser automation, no scratch probes, no `cargo test` or `cargo check --tests`, for every lane, overriding the repo gates.** Allowed: typecheck, `cargo check` of production targets, the production build, and source review. Lanes were told to leave tests untouched; briefs and reports are in `docs/history/t3/`. The isolated preview launcher (own Cargo target, database, app identifier `com.bitbots.desktop.t3dev` and Vite ports 1440 to 1459) is `D:\t3\target\lane\run-t3dev.ps1`; it never touches a running Bitbots.
+
+## T7 wave (owner, 27 October 2026)
+
+Same no-tests rule as the T3 wave (no test runs, no test edits, no screenshots, no probes, no `cargo check --tests`, no default `tsc -p apps/desktop`). Director UI in the main checkout; three OpenCode `opencode-go/deepseek-v4.1-flash#high` lanes cut from `main` with the dirty baseline in `D:/u1` (model switching and idempotent sends), `D:/u2` (assignments and questions, with the unmerged `D:/t6` patch applied first) and `D:/u3` (restart truth, ambiguous sends, hot reads). Briefs, reports and the review are in `docs/history/t7/`. The three lane patches were combined in `D:/u2`, `cargo check`ed there, then applied to the main checkout as one patch. Production-only checks: `npx tsc -p apps/desktop/tsconfig.prod.tmp.json --noEmit` (untracked temp config) and `npx vite build --outDir <temp>`. The running `D:/hz1` preview got the UI files by copy (they matched the baseline byte for byte); its daemon is the old one until it is rebuilt and restarted.
+
+## Haze frosted glass (owner, 27 October 2026)
+
+Same no-tests, no-screenshots, no-probes rule as the T3 wave. Native piece (`backdrop.rs`, Cargo, the `tauri.ts` bridge) by one OpenCode `opencode-go/deepseek-v4.1-flash#high` lane in `D:\hz1` (branch `haze/glass`, cut from `main` with the dirty baseline); the Director wrote the CSS, `ui/windowBackdrop.ts`, `main.tsx`, `index.html` and the docs, reviewed the diff and runs the dev window with `D:\hz1\target\lane\run-hzdev.ps1` (identifier `com.bitbots.desktop.hzglass`, Vite ports 1470 to 1489, own Cargo target and database; never touches a running Bitbots). Brief and report: `D:\hz1\target\lane\brief.md` and `report.md`. Nothing committed; the files are to be carried into the main checkout with the lane-on-a-dirty-tree method below.
+
 ## FIX43 (owner, 24 October 2026)
 
 For the FIX43 wave the owner assigned all implementation to one Claude Sonnet 5.5 agent at high effort (a sub-agent with `model: sonnet`, `effort: high`), working in order in `D:x71`; the Director only briefs, reviews, gates, merges and commits. Brief: `D:x71rief.md` (to be kept in `docs/history/fix-43/` when the wave lands). A worktree's own browser preview is a `.claude/launch.json` entry pointing Vite at the worktree on its own port (`fx71-preview`, 5175).
@@ -75,3 +87,7 @@ Read the full diff, not only the report. Check claims against the code; a lane's
 7. Verify every GitHub asset digest against the local file, `channel-beta/latest.json`'s version, the staged sidecar hashes, and Authenticode status (`NotSigned` is expected).
 8. Record it in `docs/operations/release-checklist.md` (Haiku), clean up the clone and lane worktrees, report the space recovered.
 9. The owner decides when to release; do not publish a version they asked to hold.
+
+## Lane on a dirty tree (FIX47, 26 October 2026)
+
+When the owner's baseline is the uncommitted working tree, not `HEAD`: `git worktree add -b <branch> D:\fxNN main`, then `git diff HEAD --binary > baseline.patch` in the main checkout and `git apply` it in the worktree, copy the untracked files (`git ls-files --others --exclude-standard`, minus `output/`, `.playwright-cli/`, `docs/history/` and staged `binaries/`) and junction `node_modules`. Record the baseline without committing: with `GIT_INDEX_FILE=<tmp>` run `git add -A .` and `git write-tree` in the worktree; later do the same for the result and `git diff --binary <baselineTree> <resultTree> -- <paths>` gives only the lane's change, which `git apply --check` then `git apply` takes into the main checkout. Keep the brief and lane log under the worktree's git-ignored `target/lane/` (the Write tool cannot create files in the `D:\` root). With the owner's "no tests" rule the lane may still `cargo check` (and `cargo check --tests` to prove old tests compile), never `cargo test`. Run the isolated dev app from that worktree with `scripts/dev-windows.ps1` (its database defaults to `<target>/desktop-dev/dev-data`), after copying the merged files into it.

@@ -10,6 +10,10 @@ Bitbots (Frost) and Blobots are the only app themes. Both support dark and light
 
 The base tokens are in `apps/desktop/src/ui/theme.css`. Bitbots statically imports `ui/themes/frost.css` from `main.tsx`; Blobots uses the base styles. Pop, Dot and Legacy CSS and theme registrations are removed. Old cached, database and backup selections for those looks normalize to Bitbots. New settings writes accept only `bitbots` or `blobots`.
 
+## Haze: native frosted glass (27 October 2026, not verified at runtime)
+
+Haze (the default look) asks Windows to blur the desktop behind the main window: `src-tauri/src/backdrop.rs` applies acrylic (Windows 11 build 22523+ system acrylic; otherwise composition acrylic, then blur) through the `window-vibrancy` crate and reports the real result. `ui/windowBackdrop.ts` sets `<html data-backdrop="acrylic|blur">` only when the blur is drawn, and `ui/themes/haze.css` then paints the backdrop as a translucent tint over it. The effect is scoped to the main window and removed when the look changes; the companion and dictation windows never get it. Without it (browser preview, effect refused, transparency effects off in Windows) the older opaque 80% backdrop applies. CSS `backdrop-filter` is not used because it cannot reach the desktop. See `.claude/skills/bitbots-development/references/design-language.md` for the rules.
+
 ## Attributes and settings
 
 `appearance.style` supplies `data-style`. `appearance.theme` selects system, dark or light; `data-theme` is the resolved theme. `data-wallpaper` and `data-glass` control Frost. Nothing in the current source sets or reads the retired `data-bitbots` marker. An inline script in `apps/desktop/index.html` applies the cached look, glass, wallpaper, theme and text size before first paint and falls back to the defaults for any other cached value; the daemon remains the source of truth.

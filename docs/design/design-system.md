@@ -127,3 +127,25 @@ These rules extend the looks above to the companion and dictation windows. The r
 - Bot-coloured text on light is mixed toward ink (15% bot colour) to keep 4.5:1 (`companion-bot-text-color-share` in `apps/desktop/src/ui/themes/frost.css`). Not verified against the 4.5:1 target in this pass.
 - Blobots keeps the fixed dark palette in the overlay windows.
 - No size, layout or animation changes in the overlay windows.
+
+### Haze: frosted glass (27 October 2026)
+
+Owner: Haze should be frosted glass, so the real desktop behind the window is actually blurred, not just shown through a transparent background. CSS `backdrop-filter` cannot blur the desktop (WebView2 composes only its own page), so Windows draws the blur and the page is a translucent tint over it.
+
+- **Effect and fallback chain:** Windows 11 build 22523+ system acrylic (`DWMSBT_TRANSIENTWINDOW`); Windows 10 1809+ and older Windows 11 composition acrylic with a neutral tint; then plain blur; then none. When none applies, Windows' transparency effects are off, the app runs in the browser preview, or the shell refuses, the opaque 80% backdrop below is used unchanged.
+- **Scope:** the main window while the look is Haze. Switching to Frost or Stone removes the effect and restores the window theme; the companion and dictation windows never get it. Dark or light follows the app's resolved theme at runtime.
+- **Tint, not cover:** with the blur drawn (`<html data-backdrop>` set by `ui/windowBackdrop.ts`), `.haze-backdrop` is a thin neutral veil (34% of the base colour) plus the large blended blobs at `opacity: .85` over the blur. Never an opaque layer, never a screenshot or imitation blur. The old 80% is a rough overall-density goal (system acrylic plus tint). Starting values, not measured or seen: tune by eye.
+- **Not yet verified at runtime** (owner rule: no screenshots or tests in this pass). Code: `apps/desktop/src-tauri/src/backdrop.rs`, `apps/desktop/src/ui/windowBackdrop.ts`, `apps/desktop/src/ui/themes/haze.css`.
+
+### Haze: backdrop opacity (26 October 2026; the fallback when no native blur is drawn)
+
+Owner: first "90% transparent and gradient blobs more blended in and bigger", then corrected on 26 October 2026: the background is **about 80% opaque (20% transparent)**, with the larger blended blobs kept in dark and light. Applies to the background only.
+
+- The main window stays natively transparent (`transparent: true` in `apps/desktop/src-tauri/tauri.conf.json`) so about 20% of the desktop shows through. Creation-time property: needs a rebuild and restart.
+- `apps/desktop/src/ui/themes/haze.css`: the non-interactive `.haze-backdrop` paints an opaque composition (neutral dark or light `--haze-base` under four broad overlapping radial blobs with a four-stop falloff) and carries `opacity: .8` on that element only. html, body, the shell and the panes stay transparent; sidebar tint 8%.
+- Text, controls, menus, dialogs, the settings sheet and the composer keep their own surfaces. The status aura is unchanged. No opacity on containers that hold content.
+- Frost keeps an opaque body colour under its wallpaper and Stone an opaque surface, so both look as before. Companion and dictation windows are unchanged.
+
+### Rich content, terminal and review cards (T3 wave, 26 October 2026)
+
+Interactive tables and charts, local media previews, the terminal dock, Needs you, the Workspace and Changes by turn rail cards, assignment Stop and Stop and send instead follow the same flat, hairline, token-only rules as every other surface. The detailed rules are in `.claude/skills/bitbots-development/references/design-language.md` ("Rich blocks, media, terminal and review cards").

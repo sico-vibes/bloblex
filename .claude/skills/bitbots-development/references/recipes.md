@@ -1,6 +1,6 @@
 # Recipes for recurring changes
 
-Last reviewed: 2026-10-22. Each recipe lists every place that must change together; missing one is the usual cause of a broken gate or a feature that works only in the preview. Update a recipe when you find a step it lacks.
+Last reviewed: 2026-10-26. Each recipe lists every place that must change together; missing one is the usual cause of a broken gate or a feature that works only in the preview. Update a recipe when you find a step it lacks.
 
 ## Add a settings key
 
@@ -30,7 +30,16 @@ The owner limited the product to Bitbots and Blobots on 20 October 2026, then ch
 
 - Art: add the value to `BotArt`, `BOT_ARTS`, `ART_LABELS` and the robot or blob group in `apps/desktop/src/blob/art/art.ts`; a renderer in `blob/art/` (SVG + CSS, `ArtFrame`, `useArtMood`, `artAria`, unique ids via `useId`, reduced-motion still pose); a case in `BlobCanvas`'s switch; the daemon's `valid_look` `ARTS` list (`crates/bloblex-storage/src/lib.rs`) and its test; the Manager tool schema description in `crates/bloblex-daemon/src/team.rs`; the `LookEditor` Style control picks it up from the groups; tests in `blob/art/*.test.ts(x)`; the character sheet `/preview.html?art=<value>`.
 - Painted shape: add it to `PaintedShape`, `PAINTED_SHAPES`, `PAINTED_LABELS` (`art.ts`), a body/eye/light/badge entry in `PaintedBlob.tsx` `SHAPES`, the daemon `PAINTS` list in `valid_look` and its test. Check it at 16 to 22 px.
-- Haze mark (`look.icon`): the value list is `ICONS` in `valid_look` (`crates/bloblex-storage/src/lib.rs`) — `logo`, `logo-tint`, `logo-mono`, then `px-*` pixel icons; `null` means no mark and any other value is invalid. A new value needs the list and its test here, plus the Manager descriptions in `crates/bloblex-daemon/src/team.rs` (tool schema) and `crates/bloblex-daemon/src/proposals.rs` (`propose_bot`).
+- Haze mark (`look.icon`): values are the runtime logos, `px-*` pixel icons and `char-*` full-colour portraits; `null` means no mark and every other value is invalid. For a portrait, add the static and animated SVGs under `apps/desktop/src/blob/haze/characters/<id>/`, and add its id/name in `characters.json`. `characters.ts` maps the files with eager Vite `?url` globs; small marks use static art and larger marks use the animated SVG through `<img>` so SVG animation styles remain scoped. Keep `icons.ts`, storage `valid_look` and its tests, and Manager/proposal schemas in sync. Haze's picker is the only UI that offers portraits. `BlobCanvas` returns to the saved Frost/Stone art when the style changes, while `look.icon` remains stored for switching back. Test picker keyboard focus with and without a provider, locked selection, URL bundling, normalization, and the storage allowlist parity.
+
+## Haze character portraits (26 October 2026)
+
+The owner approved generating a PNG from the Nuphos reference family first, then tracing it; earlier hand-authored character SVGs did not match. The standalone batch lives at `D:/bitbots-avatar-batch-2026-10-26`, with its reusable `run-pipeline.ps1`, `tools/pipeline.py`, manifest, prompts and source provenance. The approved app catalog has 29 choices: the corrected 28 eligible outputs plus Kratos. Lara Croft and Samus Aran are excluded.
+
+1. Use the built-in image generator with the original style references and approved Kratos image. One transparent head per call: no neck, shoulders, body or feet; two separate dark pill eyes with a clear surrounding gap. Agents publish `source/<id>.png` atomically and keep adjacent generation metadata. Inspect the PNG: the approved generated reference may pull output toward dimensional shading despite the flat-style prompt, so record that for SVG review rather than silently changing the prompt or generating an extra variant. Record rejected subjects and select genuinely different replacements; never disguise a rejected subject to retry it.
+2. Run the watcher to extract the two actual eye components, inpaint the underlying head, quantize the palette and trace real SVG paths with VTracer. Never paint eyes back into the head bitmap before tracing: that bakes a stationary pair underneath the animated pair (batch regression fixed 26 October 2026, `pipeline-v3-eyes-once`). Only the flattened preview may composite eyes back afterwards. Manual eye boxes select source pixels; they do not invent eyes. The final SVG must have no embedded raster, one body group and two eye groups. The head-motion wrapper must contain both body and eyes so eye animation stays attached during a bounce; reduced motion stays still. Hide the eye layers in rendered output to check the head is eye-free; counting two eye groups alone cannot catch baked-in eyes. `tools/eye_regression.py` checks browser-rendered heads and a deliberately bad control.
+3. Validate every current manifest entry and its source hash, then inspect the rendered SVG contact sheet and animation. `tools/review.py` builds the sheet and validation report. Package only current IDs, PNGs, provenance, static/animated SVGs and the pipeline; exclude withheld assets and superseded IDs.
+4. For app integration, copy only approved static and animated SVG pairs. Extend `characters.json`, storage `ICONS`, and both manager schemas together. Preserve the original SVG colours; the bot's colour continues to drive the separate Haze aura. Do not inline these SVGs or their style elements in React.
 
 ## Add a daemon RPC or event
 
@@ -53,7 +62,7 @@ The owner limited the product to Bitbots and Blobots on 20 October 2026, then ch
 1. Read each file's size and SHA-256 without downloading: `https://huggingface.co/api/models/<repo>?blobs=true` (the `lfs.sha256` of a file, and the repository's `sha`, the revision to pin). Pin every URL to that commit.
 2. `crates/bloblex-speech/src/catalog.rs`: a manifest with its files (the download manager checks size and hash, and resumes), then add it to `build_catalog`. A model that needs a new recogniser also needs a `SpeechModelType` variant (`manifest.rs`) and a branch in `SpeechEngine::load` (`engine.rs`). Add a catalog test that the pins name a commit and a 64-character hash.
 3. A model that is an executable: re-hash it before each load, run it with file paths only (never audio or text on the command line), delete any temporary audio at once, and log nothing it prints (`needle.rs`).
-4. Live words from a model that only decodes finished clips: use `UtteranceTracker` (`utterance.rs`).
+4. Live words from a model that only decodes finished clips: `UtteranceTracker` (`utterance.rs`) cuts audio into utterances and may emit partials internally, but the UI ignores them. Dictation shows the recorder only; the final transcript goes into the box on stop (FIX45, owner decision). Do not add a live-words display without a new owner decision.
 5. UI: the Settings page lists whatever `speech_models` returns, so only the preview list (`PREVIEW_SPEECH_MODELS` in `SettingsSheet.tsx`) and the mounted test need the new row. Add a line to `docs/legal/third-party-notices.md` and the model table in the companion and dictation guide.
 
 ## Add a native (Tauri) command
@@ -71,3 +80,14 @@ Add the id to `SettingsPageId` and `PAGES` in `apps/desktop/src/ui/SettingsSheet
 ## Change the docs
 
 Follow `docs/STYLE.md`. Keep protected paths in place (`docs/releases/`, `docs/remote/`, `docs/ipc-contract.md`, `docs/evidence/`, `docs/fixtures/`, `docs/qa-schema/`). Add new hand-written library pages under `docs/library/content/`, then `npm run docs:build` and `npm run docs:check`.
+
+## Add a rich block type to chat (T3, 2026-10-26)
+
+1. Add the parser and its limits to `ui/richData.ts` (return `Parsed<T>`: a failure must carry a plain reason, never throw).
+2. Add the renderer beside `RichTable.tsx`/`RichChart.tsx` (tokens only, no model HTML, `textContent`-style React text) and its rules to `ui/richBlocks.css`.
+3. Route the fenced language in `FencedBlock` in `ui/SafeMarkdown.tsx`; on failure render `RawNote` plus the raw `CodeBlock`.
+4. Record the format in `design-language.md`. A model only emits `bitbots-chart`/`bitbots-table` if it is told to; nothing injects that instruction into prompts yet.
+
+## Add a native terminal-style command (T3)
+
+Commands go in `src-tauri/src/pty.rs` style: take `window: tauri::Window`, call `guard_main`, return `Result<_, String>`, emit to `"main"` only; add the wrapper to `tauri.ts`, a refusing stub to `remote/remoteTauri.ts` and a stub to `preview/fixtureBridge.ts` (the export lists must match).

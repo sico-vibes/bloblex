@@ -97,6 +97,15 @@ button, input, textarea { font: inherit; }
 .rm-approval.locked div { display: grid; gap: 3px; }
 .rm-approval.locked strong { color: var(--text-1); font-size: 14px; }
 .rm-approval.locked small { color: var(--text-2); font-size: 12.5px; line-height: 1.5; }
+/* Assignments: what the Manager's teammates are doing (wave 13). */
+.rm-assignments { margin: 0 12px 8px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); }
+.rm-assignments ul { margin: 0; padding: 0; list-style: none; }
+.rm-assignments li { padding: 2px 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.rm-assignments li + li { border-top: 1px solid var(--line); }
+.rm-assignments li span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-assignments li strong { color: var(--text-1); font-weight: 600; }
+.rm-assignments li small { flex: none; color: var(--text-3); font-size: 12px; }
+.rm-assignments li.open small { color: var(--status-working-text); }
 .rm-composer { flex: 0 0 auto; padding: 8px 12px; display: flex; align-items: flex-end; gap: 8px; border-top: 1px solid var(--line); background: var(--surface-panel); }
 .rm-composer textarea { min-width: 0; flex: 1; max-height: 120px; min-height: 44px; padding: 11px 14px; resize: none; color: var(--text-1); font-size: 16px; line-height: 1.4; border: 1px solid var(--line-strong); border-radius: 22px; background: var(--surface-input); }
 .rm-composer textarea:focus { outline: none; border-color: var(--user-accent, var(--text-2)); }

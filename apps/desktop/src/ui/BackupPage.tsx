@@ -139,7 +139,7 @@ export function BackupPage({ connected }: { connected: boolean }) {
     <SettingsGroup title="Restore">
       <div className="backup-section">
         {!preview && <>
-          <p className="backup-note">Choose a <code>.bitbots-backup.json</code> file. You will see what it holds before anything changes.</p>
+          <p className="backup-note">Choose a <code>.bitbots-backup.json</code> file, including one a {noun} was shared as. You will see what it holds before anything changes.</p>
           <div className="backup-actions">
             <button type="button" className="secondary-button small" disabled={!connected || reading} onClick={() => void chooseFile()}><FileUp size={13} aria-hidden="true" />{reading ? 'Reading…' : 'Choose a backup…'}</button>
           </div>

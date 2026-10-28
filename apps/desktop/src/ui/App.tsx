@@ -27,6 +27,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAu
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
+import { OutsideSessionPills, useOutsideSessions } from './OutsideSessions'
 import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, UpdateChip, UsageLimitNotice, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
@@ -65,7 +66,7 @@ import { friendlyError, friendlyErrorText } from './errorCopy'
 import { changedFields, createDraft, createParams, daemonCodeOf, draftFromAgent, teamParams, duplicateParams, executionFromAgent, isAgentDirty, messageForDaemonCode, updateParams, validateAgentDraft, type AgentDraft } from './agentForm'
 import { activeAgents, agentSessions, agentsForRuntime, duplicateAgentName, legacySessions, nextAgentAfterArchive, placeAgentOrder, projectGroups, reorderAgentInProject, runtimeUsable, sessionDisplayTitle, sessionSelectionTarget } from './rosterSelectors'
 import { conversationMarkdown } from './conversationMarkdown'
-import { parseSharedBlob, serializeBlob, type SharedBlob } from './blobShare'
+import { parseSharedBlob, type SharedBlob } from './blobShare'
 import { ApprovalPill } from './approvalUi'
 import { BlobPage, ConfirmDialog } from './BlobPage'
 import { DictationButton } from './DictationButton'
@@ -139,7 +140,7 @@ import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
 import { setRuntimeProviders } from '../blob/haze/runtimeRegistry'
 import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
-import { ensureDaemon, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, selectBlobExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionSizePreset, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeBlobExport, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
+import { ensureDaemon, selectBackupExportPath, writeBackupExport, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionSizePreset, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
 type MessageMenuTarget = { x: number; y: number; sessionId: string; messageId: string; text: string; latest: boolean; references: NonNullable<ChatMessage['references']>; attachments: Array<{ name: string; path: string }>; replyTo: ReplyTarget | null }
@@ -1501,13 +1502,13 @@ export function App() {
     finally { restoreMoreFocus() }
   }
 
+  // Wave 13: a bot is exported with its approved notes, schedules and usable skills, as a backup of one bot.
+  // It imports through Settings › Backup, which shows what it holds before anything changes.
   const exportBlob = async (agent: Agent) => {
-    const runtime = runtimes.find((item) => item.id === agent.runtimeId)
-    if (!runtime) { setError(`The coding agent for this ${entityNoun(themeStyle())} is not available.`); return }
     try {
-      const selectionToken = await selectBlobExportPath(agent.name)
+      const selectionToken = await selectBackupExportPath(agent.name)
       if (!selectionToken) return
-      await writeBlobExport(selectionToken, serializeBlob(agent, runtime.provider))
+      await writeBackupExport(selectionToken, { agentIds: [agent.id], settings: false })
       setError(null)
     } catch (reason) { setError(messageOf(reason)) }
   }
@@ -1519,7 +1520,11 @@ export function App() {
       if (!selectionToken) { restoreCreateFocus(); return }
       setPendingBlobImport(parseSharedBlob(await readBlobImport(selectionToken)))
       setError(null)
-    } catch (reason) { setError(messageOf(reason)); restoreCreateFocus() }
+    } catch (reason) {
+      setError(messageOf(reason)); restoreCreateFocus()
+      // A full bot file (notes and schedules too) imports in Settings › Backup.
+      if (messageOf(reason).includes('Settings › Backup')) { setSettingsInitialPage('Backup'); setSettingsSheet(true) }
+    }
   }
 
   // Browser preview only: /?preview-import opens the import dialog with a sample blob file.
@@ -3322,6 +3327,8 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   sessionRef.current = session
   dictationSurfaceRef.current = dictationSurface
   const clock = useClock(10_000)
+  // Wave 13: Claude Code sessions the owner started outside Bitbots, when watching is on.
+  const outsideSessions = useOutsideSessions(connected)
   const derived = deriveCompanionStatus({ connected, runtime, session, permissionPending: !!permission, composing: !!draft.trim(), now: clock })
   const displayMood = derived.mood
   const activity = derived.mood === 'listening' ? derived.label : activityLabel
@@ -3948,6 +3955,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
             {onSelectConversation && <CompanionConversationPicker agent={agent} sessions={sessions} projects={projects} current={session} onPick={onSelectConversation} />}
             <CompanionActivitySummary agents={agents} sessions={sessions} runtimes={runtimes} connected={connected} workingSince={workingSince} now={clock} onOpen={(sessionId) => { if (sessionId) onOpenSession?.(sessionId) }} />
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
+            <OutsideSessionPills sessions={outsideSessions} />
             <p className="cs-glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}>All {nouns}: Tokens <b>{tokenGlance}</b></p>
             {activityDetails && (recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>)}
   </>

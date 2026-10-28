@@ -200,3 +200,11 @@
 .health-copy { display: grid; gap: 2px; min-width: 0; }
 .health-copy strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 560; }
 .health-copy small { color: var(--text-3); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+
+/* Wave 13: status lines under a settings row, and the consent preview of Claude Code's settings. */
+.settings-row-note { margin: 0; padding: 0 14px 10px; font-size: var(--fs-xs); }
+.outside-consent { width: min(520px, calc(100% - 32px)); max-height: calc(100% - 48px); grid-template-columns: minmax(0, 1fr); overflow: auto; }
+.outside-consent p { margin: 0; overflow-wrap: anywhere; }
+.outside-consent-file { min-width: 0; margin: 0; }
+.outside-consent-file summary { color: var(--text-2); font-size: var(--fs-xs); cursor: pointer; }
+.outside-consent-file pre { max-height: 220px; margin: 8px 0 0; padding: 10px; overflow: auto; color: var(--text-2); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: 400 var(--fs-2xs) var(--font-mono, ui-monospace, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }

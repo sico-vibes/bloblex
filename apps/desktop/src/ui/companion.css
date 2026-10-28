@@ -458,3 +458,13 @@ button.compact-copy:active { transform: none; }
 .cs-resize-ne, .cs-resize-nw, .cs-resize-se, .cs-resize-sw { width: 14px; height: 14px; }
 .cs-resize-ne { top: 0; right: 0; cursor: nesw-resize; } .cs-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .cs-resize-nw { top: 0; left: 0; cursor: nwse-resize; } .cs-resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+/* Wave 13: Claude Code sessions started outside Bitbots. Flat rows; status colour only while something happens. */
+.outside-sessions { margin: 10px 2px 0; display: grid; gap: 4px; }
+.outside-sessions-title { color: var(--c-dim-3); font: 500 var(--fs-2xs) var(--c-font); }
+.outside-sessions ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.outside-pill { min-width: 0; height: 24px; padding: 0 8px; display: flex; align-items: center; gap: 6px; color: var(--c-dim-3); border-radius: 6px; background: var(--c-fill, transparent); font: 400 var(--fs-2xs) var(--c-font); }
+.outside-pill b { min-width: 0; overflow: hidden; color: var(--c-dim); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.outside-pill-state { margin-left: auto; flex: none; }
+.outside-pill.working .outside-pill-state { color: var(--c-dim); }
+.outside-pill.waiting .outside-pill-state { color: var(--status-working); }

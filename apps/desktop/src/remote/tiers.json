@@ -639,6 +639,41 @@
       "params": null
     },
     {
+      "method": "outside.status",
+      "class": "never",
+      "minTier": null,
+      "why": "Watching outside sessions changes Claude Code's settings on the host; its status is the owner's at the computer.",
+      "params": null
+    },
+    {
+      "method": "outside.preview",
+      "class": "never",
+      "minTier": null,
+      "why": "The preview shows the host's Claude Code settings file, which stays at the computer.",
+      "params": null
+    },
+    {
+      "method": "outside.enable",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may let Bitbots change Claude Code's settings.",
+      "params": null
+    },
+    {
+      "method": "outside.disable",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may change Claude Code's settings.",
+      "params": null
+    },
+    {
+      "method": "outside.sessions",
+      "class": "never",
+      "minTier": null,
+      "why": "Sessions started outside Bitbots are the computer's own terminals; they stay on the host in this slice.",
+      "params": null
+    },
+    {
       "method": "mcp.*",
       "class": "never",
       "minTier": null,
@@ -969,23 +1004,23 @@
     },
     {
       "method": "delegation.list",
-      "class": "never",
-      "minTier": null,
-      "why": "Assignments carry the host's absolute workspace and worktree paths, which the remote redaction does not reduce yet, so they stay on the host. The desktop reads them locally.",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Shows what a Manager's teammates are doing so a phone can catch up; the workspace folder is reduced to its last two segments and the isolated copy's repository and path are removed before it leaves.",
       "params": null
     },
     {
       "method": "delegation.cancel",
-      "class": "never",
-      "minTier": null,
-      "why": "Stopping an assignment cancels a teammate's running turn or withdraws a queued brief; only the owner at the desktop may do that.",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Stops an assignment (a teammate's running turn or a queued brief), like stopping a running turn from the phone.",
       "params": null
     },
     {
       "method": "delegation.cancelGroup",
-      "class": "never",
-      "minTier": null,
-      "why": "Stopping a group of assignments cancels teammates' turns; only the owner at the desktop may do that.",
+      "class": "chat",
+      "minTier": "chat",
+      "why": "Stops an assignment (a teammate's running turn or a queued brief), like stopping a running turn from the phone.",
       "params": null
     },
     {
@@ -1086,7 +1121,8 @@
     "task.changed": "drop",
     "task.run.changed": "drop",
     "task.run.finished": "drop",
-    "delegation.updated": "drop"
+    "delegation.updated": "allow",
+    "outside.sessions.changed": "drop"
   },
   "settingsAllowlist": [
     "appearance.style",

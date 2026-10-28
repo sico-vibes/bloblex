@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDelegationRows, type DelegationNotice, type DelegationRecord } from './delegations'
+import { buildDelegationRows, normalizeDelegation, type DelegationNotice, type DelegationRecord } from './delegations'
 
 const notice: DelegationNotice = { id: 'n1', delegationId: 'd1', originTurnId: 't1', peerAgentId: 'a1', peerName: 'Codex', topic: 'Check the build', sideSessionId: 's1', failed: false, text: 'Check the build', createdAt: null }
 const record = (extra: Partial<DelegationRecord>): DelegationRecord => ({
@@ -13,5 +13,14 @@ describe('assignment rows', () => {
   it('says a quietly finished assignment had nothing to report', () => {
     expect(rows({ silent: true })[0]!.label).toBe('Done, nothing to report')
     expect(rows({})[0]!.label).toBe('Done')
+  })
+})
+
+describe('daemon records', () => {
+  // The quiet flag and the goal must survive the trip from the daemon (wave 12 shipped without them).
+  it('keeps the quiet flag and the done goal', () => {
+    const raw = { id: 'd1', originSessionId: 'm1', sideSessionId: 's1', status: 'completed', silent: true, doneGoal: 'Tests pass', workspace: { path: 'C:/work/site', worktree: null } }
+    expect(normalizeDelegation(raw)).toMatchObject({ silent: true, doneGoal: 'Tests pass', workspacePath: 'C:/work/site' })
+    expect(normalizeDelegation({ ...raw, silent: 'yes', doneGoal: 4 })).toMatchObject({ silent: false, doneGoal: null })
   })
 })

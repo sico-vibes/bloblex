@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
   listenForDaemonEvents: vi.fn(), listenForDaemonConnection: vi.fn(), listenForActiveSession: vi.fn(),
   listenForActiveRuntime: vi.fn(), listenForOpenSettings: vi.fn(), directListen: vi.fn(), emit: vi.fn(),
   getCurrentWindow: vi.fn(), openProjectFolder: vi.fn(), fetchUsageAnalytics: vi.fn(),
-  selectMarkdownExportPath: vi.fn(), writeMarkdownExport: vi.fn(), selectBlobExportPath: vi.fn(), writeBlobExport: vi.fn(),
+  selectMarkdownExportPath: vi.fn(), writeMarkdownExport: vi.fn(), selectBlobExportPath: vi.fn(), writeBlobExport: vi.fn(), selectBackupExportPath: vi.fn(), writeBackupExport: vi.fn(),
   selectBlobImportPath: vi.fn(), readBlobImport: vi.fn(),
 }))
 
@@ -53,7 +53,7 @@ vi.mock('../tauri', () => ({
   openProjectFolder: h.openProjectFolder,
   selectLocalFile: vi.fn(), inspectLocalFile: vi.fn(),
   selectMarkdownExportPath: h.selectMarkdownExportPath, writeMarkdownExport: h.writeMarkdownExport,
-  selectBlobExportPath: h.selectBlobExportPath, writeBlobExport: h.writeBlobExport,
+  selectBlobExportPath: h.selectBlobExportPath, writeBlobExport: h.writeBlobExport, selectBackupExportPath: h.selectBackupExportPath, writeBackupExport: h.writeBackupExport,
   selectBlobImportPath: h.selectBlobImportPath, readBlobImport: h.readBlobImport,
   openInEditor: vi.fn(), revealInExplorer: vi.fn(), resolveProjectFile: vi.fn(),
   quitBloblex: vi.fn(), setCloseToTray: vi.fn(),
@@ -163,6 +163,8 @@ beforeEach(() => {
   h.writeMarkdownExport.mockResolvedValue(undefined)
   h.selectBlobExportPath.mockResolvedValue('selected-blob-export-token')
   h.writeBlobExport.mockResolvedValue(undefined)
+  h.selectBackupExportPath.mockResolvedValue('selected-backup-export-token')
+  h.writeBackupExport.mockResolvedValue({ path: 'C:/Users/me/Claude.bitbots-backup.json', stats: {} })
   h.selectBlobImportPath.mockResolvedValue('selected-blob-import-token')
   h.readBlobImport.mockResolvedValue(JSON.stringify({ format: 'bloblex.blob.v1', name: 'Imported helper', description: 'Shared', colour: '#aabbcc', instructions: 'Use concise answers.', model: null, thinking: null, speed: null, look: { shape: 'droplet', seed: 'imported' }, defaultApprovalMode: 'ask' }))
 })
@@ -384,8 +386,10 @@ describe('sidebar usage analytics', () => {
     await act(async () => { blobRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 12 })) })
     await click(buttonNamed(view.host, 'Export bot…'))
     await view.settle()
-    expect(h.selectBlobExportPath).toHaveBeenCalledWith('Claude')
-    expect(h.writeBlobExport).toHaveBeenCalledWith('selected-blob-export-token', expect.stringContaining('"format": "bloblex.blob.v1"'))
+    // Wave 13 (owner-approved plan): Export writes the bot with its approved notes and schedules, as a backup of one bot.
+    expect(h.selectBackupExportPath).toHaveBeenCalledWith('Claude')
+    expect(h.writeBackupExport).toHaveBeenCalledWith('selected-backup-export-token', { agentIds: ['agent-claude'], settings: false })
+    expect(h.writeBlobExport).not.toHaveBeenCalled()
 
     await click(buttonNamed(view.host, 'Bot actions'))
     await click(buttonNamed(view.host, 'Import bot…'))

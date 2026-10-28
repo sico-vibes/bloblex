@@ -38,6 +38,8 @@ describe('blob share format', () => {
 
   it('rejects wrong versions, malformed colours, and oversized content', () => {
     expect(() => parseSharedBlob(JSON.stringify({ ...base, format: 'bloblex.blob.v2' }))).toThrow(/unsupported format version/)
+    // Wave 13: a full bot file (a backup of one bot) points to Settings › Backup instead.
+    expect(() => parseSharedBlob(JSON.stringify({ format: 'bitbots.backup', version: 1, contents: {} }))).toThrow(/Import it in Settings › Backup/)
     expect(() => parseSharedBlob(JSON.stringify({ ...base, colour: 'red' }))).toThrow(/#RRGGBB/)
     expect(() => parseSharedBlob(' '.repeat(70_000))).toThrow(/too large/)
     expect(() => parseSharedBlob(JSON.stringify({ ...base, name: 'x'.repeat(61) }))).toThrow(/name/)

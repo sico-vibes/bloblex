@@ -1021,9 +1021,17 @@ fn select_blob_import_path(app: AppHandle, state: State<'_, AppState>) -> Result
     Ok(Some(remember_selected_path(&state, path, SelectedFilePurpose::Import)?))
 }
 
+/// The one message the window recognises to open Settings › Backup instead.
+const FULL_BOT_FILE: &str = "This is a full bot file with its notes and schedules. Import it in Settings › Backup.";
+
 #[tauri::command]
 fn read_blob_import(state: State<'_, AppState>, selection_token: String) -> Result<String, String> {
     let path = take_selected_path(&state, &selection_token, SelectedFilePurpose::Import)?;
+    // Wave 13: a bot exported with its notes and schedules is a backup file; the
+    // backup import shows what it holds before anything changes.
+    if path.file_name().is_some_and(|name| name.to_string_lossy().to_ascii_lowercase().ends_with(".bitbots-backup.json")) {
+        return Err(FULL_BOT_FILE.to_string());
+    }
     let metadata = fs::metadata(&path)
         .map_err(|_| "The selected blob file could not be read.".to_string())?;
     if metadata.len() > 64 * 1024 {
@@ -1103,9 +1111,14 @@ mod wallpaper_tests {
 const MAX_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
 
 #[tauri::command]
-fn select_backup_export_path(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+fn select_backup_export_path(app: AppHandle, state: State<'_, AppState>, suggested_name: Option<String>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let suggested_name = format!("bitbots-backup-{}.bitbots-backup.json", chrono::Utc::now().format("%Y-%m-%d"));
+    // A bot template suggests the bot's name; only plain file-name characters are kept.
+    let template_name = suggested_name.map(|name| name.chars().filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_')).take(60).collect::<String>().trim().to_owned()).filter(|name| !name.is_empty());
+    let suggested_name = match template_name {
+        Some(name) => format!("{name}.bitbots-backup.json"),
+        None => format!("bitbots-backup-{}.bitbots-backup.json", chrono::Utc::now().format("%Y-%m-%d")),
+    };
     let Some(selected) = app
         .dialog()
         .file()

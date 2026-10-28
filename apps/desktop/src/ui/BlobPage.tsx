@@ -154,7 +154,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
             <div className="settings-group-head"><h3>Manage</h3></div>
             <div className="settings-card">
               {onDuplicate && <button type="button" className="blob-manage-row" title={`Make a copy with the same look, model and instructions.`} onClick={onDuplicate}><Copy size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Duplicate</strong></span></button>}
-              {onExport && <button type="button" className="blob-manage-row" title={`Save this ${noun} as a file you can share or import later.`} onClick={onExport}><Download size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Export</strong></span></button>}
+              {onExport && <button type="button" className="blob-manage-row" title={`Save this ${noun} with its approved notes, schedules and skills as a file you can share. Sign-ins, environment values and app settings are never included.`} onClick={onExport}><Download size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Export</strong></span></button>}
               <button type="button" className="blob-manage-row danger" title={`It leaves the sidebar and companion. Its conversations stay saved.`} onClick={onArchive}><Archive size={16} aria-hidden="true" /><span className="blob-manage-copy"><strong>Archive {draft.name.trim() || `this ${noun}`}</strong></span></button>
             </div>
           </section>}

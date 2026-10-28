@@ -78,6 +78,13 @@ const fixtureSkills: Array<Record<string, unknown>> = [
   { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
 ]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
+const fixtureOutside = {
+  enabled: fixturePreset() === 'outside',
+  sessions: [
+    { id: 'cli-1', provider: 'claude', folder: 'invoice-api', state: 'working', tool: 'Bash', startedAt: new Date(Date.now() - 600_000).toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'cli-2', provider: 'claude', folder: 'site', state: 'waiting', tool: null, startedAt: new Date(Date.now() - 1_800_000).toISOString(), updatedAt: new Date(Date.now() - 60_000).toISOString() },
+  ],
+}
 // `?preset=schedule-retry`: one run failed after changing files, one ended quietly (wave 13).
 if (fixturePreset() === 'schedule-retry') {
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
@@ -733,6 +740,20 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (method === 'memory.delete') { target.deletedAt = new Date().toISOString(); notifyFixtureDaemon('memory.deleted', { id: target.id }); return { deleted: true } as T }
     if (method === 'memory.restore') { target.deletedAt = null; notifyFixtureDaemon('memory.changed', { record: { ...target } }); return { record: { ...target } } as T }
   }
+  // Wave 13: watching Claude Code outside Bitbots. `?preset=outside` starts with it on and two sessions.
+  if (method.startsWith('outside.')) {
+    const status = () => ({ enabled: fixtureOutside.enabled, installed: fixtureOutside.enabled, settingsPath: 'C:/Users/you/.claude/settings.json', bridgeAvailable: true, problem: null })
+    if (method === 'outside.status') return status() as T
+    if (method === 'outside.sessions') return { sessions: fixtureOutside.enabled ? fixtureOutside.sessions : [] } as T
+    if (method === 'outside.preview') return { settingsPath: status().settingsPath, exists: true, before: JSON.stringify({ model: 'opus' }, null, 2), after: JSON.stringify({ hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: '"C:/Program Files/Bitbots/bitbots-hook.exe" --outside "C:/Users/you/AppData/Roaming/Bitbots/outside-hook.json"', timeout: 5 }] }] }, model: 'opus' }, null, 2) } as T
+    if (method === 'outside.enable') {
+      if (params.confirm !== true) throw rpcError('confirmation_required', 'Confirm the change to Claude Code’s settings first.')
+      fixtureOutside.enabled = true
+      notifyFixtureDaemon('outside.sessions.changed', { sessions: fixtureOutside.sessions })
+      return { status: status(), backupPath: 'C:/Users/you/.claude/settings.json.bitbots-backup-20261028-101500' } as T
+    }
+    if (method === 'outside.disable') { fixtureOutside.enabled = false; notifyFixtureDaemon('outside.sessions.changed', { sessions: [] }); return { status: status(), backupPath: null, problem: null } as T }
+  }
   if (method === 'session.handoff.draft') {
     const source = sessions.find((item) => item.id === params.fromSessionId)
     if (!source || source.archived) throw rpcError('not_found', 'Conversation not found.')
@@ -1200,8 +1221,9 @@ export async function writeBlobExport(_selectionToken: string, _text: string) {}
 // Preview stand-ins for the backup types `src/tauri.ts` exports, so the backup
 // page type-checks against the fixture bridge unchanged.
 export type BackupInclude = { memory?: boolean; skills?: boolean; automations?: boolean; settings?: boolean }
+export type BackupExportRequest = BackupInclude & { agentIds?: string[] }
 export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
-export async function selectBackupExportPath() { return 'preview-backup-export-token' }
+export async function selectBackupExportPath(_suggestedName?: string) { return 'preview-backup-export-token' }
 export async function selectBackupImportPath() { return 'preview-backup-import-token' }
 export type DiagnosticsPreview = { generatedAt: string; fileName: string; files: { name: string; sizeBytes: number }[] }
 export async function selectDiagnosticsExportPath() { return 'preview-diagnostics-token' }
@@ -1218,7 +1240,7 @@ export async function writeDiagnosticsExport(_selectionToken: string): Promise<{
     ],
   }
 }
-export async function writeBackupExport(_selectionToken: string, _include?: BackupInclude) {
+export async function writeBackupExport(_selectionToken: string, _include?: BackupExportRequest) {
   return { path: 'C:\\Users\\you\\Documents\\bitbots-backup-2026-10-17.bitbots-backup.json', stats: { bots: agents.length, memory: fixtureMemory.length, skills: fixtureSkills.length, automations: 1, settings: 9 } }
 }
 export async function previewBackupImport(_selectionToken: string) {

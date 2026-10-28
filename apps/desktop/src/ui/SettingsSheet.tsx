@@ -28,6 +28,7 @@ import { discoveryResultText, EMPTY_DISCOVERY_STATUS, runtimeProbeDetail, scanTi
 import { ScanRecovery } from './ScanRecovery'
 import { ConfirmDialog } from './BlobPage'
 import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
+import { OutsideWatchSetting } from './OutsideSessions'
 import { RemoteSettings } from './RemoteSettings'
 import { DiagnosticsDialog } from './DiagnosticsDialog'
 import { HarnessUpdatesNotice } from './HarnessUpdatesNotice'
@@ -547,6 +548,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="Focus mode" hint="No completion peeks or cues while you concentrate. Approvals and questions still show.">
                 <button type="button" className={`toggle ${focusMode ? 'on' : ''}`} role="switch" aria-label="Focus mode" aria-checked={focusMode} onClick={() => void setFocus(!focusMode)} disabled={saving}><i /></button>
               </SettingsRow>
+              <OutsideWatchSetting connected={inDesktop && !!snapshot} />
               <SettingsRow label="Reset companion position" hint="Returns the companion to your start position and forgets where this display left it.">
                 <button type="button" className="secondary-button small" onClick={() => void resetCompanionPosition()} disabled={saving}>Reset position</button>
               </SettingsRow>

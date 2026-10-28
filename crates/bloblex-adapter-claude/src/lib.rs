@@ -771,6 +771,9 @@ impl ClaudeAdapter {
             }
             c.env(key, value);
         }
+        // Wave 13: marks this Claude Code as Bitbots' own, so the outside-session
+        // hook bridge ignores it and the conversation is not shown twice.
+        c.env("BITBOTS_MANAGED", "1");
         let instruction_file = if let Some(instructions) = options.instructions.as_deref().filter(|s| !s.is_empty()) {
             Some(self.create_instruction_file(instructions).map_err(|e| AdapterError::Process(format!("private instruction file unavailable: {e}")))?)
         } else { None };

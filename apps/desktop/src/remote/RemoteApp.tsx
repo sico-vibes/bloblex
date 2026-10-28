@@ -12,6 +12,7 @@ import { blobState, peerLine } from '../ui/CompanionTeam'
 import { StatusDot } from '../ui/StatusDot'
 import { isAutomationSession, isSideSession, mainSessionFor } from '../ui/teamSelectors'
 import { useEntityNoun } from '../ui/vocabulary'
+import { BUCKET_LABEL, queuedLabel, useDelegations, type DelegationRecord } from '../ui/delegations'
 import logo from '../assets/bloblex-128.png'
 import type { RemoteMethodId, RemoteTier } from './remoteContract'
 import type { RemoteConnectionStatus, RemoteMe } from './remoteTransport'
@@ -304,7 +305,7 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
         <main className="rm-main">
           {wide && screen === 'bots' && <section className="rm-empty-chat"><h2>Choose a {noun}</h2><p>Open a conversation from the list.</p></section>}
           {screen === 'chat' && activeAgent && <ChatScreen key={activeSession?.id ?? 'none'} agent={activeAgent} session={activeSession} permissions={snapshot?.permissions ?? []} hostName={hostName} online={online} tier={tier}
-            canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} nouns={nouns} />}
+            canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} nouns={nouns} agents={agents} />}
           {screen === 'device' && me && <DeviceScreen me={me} noun={noun} onLogout={() => void logout()} layoutOverride={override} onLayoutChange={changeOverride} />}
         </main>
         </div>
@@ -451,8 +452,8 @@ function BotsScreen({ hostName, agents, sessions, runtimes, online, loaded, wait
   </section>
 }
 
-function ChatScreen({ agent, session, permissions, hostName, online, tier, canApprove, quiet, nouns }: {
-  agent: Agent; session: Session | null; permissions: PermissionRequest[]; hostName: string; online: boolean; tier: RemoteTier; canApprove: boolean; quiet: boolean; nouns: string
+function ChatScreen({ agent, session, permissions, hostName, online, tier, canApprove, quiet, nouns, agents = [] }: {
+  agent: Agent; session: Session | null; permissions: PermissionRequest[]; hostName: string; online: boolean; tier: RemoteTier; canApprove: boolean; quiet: boolean; nouns: string; agents?: readonly Agent[]
 }) {
   const [draft, setDraft] = useState('')
   const [sent, setSent] = useState<Array<{ id: string; text: string }>>([])
@@ -491,6 +492,7 @@ function ChatScreen({ agent, session, permissions, hostName, online, tier, canAp
         <ShieldAlert size={18} aria-hidden="true" />
         <div><strong>{agent.name} is asking permission</strong><small>{tier === 'operator' ? `Approving from devices is off on ${hostName}. Approve it on the computer.` : `This device can’t approve. Approve it on ${hostName}, or give this device “Chat and approve” in Settings › Remote.`}</small></div>
       </div>)}
+    <PhoneAssignments sessionId={session?.id ?? null} online={online} agents={agents} canStop={online && tier !== 'viewer' && !quiet} />
     {problem && <p className="rm-send-problem" role="alert">{problem}</p>}
     <form className="rm-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
       <textarea rows={1} value={draft} placeholder={placeholder} disabled={!canSend}
@@ -499,6 +501,36 @@ function ChatScreen({ agent, session, permissions, hostName, online, tier, canAp
       <button type="submit" className="rm-send" aria-label="Send" disabled={!canSend || !draft.trim()}><Send size={17} aria-hidden="true" /></button>
     </form>
     <p className="rm-tier">{TIER_WORD[tier]} · a message here runs on {hostName}, within its approval mode. Your {nouns} never leave it.</p>
+  </section>
+}
+
+/**
+ * Wave 13 phone catch-up: what this conversation's teammates are doing, newest last, read from the assignment
+ * ledger (`delegation.list` and `delegation.updated`, paths already removed by the host). A device that may chat
+ * can stop an open assignment, as it can stop a running turn.
+ */
+export function PhoneAssignments({ sessionId, online, agents, canStop }: { sessionId: string | null; online: boolean; agents: readonly Agent[]; canStop: boolean }) {
+  const { records } = useDelegations(sessionId, online)
+  const [stopping, setStopping] = useState<string | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  const rows = [...records.values()].sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '')).slice(-5)
+  if (!rows.length) return null
+  const label = (row: DelegationRecord) => row.status === 'queued' ? queuedLabel(row.queueReason) : row.status === 'running' ? 'Working' : row.status === 'completed' ? (row.silent ? 'Done, nothing to report' : 'Done') : BUCKET_LABEL[row.status]
+  const stop = async (id: string) => {
+    setStopping(id); setProblem(null)
+    try { await rpc('delegation.cancel', { delegationId: id }) } catch { setProblem('That assignment could not be stopped from here.') } finally { setStopping(null) }
+  }
+  return <section className="rm-assignments" aria-label="Assignments">
+    <ul>{rows.map((row) => {
+      const name = agents.find((item) => item.id === row.targetAgentId)?.name ?? 'Teammate'
+      const open = row.status === 'queued' || row.status === 'running'
+      return <li key={row.id} className={open ? 'open' : ''}>
+        <span><strong>{name}</strong> · {row.topic}</span>
+        <small>{label(row)}</small>
+        {open && canStop && <button type="button" className="rm-text-button" disabled={stopping === row.id} onClick={() => void stop(row.id)}>{stopping === row.id ? 'Stopping…' : 'Stop'}</button>}
+      </li>
+    })}</ul>
+    {problem && <p className="rm-send-problem" role="alert">{problem}</p>}
   </section>
 }
 

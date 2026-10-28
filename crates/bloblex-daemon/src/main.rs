@@ -50,6 +50,7 @@ mod checkpoints;
 mod quota;
 mod quota_sources;
 mod automations;
+mod outside;
 // Durable task board (expansion-v2 slice 1A): owner dispatch, queue and runs.
 mod tasks;
 // FIX47: the durable ledger of Manager assignments into side conversations.
@@ -96,6 +97,8 @@ struct AppState {
     team: Arc<team::Team>,
     queue: Arc<queue::Queue>,
     automations: Arc<automations::Automations>,
+    /// Wave 13: Claude Code sessions started outside Bitbots, and their hook token.
+    outside: Arc<outside::Outside>,
     memory: Arc<memory::Memory>,
     knowledge: Arc<knowledge::Knowledge>,
     skills: Arc<skills::Skills>,
@@ -372,6 +375,16 @@ async fn main_rpc(
             StatusCode::FORBIDDEN,
             Json(error(req.id, "unauthorized", "loopback clients only")),
         );
+    }
+    // Wave 13: a Claude Code hook from a session started outside Bitbots. Its
+    // token can only report that session's state; it is never the capability.
+    if req.method == "outside.hook" {
+        let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+        if !st.outside.accepts(bearer) || st.db.settings().ok().is_none_or(|settings| settings[outside::SETTING] != true) {
+            return (StatusCode::UNAUTHORIZED, Json(error(req.id, "unauthorized", "outside watching is off or the hook token is wrong")));
+        }
+        let result = outside::hook(&st, &req.params["event"]).await;
+        return (StatusCode::OK, Json(RpcResponse { v: PROTOCOL_VERSION, id: req.id, ok: true, result: Some(result), error: None }));
     }
     if req.method.starts_with("mcp.") {
         let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
@@ -832,6 +845,7 @@ const MANAGER_INSTRUCTIONS: &str = "You are the Manager. You work across all of 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
+        "outside.status" | "outside.preview" | "outside.enable" | "outside.disable" | "outside.sessions" => outside::rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" | "task.image" => tasks::rpc(st, method, &p).await,
         "delegation.list" | "delegation.cancel" | "delegation.cancelGroup" => delegations::rpc(st, method, &p).await,
@@ -4961,7 +4975,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         stopping: Arc::new(tokio::sync::Notify::new()),
         team: Arc::new(team::Team::default()),
         queue: Arc::new(queue::Queue::default()),
-        automations: Arc::new(automations::Automations::default()),
+        automations: Arc::new(automations::Automations::default()), outside: Arc::new(outside::Outside::default()),
         memory: Arc::new(memory::Memory::default()),
         knowledge: Arc::new(knowledge::Knowledge::default()),
         skills: Arc::new(skills::Skills::default()),
@@ -5019,6 +5033,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr = listener.local_addr()?;
     *st.team.address.lock().unwrap() = Some(addr.to_string());
     *st.team.data_dir.lock().unwrap() = data_dir;
+    // The outside-session hook needs this run's address and token.
+    outside::startup(&st);
     // FIX47: the deliveries a restart restored have a team address now, so one
     // drain can start them (the same fast path every turn ending uses).
     let restored_queue = st.clone();
@@ -6087,7 +6103,7 @@ mod phase2a_tests {
     /// a second state on the same file.
     pub(crate) fn state_with(db:Storage)->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(db);db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),outside:Arc::new(outside::Outside::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn bot_purge_is_confirmed_atomic_and_removes_both_sides_only() {
@@ -12259,6 +12275,103 @@ mod phase2a_tests {
         let _ = std::fs::remove_dir_all(source_dir);
         let _ = std::fs::remove_dir_all(target_dir);
         let _ = std::fs::remove_dir_all(skill_src);
+    }
+
+    // Wave 13: watching Claude Code sessions started outside Bitbots.
+    #[tokio::test]
+    async fn outside_sessions_are_opt_in_reversible_and_keep_no_content() {
+        let (st, _) = state();
+        let dir = std::env::temp_dir().join(format!("bitbots-outside-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("claude")).unwrap();
+        *st.team.data_dir.lock().unwrap() = Some(dir.clone());
+        *st.team.address.lock().unwrap() = Some("127.0.0.1:40000".into());
+        let settings = dir.join("claude").join("settings.json");
+        let original = json!({"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify.cmd"}]}]}});
+        std::fs::write(&settings, serde_json::to_string_pretty(&original).unwrap()).unwrap();
+        let command = outside::hook_command(std::path::Path::new("C:\\Bitbots\\bitbots-hook.exe"), &dir.join("outside-hook.json"));
+
+        assert!(dispatch(&st, "outside.enable", json!({})).await.is_err(), "nothing changes without confirmation");
+        let enabled = outside::enable_at(&st, &settings, &command).unwrap();
+        let backup = enabled["backupPath"].as_str().expect("the original was backed up");
+        assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(backup).unwrap()).unwrap(), original);
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert!(outside::installed(&written));
+        assert_eq!(written["hooks"]["Stop"].as_array().unwrap().len(), 2, "the owner's own Stop hook stays");
+        let endpoint: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("outside-hook.json")).unwrap()).unwrap();
+        assert_eq!(endpoint["address"], "127.0.0.1:40000");
+        assert!(st.outside.accepts(endpoint["token"].as_str().unwrap()));
+        assert!(!st.outside.accepts(&st.token), "the daemon capability is not the hook token");
+        assert_ne!(endpoint["token"].as_str(), Some(st.token.as_str()));
+
+        let event = |name: &str, extra: Value| { let mut value = json!({"session_id":"cli-1","hook_event_name":name,"cwd":"C:\\work\\site","prompt":"SECRET prompt text"}); for (key, item) in extra.as_object().unwrap() { value[key] = item.clone(); } value };
+        outside::hook(&st, &event("SessionStart", json!({}))).await;
+        outside::hook(&st, &event("PreToolUse", json!({"tool_name":"Bash","tool_input":{"command":"rm -rf secret"}}))).await;
+        let listed = dispatch(&st, "outside.sessions", json!({})).await.unwrap();
+        assert_eq!(listed["sessions"][0]["state"], "working");
+        assert_eq!(listed["sessions"][0]["tool"], "Bash");
+        assert_eq!(listed["sessions"][0]["folder"], "site", "only the folder name is kept");
+        assert!(!listed.to_string().contains("SECRET") && !listed.to_string().contains("rm -rf") && !listed.to_string().contains("work\\\\site"), "{listed}");
+        outside::hook(&st, &event("Notification", json!({"message":"Claude needs your permission to use Bash"}))).await;
+        assert_eq!(outside::list(&st)[0]["state"], "waiting");
+        outside::hook(&st, &event("Stop", json!({}))).await;
+        assert_eq!(outside::list(&st)[0]["state"], "done");
+        assert_eq!(outside::list(&st)[0]["tool"], Value::Null);
+        outside::hook(&st, &event("SessionEnd", json!({}))).await;
+        assert!(outside::list(&st).is_empty(), "an ended session leaves the list");
+
+        let disabled = outside::disable_at(&st, &settings).unwrap();
+        assert!(disabled["backupPath"].is_string());
+        let restored: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored, original, "turning it off leaves exactly the owner's settings");
+        assert!(!dir.join("outside-hook.json").exists(), "the endpoint file is removed");
+        assert_eq!(st.db.settings().unwrap()[outside::SETTING], false);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // Wave 13 bot templates: one bot, its approved notes, its schedules, no settings.
+    #[tokio::test]
+    async fn backup_template_carries_one_bot_and_only_its_approved_notes() {
+        let (source, _) = state();
+        let source_dir = std::env::temp_dir().join(format!("bloblex-template-src-{}", Uuid::new_v4()));
+        *source.team.data_dir.lock().unwrap() = Some(source_dir.clone());
+        let scout = source.db.agent_create(&json!({"name":"Scout","runtimeId":"rt-test","instructions":"Be careful.","customEnv":{"LANG":"secret-value"}})).unwrap().0;
+        let scout_id = scout["id"].as_str().unwrap().to_owned();
+        let other = source.db.agent_create(&json!({"name":"Other","runtimeId":"rt-test"})).unwrap().0;
+        let other_id = other["id"].as_str().unwrap().to_owned();
+        source.db.memory_create(&json!({"scope":"blob","scopeId":scout_id,"kind":"fact","title":"Approved","body":"Uses rustls.","origin":"user","reviewed":true})).unwrap();
+        source.db.memory_create(&json!({"scope":"blob","scopeId":scout_id,"kind":"fact","title":"Unreviewed","body":"Maybe.","origin":"agent","reviewed":false})).unwrap();
+        source.db.memory_create(&json!({"scope":"blob","scopeId":other_id,"kind":"fact","title":"Not Scout's","body":"Other.","origin":"user","reviewed":true})).unwrap();
+        source.db.memory_create(&json!({"scope":"shared","kind":"preference","title":"Shared","body":"Short answers.","origin":"user","reviewed":true})).unwrap();
+        source.db.automation_create(&json!({"agentId":scout_id,"name":"Daily","prompt":"Summarize today.","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"enabled":true})).unwrap();
+        source.db.automation_create(&json!({"agentId":other_id,"name":"Other's","prompt":"Nope.","schedule":{"kind":"cron","cron":"0 9 * * *","timezone":"UTC"},"enabled":true})).unwrap();
+        dispatch(&source, "settings.set", json!({"key":"profile.name","value":"Sico"})).await.unwrap();
+
+        let exported = dispatch(&source, "backup.export", json!({"include":{"agentIds":[scout_id]}})).await.unwrap();
+        let document = exported["document"].clone();
+        assert_eq!(document["kind"], "template");
+        assert_eq!(exported["stats"], json!({"bots":1,"memory":1,"skills":0,"automations":1,"settings":0}));
+        let bot = &document["contents"]["bots"][0];
+        assert_eq!(bot["name"], "Scout");
+        assert_eq!(bot["customEnvKeys"], json!(["LANG"]));
+        assert!(!document.to_string().contains("secret-value"), "environment values never travel");
+        assert_eq!(document["contents"]["memory"][0]["title"], "Approved");
+        assert_eq!(document["contents"]["settings"], json!({}));
+        assert!(dispatch(&source, "backup.export", json!({"include":{"agentIds":[]}})).await.is_err(), "an empty list is refused");
+        assert!(dispatch(&source, "backup.export", json!({"include":{"agentIds":["missing"]}})).await.is_err(), "an unknown bot is refused");
+
+        // The template imports through the ordinary backup path; its schedule starts off.
+        let (target, _) = state();
+        let target_dir = std::env::temp_dir().join(format!("bloblex-template-dst-{}", Uuid::new_v4()));
+        *target.team.data_dir.lock().unwrap() = Some(target_dir.clone());
+        let preview = preview_of(&target, document).await;
+        let result = import_of(&target, &preview, json!({"default":"rename"})).await.unwrap();
+        assert_eq!(result["imported"]["bots"], 1);
+        let automations = target.db.automation_list(None).unwrap();
+        assert_eq!(automations.len(), 1);
+        assert_eq!(automations[0]["enabled"], false, "an imported schedule starts disabled");
+        assert!(target.db.settings().unwrap().get("profile.name").is_none(), "a template never changes settings");
+        let _ = std::fs::remove_dir_all(source_dir);
+        let _ = std::fs::remove_dir_all(target_dir);
     }
 
     #[tokio::test]

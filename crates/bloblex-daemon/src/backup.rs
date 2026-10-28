@@ -319,11 +319,28 @@ fn build_document(contents: Value) -> Result<Value, DispatchError> {
     }))
 }
 
+/// Wave 13 bot templates: `include.agentIds` limits an export to those bots.
+/// A template carries the bots, their own approved (reviewed) notes, their
+/// schedules (restored disabled, like any backup) and the shared skills they
+/// may use; never project notes, unreviewed notes or settings. `None` exports
+/// everything.
+fn template_agents(include: Option<&Value>) -> Result<Option<Vec<String>>, DispatchError> {
+    let Some(ids) = include.and_then(|include| include.get("agentIds")).filter(|ids| !ids.is_null()) else { return Ok(None) };
+    let ids = ids.as_array().filter(|ids| !ids.is_empty() && ids.len() <= 50 && ids.iter().all(|id| id.as_str().is_some_and(|id| !id.is_empty())))
+        .ok_or_else(|| derr("invalid_argument", "agentIds must list the bots to share.", StatusCode::BAD_REQUEST))?;
+    Ok(Some(ids.iter().filter_map(Value::as_str).map(str::to_owned).collect()))
+}
+
 async fn export(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let include = p.get("include");
+    let only = template_agents(include)?;
+    let picked = |id: &Value| only.as_ref().is_none_or(|ids| id.as_str().is_some_and(|id| ids.iter().any(|wanted| wanted == id)));
     let wants = |name: &str| include.and_then(|include| include.get(name)).and_then(Value::as_bool).unwrap_or(true);
     let runtimes = st.runtimes.read().await.clone();
-    let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| picked(&agent["id"])).collect::<Vec<_>>();
+    if let Some(ids) = &only {
+        if agents.len() != ids.len() { return Err(derr("not_found", "One of those bots no longer exists.", StatusCode::NOT_FOUND)); }
+    }
     let bots = agents.iter().map(|agent| export_bot(agent, &runtimes)).collect::<Vec<_>>();
     let projects = st.db.project_list().map_err(agent_error)?;
     let memory = if wants("memory") {
@@ -332,14 +349,21 @@ async fn export(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
             .map_err(agent_error)?
             .iter()
             .filter(|record| !memory_has_secret(record))
+            .filter(|record| only.is_none() || (record["scope"] == "blob" && picked(&record["scopeId"]) && record["reviewed"] == true))
             .map(|record| export_memory(record, &projects))
             .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
-    let skills = if wants("skills") { export_skills(st)? } else { Vec::new() };
-    let automations = if wants("automations") { export_automations(st)? } else { Vec::new() };
-    let settings = if wants("settings") { export_settings(st)? } else { json!({}) };
+    let skills = if !wants("skills") { Vec::new() } else if let Some(ids) = &only {
+        // A shared skill travels when it is on and at least one shared bot may use it.
+        let usable = st.db.skills_list().map_err(agent_error)?.into_iter()
+            .filter(|row| row["enabled"] != false && ids.iter().any(|id| !row["disabledFor"].as_array().is_some_and(|off| off.iter().any(|agent| agent == id.as_str()))))
+            .filter_map(|row| row["name"].as_str().map(str::to_owned)).collect::<HashSet<_>>();
+        export_skills(st)?.into_iter().filter(|skill| skill["name"].as_str().is_some_and(|name| usable.contains(name))).collect()
+    } else { export_skills(st)? };
+    let automations = if wants("automations") { export_automations(st)?.into_iter().filter(|automation| picked(&automation["agentId"])).collect() } else { Vec::new() };
+    let settings = if wants("settings") && only.is_none() { export_settings(st)? } else { json!({}) };
     let stats = json!({
         "bots": bots.len(),
         "memory": memory.len(),
@@ -354,7 +378,10 @@ async fn export(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         "automations": automations,
         "settings": settings,
     });
-    Ok(json!({"document": build_document(contents)?, "stats": stats}))
+    let mut document = build_document(contents)?;
+    // Outside the checksum: only a hint for the importer's wording.
+    if only.is_some() { document["kind"] = json!("template"); }
+    Ok(json!({"document": document, "stats": stats}))
 }
 
 // ---------------------------------------------------------------------------

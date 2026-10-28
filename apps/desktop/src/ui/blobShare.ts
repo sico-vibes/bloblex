@@ -45,6 +45,7 @@ export function parseSharedBlob(text: string): SharedBlob {
   let parsed: unknown
   try { parsed = JSON.parse(text) } catch { throw new Error(`This ${noun} file is not valid JSON.`) }
   if (!isRecord(parsed)) throw new Error(`This ${noun} file must contain an object.`)
+  if (parsed.format === 'bitbots.backup') throw new Error(`This is a full ${noun} file with its notes and schedules. Import it in Settings › Backup.`)
   if (parsed.format !== BLOB_SHARE_FORMAT) throw new Error(`This ${noun} file uses an unsupported format version.`)
   const name = requiredText(parsed.name, 60, 'name')
   const description = optionalText(parsed.description, 255, 'description')

@@ -191,6 +191,8 @@ describe('remote event policy parity with the daemon', () => {
     expect(allowed).toEqual([
       'agent.changed',
       'daemon.health',
+      // Wave 13: assignments reach the phone, with their workspace reduced and worktree removed.
+      'delegation.updated',
       'events.replay.complete',
       'message.completed',
       'message.delta',

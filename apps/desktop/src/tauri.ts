@@ -96,12 +96,15 @@ export type BackupInclude = {
   settings?: boolean
 }
 
+/** An export request: the switches above, plus `agentIds` for a bot template (only those bots, their approved notes and schedules, no settings). */
+export type BackupExportRequest = BackupInclude & { agentIds?: string[] }
+
 export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
 
-/** Save dialog for a `.bitbots-backup.json`; returns an opaque selection token. */
-export async function selectBackupExportPath(): Promise<string | null> {
+/** Save dialog for a `.bitbots-backup.json`; returns an opaque selection token. A bot template suggests the bot's name. */
+export async function selectBackupExportPath(suggestedName?: string): Promise<string | null> {
   if (!inDesktop) return null
-  return invoke<string | null>('select_backup_export_path')
+  return invoke<string | null>('select_backup_export_path', { suggestedName: suggestedName ?? null })
 }
 
 /** Open dialog for a `.bitbots-backup.json`; returns an opaque selection token. */
@@ -111,7 +114,7 @@ export async function selectBackupImportPath(): Promise<string | null> {
 }
 
 /** Asks the daemon for a document and writes it to the chosen path. */
-export async function writeBackupExport(token: string, include?: BackupInclude): Promise<{ path: string; stats: BackupStats }> {
+export async function writeBackupExport(token: string, include?: BackupExportRequest): Promise<{ path: string; stats: BackupStats }> {
   if (!inDesktop) throw new Error('Backups are available only in the desktop app.')
   return invoke<{ path: string; stats: BackupStats }>('backup_export_write', { selectionToken: token, include: include ?? null })
 }

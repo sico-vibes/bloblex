@@ -2,13 +2,18 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
-## 2026-10-28 · Daemon · Wave 13 (loop guards, schedule rules, usage-limit handoff)
+## 2026-10-28 · Daemon and UI · Wave 13 (loop guards, schedule rules, limit handoff, bot templates, phone assignments, outside sessions)
 
 - **The hop limit counts round trips, not nesting.** `team::after_turn` relays a reply with the side conversation's depth and the Manager's next `message_blob` adds one, so `MAX_DEPTH` (6) bounds how many sequential hand-offs one request can make. Lowering it cuts ordinary multi-step plans short; real loops are stopped by `waiting_upstream` (refuses a target already up the `originSessionId` chain) and `repeated_failure` (two identical recent failures) in `team.rs`.
 - **"Did the run change anything?" is answered conservatively.** `Storage::session_acted_since` counts any file change and any tool whose kind is not on the read-only list (kinds differ per provider: Codex `commandExecution`, Claude `Read`/`Grep`, ACP `edit`/`execute`), so an unknown tool means "changed" and the run is not retried on its own.
 - **Automation starts are claimed in memory** (`Automations::claim_start`, released on drop). The `automation_runs` single-flight index alone let "Run now" and the scheduler both open a conversation before one insert failed.
 - **A backup coding agent is a handoff, not a model switch.** A conversation's runtime is fixed, so "Continue in another bot…" on a usage-limit notice reuses `session.handoff.draft` and the `HandoffDialog`, listing bots on another provider first; nothing is sent automatically.
 - **Mounted tests: the Automations list is sorted by name**, so select a card by `.schedule-name`, not by position.
+- **Test normalizers from the daemon's raw DTO, not from a hand-built record.** Wave 12 added `silent`/`doneGoal` to the delegation DTO and to `DelegationRecord`, but `normalizeDelegation` (`ui/delegations.ts`) dropped them, so "Done, nothing to report" never showed; the label test built the record by hand and passed. Fixed in Wave 13 with a test that feeds the wire shape (`workspace: {path, worktree}`).
+- **A field that carries a host path must be handled in both remote redaction ports** (`remote/policy.rs` `field_policy` and `remote/remoteTiers.ts` `fieldPolicy`) and get a case in `remote/fixtures/policy-goldens.json`, which both languages run. `worktree` is dropped and `workspace.path` reduced since Wave 13; opening a method to phones also means updating the reviewed event list in `remoteTiers.parity.test.ts`.
+- **Writing another program's settings:** `outside.rs` reads Claude Code's `settings.json`, refuses anything that is not a JSON object, backs it up beside itself, writes through a temp file and rename, and removes only entries whose command holds `bitbots-hook` and `--outside`. `serde_json` (no `preserve_order`) rewrites the keys in sorted order; the consent dialog shows the exact new file.
+- **UI details:** `SettingsRow`'s `detail` renders inside a `<small>`, so status paragraphs go after the row (`.settings-row-note`); `ProviderLogo` is a `span`, so style a pill's label by class, never `.pill span`; a long unbroken line in a `<pre>` widens a grid dialog unless the dialog has `grid-template-columns: minmax(0, 1fr)`.
+- **Bash heredocs lose doubled backslashes** in this tool even with a quoted `'EOF'`, so Windows paths and escaped newlines in generated code came out wrong twice. Write such scripts with the Write tool (or build the backslash with `chr(92)`) and typecheck right after.
 
 ## 2026-10-28 · Daemon · Wave 12 (approval rules, durable team queue, cascaded stops, quiet replies, supervisor, Doctor)
 

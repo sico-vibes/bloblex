@@ -229,7 +229,7 @@ export async function clearWallpaper(): Promise<void> { /* The host owns its wal
 export async function selectMarkdownExportPath(): Promise<string | null> { return null }
 export async function selectBlobExportPath(name: string): Promise<string | null> { void name; return null }
 export async function selectBlobImportPath(): Promise<string | null> { return null }
-export async function selectBackupExportPath(): Promise<string | null> { return null }
+export async function selectBackupExportPath(_suggestedName?: string): Promise<string | null> { return null }
 export async function selectBackupImportPath(): Promise<string | null> { return null }
 export async function selectDiagnosticsExportPath(): Promise<string | null> { return null }
 
@@ -248,6 +248,7 @@ export type BackupInclude = {
   automations?: boolean
   settings?: boolean
 }
+export type BackupExportRequest = BackupInclude & { agentIds?: string[] }
 
 export type BackupStats = { bots: number; memory: number; skills: number; automations: number; settings: number }
 
@@ -258,7 +259,7 @@ export type DiagnosticsPreview = {
   files: { name: string; sizeBytes: number }[]
 }
 
-export async function writeBackupExport(token: string, include?: BackupInclude): Promise<{ path: string; stats: BackupStats }> {
+export async function writeBackupExport(token: string, include?: BackupExportRequest): Promise<{ path: string; stats: BackupStats }> {
   void token
   void include
   throw notAvailable()

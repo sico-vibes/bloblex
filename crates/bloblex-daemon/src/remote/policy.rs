@@ -445,7 +445,10 @@ fn field_policy(path: &[String]) -> FieldPolicy {
         "customArgs" | "args" | "launchArgs" => FieldPolicy::ArgCount,
         "executablePath" => FieldPolicy::FileName,
         "instructions" => FieldPolicy::Instructions,
-        "defaultProject" | "projectPath" => FieldPolicy::PathTail,
+        "defaultProject" | "projectPath" | "workspacePath" => FieldPolicy::PathTail,
+        // Wave 13: an assignment's isolated copy names the host's repository and
+        // folder, so it never leaves; its workspace folder keeps two segments.
+        "worktree" => FieldPolicy::Drop,
         "settings" => {
             if path.len() == 1 {
                 FieldPolicy::Settings
@@ -465,6 +468,7 @@ fn field_policy(path: &[String]) -> FieldPolicy {
         "path" => match array_container(path) {
             Some("attachments") => FieldPolicy::FileName,
             Some("files") | Some("projects") => FieldPolicy::PathTail,
+            _ if path.len() >= 2 && path[path.len() - 2] == "workspace" => FieldPolicy::PathTail,
             _ => FieldPolicy::Default,
         },
         _ => FieldPolicy::Default,

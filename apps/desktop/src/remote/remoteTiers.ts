@@ -258,6 +258,8 @@ export function renderTierTableMarkdown(): string {
 // | tools[]/turns[]/files[] detail                   | removed by default; `includeToolOutput` restores tool detail   |
 // | tools[].title                                     | replaced with a generic title by default; restored with tool output |
 // | providerSessionId                                | removed                                                        |
+// | worktree (assignments, session links)            | removed                                                        |
+// | workspace.path, workspacePath                    | last two path segments only                                    |
 // | keys matching the SENSITIVE_KEY pattern          | removed                                                        |
 // | settings                                         | reduced to SETTINGS_ALLOWLIST                                  |
 // | message content                                  | kept (the conversation is what the device exists to show)      |
@@ -359,7 +361,11 @@ function fieldPolicy(path: readonly string[]): FieldPolicy {
       return 'instructions'
     case 'defaultProject':
     case 'projectPath':
+    case 'workspacePath':
       return 'pathTail'
+    // Wave 13: an assignment's isolated copy names the host's repository and folder, so it never leaves.
+    case 'worktree':
+      return 'drop'
     case 'settings':
       return path.length === 1 ? 'settings' : 'default'
     case 'detail': {
@@ -374,6 +380,7 @@ function fieldPolicy(path: readonly string[]): FieldPolicy {
       const container = arrayContainer(path)
       if (container === 'attachments') return 'fileName'
       if (container === 'files' || container === 'projects') return 'pathTail'
+      if (path[path.length - 2] === 'workspace') return 'pathTail'
       return 'default'
     }
     default:

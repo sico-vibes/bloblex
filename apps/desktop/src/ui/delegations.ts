@@ -60,6 +60,8 @@ export function normalizeDelegation(raw: unknown): DelegationRecord | null {
     worktree: tree ? { repo: text(tree.repo), branch: text(tree.branch), path: text(tree.path) } : null,
     createdAt: text(value.createdAt), startedAt: text(value.startedAt), finishedAt: text(value.finishedAt), updatedAt: text(value.updatedAt),
     queueReason: value.queueReason === 'busy' || value.queueReason === 'slots' ? value.queueReason : null,
+    silent: value.silent === true,
+    doneGoal: text(value.doneGoal),
   }
 }
 

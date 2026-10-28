@@ -1120,6 +1120,42 @@
           }
         ]
       }
+    },
+    {
+      "name": "delegation-list-paths",
+      "method": "delegation.list",
+      "options": {},
+      "input": {
+        "delegations": [
+          {
+            "id": "d1",
+            "topic": "Check the build",
+            "briefPreview": "Run the tests.",
+            "status": "running",
+            "workspace": {
+              "path": "C:\\Users\\sam\\repos\\site",
+              "worktree": {
+                "repo": "C:\\Users\\sam\\repos\\site",
+                "branch": "bitbots/d1",
+                "path": "C:\\Users\\sam\\.bitbots\\worktrees\\d1"
+              }
+            }
+          }
+        ]
+      },
+      "expect": {
+        "delegations": [
+          {
+            "id": "d1",
+            "topic": "Check the build",
+            "briefPreview": "Run the tests.",
+            "status": "running",
+            "workspace": {
+              "path": "repos/site"
+            }
+          }
+        ]
+      }
     }
   ],
   "snapshots": [
@@ -1955,6 +1991,44 @@
       "name": "non-object-string",
       "input": "turn.error",
       "expect": null
+    },
+    {
+      "name": "delegation-updated-paths",
+      "input": {
+        "v": 1,
+        "type": "delegation.updated",
+        "payload": {
+          "delegation": {
+            "id": "d1",
+            "topic": "Check the build",
+            "briefPreview": "Run the tests.",
+            "status": "running",
+            "workspace": {
+              "path": "C:\\Users\\sam\\repos\\site",
+              "worktree": {
+                "repo": "C:\\Users\\sam\\repos\\site",
+                "branch": "bitbots/d1",
+                "path": "C:\\Users\\sam\\.bitbots\\worktrees\\d1"
+              }
+            }
+          }
+        }
+      },
+      "expect": {
+        "v": 1,
+        "type": "delegation.updated",
+        "payload": {
+          "delegation": {
+            "id": "d1",
+            "topic": "Check the build",
+            "briefPreview": "Run the tests.",
+            "status": "running",
+            "workspace": {
+              "path": "repos/site"
+            }
+          }
+        }
+      }
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Check, Copy, ShieldAlert } from 'lucide-react'
 import type { PermissionRequest } from '../types'
 import { formatUnknownSafe } from '../types'
@@ -21,9 +21,12 @@ function choicesForShortcuts(choices: string[]) {
   }
 }
 
+/** Options a reply carries to `permission.reply`. */
+export type PermissionReplyOptions = { remember?: boolean }
+
 export function ApprovalCard({ permission, onReply, focusOnMount = true, variant = 'main' }: {
   permission: PermissionRequest
-  onReply: (choice: string) => boolean | void | Promise<boolean | void>
+  onReply: (choice: string, options?: PermissionReplyOptions) => boolean | void | Promise<boolean | void>
   focusOnMount?: boolean
   variant?: 'main' | 'companion'
 }) {
@@ -33,6 +36,9 @@ export function ApprovalCard({ permission, onReply, focusOnMount = true, variant
   const shortcuts = choicesForShortcuts(choices)
   const [now, setNow] = useState(() => Date.now())
   const [copied, setCopied] = useState(false)
+  // The daemon marks a request it can remember (same bot, same command or file, a safe kind); "Always allow" saves a rule.
+  const rememberable = (permission as { rememberable?: unknown }).rememberable === true && !!shortcuts.allow
+  const rememberLabel = typeof (permission as { rememberLabel?: unknown }).rememberLabel === 'string' ? String((permission as { rememberLabel?: unknown }).rememberLabel) : ''
   const command = typeof permission.command === 'string' && permission.command.trim() ? permission.command : null
   const detail = typeof permission.detail === 'string' ? permission.detail : typeof permission.description === 'string' ? permission.description : null
   const tool = typeof permission.tool === 'string' ? permission.tool : null
@@ -85,7 +91,7 @@ export function ApprovalCard({ permission, onReply, focusOnMount = true, variant
       </div>
       {detail ? <p>{detail}</p> : !command && <p>{`The agent requested permission${tool ? ` to use ${tool}` : ''}.`}</p>}
       {command && <div className="permission-command"><pre><code>{command}</code></pre><button type="button" className="permission-copy-button" aria-label={copied ? 'Command copied' : 'Copy command'} title={copied ? 'Copied' : 'Copy command'} onClick={() => void copyCommand()}>{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>}
-      <div className="permission-actions">{choices.map((choice) => <PermissionChoiceButton key={choice} permission={permission} choice={choice} className={`permission-choice ${choice === shortcuts.allow ? 'permission-choice-primary' : ''} ${choice === shortcuts.deny ? 'permission-choice-secondary' : ''} ${variant === 'companion' ? 'companion-permission-choice' : ''}`} onReply={onReply}>{permissionChoiceLabel(choice)}{choice === shortcuts.allow && <kbd>Enter</kbd>}{choice === shortcuts.deny && <kbd>Esc</kbd>}</PermissionChoiceButton>)}</div>
+      <div className="permission-actions">{choices.map((choice) => <Fragment key={choice}><PermissionChoiceButton permission={permission} choice={choice} className={`permission-choice ${choice === shortcuts.allow ? 'permission-choice-primary' : ''} ${choice === shortcuts.deny ? 'permission-choice-secondary' : ''} ${variant === 'companion' ? 'companion-permission-choice' : ''}`} onReply={onReply}>{permissionChoiceLabel(choice)}{choice === shortcuts.allow && <kbd>Enter</kbd>}{choice === shortcuts.deny && <kbd>Esc</kbd>}</PermissionChoiceButton>{choice === shortcuts.allow && rememberable && <PermissionChoiceButton permission={permission} choice={shortcuts.allow!} className={`permission-choice permission-choice-always ${variant === 'companion' ? 'companion-permission-choice' : ''}`} title={rememberLabel ? `Always allow for this bot: ${rememberLabel}. You can remove it in Settings → Approvals.` : 'Always allow this for this bot. You can remove it in Settings → Approvals.'} onReply={(choice) => onReply(choice, { remember: true })}>Always allow</PermissionChoiceButton>}</Fragment>)}</div>
     </div>
   </section>
 }

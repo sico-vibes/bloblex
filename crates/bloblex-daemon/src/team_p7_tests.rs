@@ -478,3 +478,76 @@ async fn p7_depth_is_refused_before_a_card_is_shown() {
     assert!(st.db.proposals_pending().unwrap().is_empty(),"no card for a request that could never succeed");
 }
 
+
+// ── Wave 12, part D: quiet replies and "Done when" ─────────────────────────
+
+/// A running assignment on a side conversation of the Manager, with `reply` as the
+/// side turn's final message. The Manager is mid-turn, so a relay would wait in
+/// the team queue instead of starting a prompt.
+fn quiet_fixture(st: &AppState, boss: &str, worker: &str, reply: &str, done_goal: Option<&str>) -> (String, String, String) {
+    st.db.update_session_state("p7-boss", "working").unwrap();
+    let side = format!("p7-side-{}", uuid::Uuid::new_v4());
+    st.db.create_session_for_agent(&side, "p7-rt", "codex", ".", "Side", Some(worker)).unwrap();
+    st.db.update_session_state(&side, "working").unwrap();
+    st.db.set_session_link(&side, &json!({"kind":"side","peerAgentId":boss,"peerName":"Manager","originSessionId":"p7-boss"})).unwrap();
+    let turn = format!("p7-side-turn-{}", uuid::Uuid::new_v4());
+    st.db.create_turn(&turn, &side).unwrap();
+    let row = st.db.delegation_create(&json!({"originSessionId":"p7-boss","originTurnId":"manager-turn","sideSessionId":side,
+        "fromAgentId":boss,"targetAgentId":worker,"topic":"Check","briefPreview":"Check it","workspacePath":".","deliveryDepth":1,"doneGoal":done_goal})).unwrap().0;
+    let id = row["id"].as_str().unwrap().to_owned();
+    st.db.delegation_mark_running(&id, &turn).unwrap();
+    st.db.append_message_with_data(&side, &turn, "assistant", reply, &json!({})).unwrap();
+    (side, turn, id)
+}
+
+async fn wait_for_row(st: &AppState, id: &str, status: &str) -> Value {
+    for _ in 0..300 {
+        let row = st.db.delegation_get(id).unwrap();
+        if row["status"] == status { return row; }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the assignment never reached {status}: {}", st.db.delegation_get(id).unwrap());
+}
+
+#[tokio::test]
+async fn p7_pass_reply_completes_silently_with_no_relay_and_no_wake() {
+    let (st, boss, worker) = fixture().await;
+    let (side, turn, id) = quiet_fixture(&st, &boss, &worker, "(pass)", None);
+    let before = st.db.session_detail("p7-boss").unwrap()["messages"].as_array().unwrap().len();
+    crate::team::after_turn(&st, &side, Some(turn), "turn.completed", None);
+    let row = wait_for_row(&st, &id, "completed").await;
+    assert_eq!(row["silent"], true, "{row}");
+    assert!(st.team.queued_texts("p7-boss").await.is_empty(), "nothing was relayed");
+    assert_eq!(st.db.session_detail("p7-boss").unwrap()["messages"].as_array().unwrap().len(), before, "the Manager was not woken");
+    assert!(st.db.delegation_pending_replies().unwrap().iter().all(|row| row["id"] != id.as_str()), "no reply is owed after a restart");
+    // The change is still announced, because the assignment really ended.
+    assert_eq!(st.db.delegation_list_for_origin("p7-boss").unwrap()[0]["status"], "completed");
+}
+
+#[tokio::test]
+async fn p7_relayed_reply_ends_with_the_done_when_line() {
+    let (st, boss, worker) = fixture().await;
+    let (side, turn, id) = quiet_fixture(&st, &boss, &worker, "All good", Some("three sources checked"));
+    crate::team::after_turn(&st, &side, Some(turn), "turn.completed", None);
+    let mut texts = Vec::new();
+    for _ in 0..300 {
+        texts = st.team.queued_texts("p7-boss").await;
+        if !texts.is_empty() { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(texts[0].starts_with("[Reply from Scout]"), "{texts:?}");
+    assert!(texts[0].ends_with("Done when: three sources checked"), "{texts:?}");
+    assert_eq!(wait_for_row(&st, &id, "completed").await["silent"], false);
+}
+
+#[tokio::test]
+async fn p7_instructions_ask_for_checked_reports_and_a_pass_reply() {
+    let (st, _, worker) = fixture().await;
+    let manager = st.db.manager_agent().unwrap().unwrap();
+    let instructions = runtime_instructions(&st, &manager, &json!({"kind":"main"}), std::path::Path::new("."));
+    assert!(instructions.contains("compare the reply with its 'Done when' line and start your report with 'Checked:' or 'Not done yet:'"), "the Manager compares against the goal");
+    assert!(instructions.contains("When nothing changed and nothing needs the user, say nothing or one short line."), "the Manager stays quiet when nothing happened");
+    let side = runtime_instructions(&st, &st.db.agent_get(&worker).unwrap(), &json!({"kind":"side","peerName":"Manager"}), std::path::Path::new("."));
+    assert!(side.contains("If you were asked to check something and there is nothing to report, reply exactly `(pass)`."), "a teammate knows the silent reply");
+}

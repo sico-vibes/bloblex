@@ -3,12 +3,13 @@ import type { PermissionRequest } from '../types'
 import { isPendingPermissionLive, nextPermissionDeadline } from './permissionSelection'
 
 /** A provider choice stays opaque; this button only enforces the request deadline. */
-export function PermissionChoiceButton({ permission, choice, onReply, children, className }: {
+export function PermissionChoiceButton({ permission, choice, onReply, children, className, title }: {
   permission: PermissionRequest
   choice: string
   onReply: (choice: string) => void
   children: React.ReactNode
   className?: string
+  title?: string
 }) {
   const [now, setNow] = useState(() => Date.now())
   const live = isPendingPermissionLive(permission, now)
@@ -20,7 +21,7 @@ export function PermissionChoiceButton({ permission, choice, onReply, children, 
     return () => window.clearTimeout(timer)
   }, [permission, now])
 
-  return <button type="button" className={className} disabled={!live} aria-disabled={!live} onClick={() => {
+  return <button type="button" className={className} title={title} disabled={!live} aria-disabled={!live} onClick={() => {
     if (isPendingPermissionLive(permission, Date.now())) onReply(choice)
     else setNow(Date.now())
   }}>{children}</button>

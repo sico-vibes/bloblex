@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, SlidersHorizontal, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
+import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Stethoscope, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { SettingsSkeleton } from './SettingsSkeleton'
 import { usePlatform } from '../transport/platform'
@@ -12,6 +12,8 @@ import { agentColorHex } from './agentColor'
 import { useDialogAccessibility } from './dialogFocus'
 import { Select } from './Select'
 import { MemoryPage } from './MemoryPage'
+import { ApprovalRulesPage } from './ApprovalRulesPage'
+import { HealthPage } from './HealthPage'
 import { ManagerPage } from './ManagerPage'
 import { managerOf } from './teamSelectors'
 import { SkillsPage } from './SkillsPage'
@@ -39,7 +41,7 @@ import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
@@ -47,11 +49,13 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
   { id: 'Experimental', label: 'Experimental', icon: FlaskConical },
   { id: 'Remote', label: 'Remote', icon: Smartphone },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Approvals', label: 'Approvals', icon: ShieldCheck },
   { id: 'Manager', label: 'Manager', icon: BriefcaseBusiness },
   { id: 'Memory', label: 'Memory', icon: Brain },
   { id: 'Skills', label: 'Skills', icon: Puzzle },
   { id: 'Speech', label: 'Speech', icon: Mic },
   { id: 'Backup', label: 'Backup', icon: ArchiveRestore },
+  { id: 'Health', label: 'Health check', icon: Stethoscope },
   { id: 'Updates', label: 'Updates', icon: Download },
 ]
 
@@ -488,7 +492,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   return <div className="sheet-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}>
     <section ref={dialogRef} className="settings-sheet" role="dialog" aria-modal="true" aria-label="Settings" tabIndex={-1}>
       <header className="settings-page-head">
-        <h2 id="settings-title">{page}</h2>
+        <h2 id="settings-title">{PAGES.find((item) => item.id === page)?.label ?? page}</h2>
         <button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close settings" onClick={close}><X size={17} aria-hidden="true" /></button>
       </header>
       <nav className="settings-nav" aria-label="Settings pages">
@@ -678,6 +682,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
           {!loading && page === 'Manager' && <ManagerPage manager={managerOf(snapshot?.agents ?? [])} connected={!!snapshot} onOpenManager={onOpenAgent} agents={snapshot?.agents ?? []} onOpenSession={onOpenSession} />}
 
+          {!loading && page === 'Approvals' && <ApprovalRulesPage agents={snapshot?.agents ?? []} />}
+          {!loading && page === 'Health' && <HealthPage />}
           {!loading && page === 'Memory' && <MemoryPage
             agents={snapshot?.agents ?? []}
             projects={snapshot?.projects ?? []}

@@ -2,10 +2,10 @@
 // group heading on that page, which the sheet scrolls to and flashes. Keep the
 // `group` strings equal to the `SettingsGroup title` values in SettingsSheet.
 
-export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Updates'
+export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
 
 /** The page list, for anything that has to validate an incoming page name. */
-export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Agents', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Updates']
+export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Agents', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health', 'Updates']
 
 /**
  * The page out of an open-settings event payload (C13): a known page name, or
@@ -82,6 +82,8 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Memory', group: 'Memory', label: 'Memory', keywords: 'remember notes shared' },
   { page: 'Skills', group: 'Skills', label: 'Skills', keywords: 'skill pool shared instructions scripts skill.md' },
   { page: 'Skills', group: 'Import skills', label: 'Import skills', keywords: 'claude codex opencode folder copy add' },
+  { page: 'Approvals', group: 'Always allowed', label: 'Always allowed', keywords: 'approvals permissions always allow rules remembered trust remove' },
+  { page: 'Health', group: 'Health check', label: 'Health check', keywords: 'doctor diagnose repair fix broken sign in login database hook problems' },
   { page: 'Backup', group: 'Export', label: 'Export a backup', keywords: 'save file bots memory skills automations settings' },
   { page: 'Backup', group: 'Restore', label: 'Restore a backup', keywords: 'import load file recover move computer' },
   { page: 'Speech', group: 'Dictation', label: 'Dictation', keywords: 'microphone voice talk' },

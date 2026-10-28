@@ -20,7 +20,7 @@ import { previewSchedule } from './schedulePreview'
 import { usageTokenBuckets } from './usagePresentation'
 import { Tip } from './Tip'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
-import { ApprovalCard } from './ApprovalCard'
+import { ApprovalCard, type PermissionReplyOptions } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
 import { sessionsForPauseRequest } from './trayActions'
 import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAutomation, normalizeQueueState, type Agent, type AutomationRun, type ChatMessage, type ConnectionState, type DaemonEvent, type PermissionRequest, type Project, type Runtime, type Session, type Snapshot } from '../types'
@@ -46,6 +46,7 @@ import { SoundVolumeSlider } from './SoundVolumeSlider'
 import { DEFAULT_SOUND_VOLUME, normalizeSoundVolume } from '../blob/soundVolume'
 import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSettings, subscribeSoundPrefs, SOUNDS_CHANGED_EVENT, SOUND_VOLUME_CHANGED_EVENT } from './soundPrefs'
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
+import { eventSessionId, noteSessionActivity } from './sessionActivity'
 import { busyDelivery, busySendMode, BUSY_SEND_SETTING, newClientMessageId, sendWithDelivery, steerRuntimeId, useSteerAvailable, type BusySendMode } from './busySend'
 import { fetchCached, invalidateCatalog } from './catalogCache'
 import { ConversationsPanel } from './ConversationsPanel'
@@ -1046,6 +1047,8 @@ export function App() {
     let unlistenConnection: (() => void) | undefined
     let cancelled = false
     void listenForDaemonEvents((event) => {
+      const heardFrom = eventSessionId(event.payload)
+      if (heardFrom) noteSessionActivity(heardFrom)
       if (event.type === 'quota.updated') setQuotaRefreshing(false)
       // A runtime's model list changed (or the runtime itself did): refresh the shared catalog cache.
       if ((event.type === 'runtime.models.changed' || event.type === 'runtime.changed') && event.payload && typeof event.payload === 'object') {
@@ -2175,7 +2178,7 @@ ${fileReferenceText(sentFile)}` : typed
   useEffect(() => () => { if (inDesktop) void invokeNative('set_keep_awake', { enabled: false }).catch(() => undefined) }, [])
 
 
-  const answerPermission = async (permission: PermissionRequest, choice: string): Promise<boolean> => {
+  const answerPermission = async (permission: PermissionRequest, choice: string, options?: PermissionReplyOptions): Promise<boolean> => {
     const now = Date.now()
     if (!isPendingPermissionLive(permission, now) || !isPermissionReplyAllowed(permission, choice)) {
       setPermissionClock(now)
@@ -2183,7 +2186,7 @@ ${fileReferenceText(sentFile)}` : typed
       setError('This approval expired or is no longer pending. No reply was sent. Check the refreshed request state before continuing.')
       return false
     }
-    try { await doRpc('permission.reply', { permissionId: permission.id, choice }); await refresh(); return true } catch (reason) {
+    try { await doRpc('permission.reply', { permissionId: permission.id, choice, ...(options?.remember ? { remember: true } : {}) }); await refresh(); return true } catch (reason) {
       await refresh()
       setError(messageOf(reason))
       return false
@@ -2693,7 +2696,7 @@ ${fileReferenceText(sentFile)}` : typed
         {error && <div className="inline-error" role="alert"><ShieldAlert size={16} /><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(null)}><X size={15} /></button></div>}
         {archiveNotice && <div className="inline-error" role="status"><span>{archiveNotice}</span><button aria-label="Dismiss notice" onClick={() => setArchiveNotice(null)}><X size={15} /></button></div>}
 
-        {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice) => answerPermission(activePermission, choice)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} runtimeReady={runtimeReady} runtimeStatus={selectedRuntime?.status} accent={accent} mood={selectedMood} agentName={agentName} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={() => openCreate()} onRefresh={() => void refreshRuntimes()} /></> : <>
+        {!selectedSession ? <>{activePermission && <ApprovalCard permission={activePermission} onReply={(choice, options) => answerPermission(activePermission, choice, options)} /> }<EmptyConversation connected={connection === 'connected'} hasRuntime={runtimes.length > 0} hasAgent={!!activeSelectedAgent} runtimeReady={runtimeReady} runtimeStatus={selectedRuntime?.status} accent={accent} mood={selectedMood} agentName={agentName} look={activeSelectedAgent ? agentLook(activeSelectedAgent) : null} onNewSession={(anchor) => newSession(undefined, anchor)} onCreate={() => openCreate()} onRefresh={() => void refreshRuntimes()} /></> : <>
           {!sideSession && <ChangeBanner session={selectedSession} dismissed={reviewDismissals[selectedSession.id] ?? []} onDiff={(path, content) => setDiffViewer({ path, content })} onUndo={(file) => setRevertTarget({ sessionId: selectedSession.id, file })} onDismiss={(ids) => setReviewDismissals((current) => ({ ...current, [selectedSession.id]: [...(current[selectedSession.id] ?? []), ...ids] }))} onNewConversation={() => newSession()} />}
           <div className="conversation-frame">
             {conversationScrollable && <ConversationOutline key={selectedSession.id} sessionId={selectedSession.id} items={outlineItems} />}
@@ -2742,7 +2745,7 @@ ${fileReferenceText(sentFile)}` : typed
                 ? <ProposalCard key={activePermission.id} request={activePermission} managerName={managerOf(agents)?.name} projects={projects} runtimes={snapshot?.runtimes ?? []} onDecided={() => void refresh()} />
                 : activePermission.kind === 'question'
                 ? <QuestionCard request={activePermission} onAnswer={(answers) => answerQuestion(activePermission, answers)} onDismiss={() => void answerQuestion(activePermission, null)} />
-                : <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice) => answerPermission(activePermission, choice)} />)}
+                : <ApprovalCard permission={activePermission} focusOnMount={approvalFocusOnMount} onReply={(choice, options) => answerPermission(activePermission, choice, options)} />)}
               {!sideSession && lastTurnWasPlan && !latestPlanId && <div className="plan-ready-bar" role="status"><span>Plan mode is on. Approve the plan to let {agentName} start building.</span><button type="button" className="primary-button small" onClick={() => void approvePlan()}>Approve &amp; build</button></div>}
               {selectedSession.state === 'starting' && <div className="working-indicator starting" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Starting {agentName}…</div>}
               {selectedSession.state === 'working' && <div className="working-indicator" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>{agentName} is working</div>}
@@ -3234,7 +3237,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 const COMPACT_HOLD_TO_DRAG_MS = 220
 const COMPACT_DRAG_SLOP_PX = 4
 
-function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
+function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string, options?: PermissionReplyOptions) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -3599,7 +3602,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
     return () => { cancelled = true; unlisten?.() }
   }, [speechEnabled])
   const selectTeamBlob = (item: Agent) => { if (item.id !== agent?.id) playCompanionCue('blip'); onSelectAgent(item) }
-  const replyToPermission = (request: PermissionRequest, choice: string) => { if (/allow|approve|accept|yes/i.test(choice)) playCompanionCue('approve'); return onReply(request, choice) }
+  const replyToPermission = (request: PermissionRequest, choice: string, options?: PermissionReplyOptions) => { if (/allow|approve|accept|yes/i.test(choice)) playCompanionCue('approve'); return onReply(request, choice, options) }
   const beginConfused = () => { viewBeforeConfused.current = view; setConfused(true); if (mode !== 'home') fsmRef.current?.forceHome() }
   const recoverFromConfused = () => { setConfused(false); setView(viewBeforeConfused.current) }
   const prepareLocalReference = async (path: string) => {
@@ -3881,7 +3884,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
                 ? <ProposalCard key={permission.id} request={permission} managerName={managerOf(agents)?.name} projects={projects} runtimes={runtimes} onDecided={(decision) => playCompanionCue(decision === 'approve' ? 'approve' : 'tick')} />
                 : permission.kind === 'question'
                 ? <QuestionCard request={permission} onAnswer={(answers) => { playCompanionCue('approve'); return onAnswerQuestion?.(permission, answers) }} onDismiss={() => void onAnswerQuestion?.(permission, null)} />
-                : <ApprovalCard permission={permission} variant="companion" onReply={(choice) => replyToPermission(permission, choice)} />}
+                : <ApprovalCard permission={permission} variant="companion" onReply={(choice, options) => replyToPermission(permission, choice, options)} />}
               {session && <button className="btn ghost" onClick={cancelCompanionTurn} disabled={sending}>Cancel turn</button>}
   </> : null
   const conversationPicker = onSelectConversation ? <CompanionConversationPicker agent={agent} sessions={sessions} projects={projects} current={session} onPick={onSelectConversation} /> : null

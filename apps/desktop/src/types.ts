@@ -337,6 +337,9 @@ export interface PermissionRequest extends JsonRecord {
   questions?: UserQuestion[] | null
   /** FIX36 D2: an action the Manager has proposed for the owner to approve. */
   proposal?: ProposalCard | null
+  /** Wave 12: whether this request may be remembered as an "Always allow" rule, and its sentence ("Run `git status`"). */
+  rememberable?: boolean
+  rememberLabel?: string | null
 }
 
 /** The Manager's proposal carried by a `kind: "proposal"` permission card. */
@@ -692,4 +695,7 @@ export interface TaskDispatchResult { task: BoardTask; run?: BoardTaskRun | null
 
 /** The native frosted-glass backdrop of the main window (Haze), as reported by the shell. */
 export type WindowBackdrop = { effect: 'acrylic' | 'blur' | 'none'; active: boolean; transparencyOff: boolean; reason?: string }
+
+/** The daemon supervisor in the native shell (wave 12, part E): whether the daemon runs, is restarting or was given up on. */
+export type DaemonSupervisor = { state: 'running' | 'restarting' | 'gave_up'; attempt: number; nextRetryMs: number | null; lastExitCode: number | null }
 

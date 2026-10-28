@@ -3,7 +3,7 @@
 // value below is a visual fixture, not product data.
 import { handleFixtureTaskRpc } from './fixtureTasks'
 import { EXPERIMENTS } from '../ui/experiments'
-import type { Agent, DaemonEvent, MessageMeta, PermissionRequest, Project, Runtime, Session, Snapshot, WindowBackdrop } from '../types'
+import type { Agent, DaemonEvent, DaemonSupervisor, MessageMeta, PermissionRequest, Project, Runtime, Session, Snapshot, WindowBackdrop } from '../types'
 import { answerUsageAnalytics } from '../ui/analyticsFixtures'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
@@ -1151,6 +1151,10 @@ export async function fetchSnapshot() {
 }
 export async function ensureDaemon() {}
 export async function startDaemonEventStream() {}
+const PREVIEW_SUPERVISOR: DaemonSupervisor = { state: 'running', attempt: 0, nextRetryMs: null, lastExitCode: null }
+export async function listenForDaemonSupervisor(_handler: (state: DaemonSupervisor) => void): Promise<Unlisten> { return noop }
+export async function daemonSupervisorState(): Promise<DaemonSupervisor> { return PREVIEW_SUPERVISOR }
+export async function restartDaemonNow(): Promise<DaemonSupervisor> { return PREVIEW_SUPERVISOR }
 export async function openProjectFolder() { return null }
 export async function selectLocalFile() { return null }
 let stagedAttachmentSerial = 0

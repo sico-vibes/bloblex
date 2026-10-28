@@ -13,7 +13,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{
     menu::{IsMenuItem, Menu, MenuItem, Submenu},
@@ -52,6 +52,47 @@ struct DaemonProcess {
     connection: DaemonConnection,
 }
 
+/// Wave 12, part E: what the daemon supervisor is doing, as the window sees it.
+/// `state` is `running`, `restarting` or `gave_up`; `nextRetryMs` is the wait
+/// before the next attempt (null when none is pending) and `lastExitCode` is the
+/// exit status of the run that ended (null when it never ran or was stopped).
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DaemonSupervisor {
+    state: String,
+    attempt: u32,
+    next_retry_ms: Option<u64>,
+    last_exit_code: Option<i32>,
+}
+
+impl DaemonSupervisor {
+    fn running() -> Self {
+        Self { state: "running".into(), ..Self::default() }
+    }
+}
+
+/// The supervisor's own bookkeeping: the payload above plus the crash window and
+/// the flags that keep it from fighting a deliberate stop.
+#[derive(Default)]
+struct SupervisorState {
+    payload: DaemonSupervisor,
+    /// When each crash happened, newest last; only the last two minutes count.
+    crashes: Vec<Instant>,
+    /// Set by `stop_daemon` and by app exit: a stop is never a crash.
+    stopping: bool,
+    /// Whether a live child has been seen since the app started, so the window
+    /// before `start_daemon` (or a start that failed) is not read as a crash.
+    armed: bool,
+    /// One watch thread at a time, even after `daemon_restart_now`.
+    watching: bool,
+}
+
+/// The backoff between restarts: 1, 2, 4, 8, 16 and then 30 seconds.
+const SUPERVISOR_BACKOFF_MS: [u64; 6] = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+/// After this many crashes inside the window, the supervisor stops retrying.
+const SUPERVISOR_CRASH_LIMIT: usize = 5;
+const SUPERVISOR_WINDOW: Duration = Duration::from_secs(120);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SelectedFilePurpose {
     Export,
@@ -70,6 +111,8 @@ struct SelectedFilePath {
 struct AppState {
     daemon: Arc<Mutex<Option<DaemonProcess>>>,
     daemon_start_lock: Mutex<()>,
+    /// Wave 12, part E: the child's watcher and the state it reports.
+    daemon_supervisor: Arc<Mutex<SupervisorState>>,
     event_cursor: Arc<AtomicU64>,
     active_session: Arc<Mutex<Option<String>>>,
     active_runtime: Arc<Mutex<Option<String>>>,
@@ -87,6 +130,7 @@ impl Default for AppState {
         Self {
             daemon: Arc::new(Mutex::new(None)),
             daemon_start_lock: Mutex::new(()),
+            daemon_supervisor: Arc::new(Mutex::new(SupervisorState { payload: DaemonSupervisor::running(), ..SupervisorState::default() })),
             event_cursor: Arc::new(AtomicU64::new(0)),
             active_session: Arc::new(Mutex::new(None)),
             active_runtime: Arc::new(Mutex::new(None)),
@@ -542,6 +586,186 @@ async fn daemon_events_start(app: AppHandle, state: State<'_, AppState>) -> Resu
 #[tauri::command]
 fn ensure_daemon(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     start_daemon(&app, &state)
+}
+
+/// The supervisor's current reading, for a window that just opened.
+#[tauri::command]
+fn daemon_supervisor_state(state: State<'_, AppState>) -> DaemonSupervisor {
+    state
+        .daemon_supervisor
+        .lock()
+        .map(|inner| inner.payload.clone())
+        .unwrap_or_default()
+}
+
+/// Restart the child now, however long ago the last crash was, and start the
+/// crash window again. The wait between automatic restarts is never applied to a
+/// restart the owner asked for.
+#[tauri::command]
+fn daemon_restart_now(app: AppHandle, state: State<'_, AppState>) -> Result<DaemonSupervisor, String> {
+    let supervisor = Arc::clone(&state.daemon_supervisor);
+    {
+        let mut inner = supervisor.lock().map_err(|_| "Daemon supervisor state is unavailable.".to_string())?;
+        inner.crashes.clear();
+        inner.payload = DaemonSupervisor { state: "restarting".into(), attempt: 0, next_retry_ms: Some(0), last_exit_code: inner.payload.last_exit_code };
+    }
+    emit_supervisor(&app, &supervisor);
+    // A stop the owner asked for: the watcher must not count it as a crash.
+    mark_daemon_stopping(&supervisor);
+    stop_daemon(Arc::clone(&state.daemon));
+    clear_daemon_stopping(&supervisor);
+    let started = start_daemon(&app, &state);
+    let payload = {
+        let mut inner = supervisor.lock().map_err(|_| "Daemon supervisor state is unavailable.".to_string())?;
+        match &started {
+            Ok(()) => {
+                inner.armed = true;
+                inner.payload = DaemonSupervisor { state: "running".into(), attempt: 0, next_retry_ms: None, last_exit_code: inner.payload.last_exit_code };
+            }
+            Err(error) => {
+                inner.payload.state = "restarting".into();
+                inner.payload.attempt = 1;
+                inner.payload.next_retry_ms = Some(SUPERVISOR_BACKOFF_MS[0]);
+                log_shell("warn", &format!("daemon restart failed: {error}"));
+            }
+        }
+        inner.payload.clone()
+    };
+    emit_supervisor(&app, &supervisor);
+    start_daemon_watcher(&app);
+    started.map(|_| payload)
+}
+
+fn emit_supervisor(app: &AppHandle, supervisor: &Arc<Mutex<SupervisorState>>) {
+    if let Ok(inner) = supervisor.lock() {
+        let _ = app.emit("daemon-supervisor", inner.payload.clone());
+    }
+}
+
+fn mark_daemon_stopping(supervisor: &Arc<Mutex<SupervisorState>>) {
+    if let Ok(mut inner) = supervisor.lock() {
+        inner.stopping = true;
+    }
+}
+
+fn clear_daemon_stopping(supervisor: &Arc<Mutex<SupervisorState>>) {
+    if let Ok(mut inner) = supervisor.lock() {
+        inner.stopping = false;
+    }
+}
+
+/// Wave 12, part E: watch the child for as long as the app runs. A crashed daemon
+/// used to come back only when the window next asked (`ensure_daemon`); this thread
+/// restarts it with a growing backoff and gives up after five crashes in two
+/// minutes, reporting every change as `daemon-supervisor`.
+fn start_daemon_watcher(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let supervisor = Arc::clone(&state.daemon_supervisor);
+    {
+        let Ok(mut inner) = supervisor.lock() else { return };
+        if inner.watching { return }
+        inner.watching = true;
+    }
+    let app = app.clone();
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(500));
+            let Some(state) = app.try_state::<AppState>() else { return };
+            if supervisor.lock().map(|inner| inner.stopping).unwrap_or(true) {
+                if let Ok(mut inner) = supervisor.lock() { inner.watching = false; }
+                return;
+            }
+            // One read of the child: it is either running, or it has exited and its
+            // record (and private copy) goes now.
+            let exited: Option<Option<i32>> = {
+                let Ok(mut slot) = state.daemon.lock() else { continue };
+                let status = match slot.as_mut() {
+                    Some(process) => process.child.try_wait().ok().flatten(),
+                    None => None,
+                };
+                if status.is_some() {
+                    if let Some(process) = slot.take() {
+                        let _ = fs::remove_file(process.executable_copy);
+                    }
+                    Some(status.and_then(|status| status.code()))
+                } else {
+                    None
+                }
+            };
+            if exited.is_none() {
+                let live = state.daemon.lock().map(|slot| slot.is_some()).unwrap_or(false);
+                let changed = {
+                    let Ok(mut inner) = supervisor.lock() else { continue };
+                    if !live {
+                        false
+                    } else {
+                        inner.armed = true;
+                        let changed = inner.payload.state != "running" || inner.payload.next_retry_ms.is_some();
+                        if changed {
+                            inner.payload = DaemonSupervisor { state: "running".into(), attempt: 0, next_retry_ms: None, last_exit_code: inner.payload.last_exit_code };
+                        }
+                        changed
+                    }
+                };
+                if changed { emit_supervisor(&app, &supervisor); }
+                continue;
+            }
+            // The child is gone. Before it ever ran, or during a stop the owner
+            // asked for, that is not a crash.
+            let give_up = {
+                let Ok(mut inner) = supervisor.lock() else { continue };
+                if inner.stopping {
+                    inner.watching = false;
+                    return;
+                }
+                if !inner.armed { continue }
+                let now = Instant::now();
+                inner.crashes.retain(|at| now.duration_since(*at) < SUPERVISOR_WINDOW);
+                inner.crashes.push(now);
+                inner.payload.last_exit_code = exited.unwrap_or(None);
+                if inner.crashes.len() >= SUPERVISOR_CRASH_LIMIT {
+                    inner.payload.state = "gave_up".into();
+                    inner.payload.next_retry_ms = None;
+                    true
+                } else {
+                    let attempt = inner.payload.attempt.saturating_add(1);
+                    let wait = SUPERVISOR_BACKOFF_MS[(attempt as usize - 1).min(SUPERVISOR_BACKOFF_MS.len() - 1)];
+                    inner.payload.state = "restarting".into();
+                    inner.payload.attempt = attempt;
+                    inner.payload.next_retry_ms = Some(wait);
+                    false
+                }
+            };
+            emit_supervisor(&app, &supervisor);
+            if give_up {
+                log_shell("error", "daemon stopped five times in two minutes; the supervisor gave up");
+                if let Ok(mut inner) = supervisor.lock() { inner.watching = false; }
+                return;
+            }
+            let wait = supervisor.lock().ok().and_then(|inner| inner.payload.next_retry_ms).unwrap_or(SUPERVISOR_BACKOFF_MS[0]);
+            let deadline = Instant::now() + Duration::from_millis(wait);
+            while Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(100));
+                if supervisor.lock().map(|inner| inner.stopping).unwrap_or(true) {
+                    if let Ok(mut inner) = supervisor.lock() { inner.watching = false; }
+                    return;
+                }
+            }
+            let started = start_daemon(&app, &state);
+            {
+                let Ok(mut inner) = supervisor.lock() else { continue };
+                match &started {
+                    Ok(()) => {
+                        inner.armed = true;
+                        inner.payload = DaemonSupervisor { state: "running".into(), attempt: 0, next_retry_ms: None, last_exit_code: inner.payload.last_exit_code };
+                    }
+                    // The attempt failed: the next pass counts it and waits longer.
+                    Err(error) => log_shell("warn", &format!("daemon restart failed: {error}")),
+                }
+            }
+            emit_supervisor(&app, &supervisor);
+        }
+    });
 }
 
 fn event_loop(
@@ -2267,6 +2491,8 @@ fn quit_bloblex(app: AppHandle, state: State<'_, AppState>) {
     let conn = connection(&state).ok();
     let app = app.clone();
     let daemon = Arc::clone(&state.daemon);
+    // Quitting is not a crash: the supervisor stops watching before the child goes.
+    mark_daemon_stopping(&state.daemon_supervisor);
     thread::spawn(move || {
         if let Some(conn) = conn {
             let client = reqwest::blocking::Client::builder()
@@ -2306,6 +2532,8 @@ fn stop_daemon(daemon_process: Arc<Mutex<Option<DaemonProcess>>>) {
 
 impl AppState {
     fn stop_child(&self) {
+        // The watcher must not read this stop as a crash and start the daemon again.
+        mark_daemon_stopping(&self.daemon_supervisor);
         stop_daemon(Arc::clone(&self.daemon));
     }
 }
@@ -2992,6 +3220,9 @@ pub fn run() {
                     eprintln!("Bitbots daemon startup: {error}");
                     log_shell("warn", &format!("daemon startup failed: {error}"));
                 }
+                // Wave 12, part E: a crash now restarts the daemon without waiting
+                // for the window to ask.
+                start_daemon_watcher(app.handle());
                 if let Ok(conn) = connection(&state) {
                     if let Ok(settings) =
                         tauri::async_runtime::block_on(rpc_call(&conn, "settings.get", json!({})))
@@ -3060,6 +3291,8 @@ pub fn run() {
             set_approval_badge,
             daemon_events_start,
             ensure_daemon,
+            daemon_supervisor_state,
+            daemon_restart_now,
             select_project_folder,
             select_local_file,
             select_markdown_export_path,

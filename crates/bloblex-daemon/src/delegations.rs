@@ -139,7 +139,7 @@ async fn finish(st: &AppState, id: &str, status: &str, error: Option<String>) ->
     // in the Manager's in-memory queue is taken out so the drain never delivers it.
     let _ = st.db.delegation_drop_pending_wake(id);
     if let Some(origin) = dto["originSessionId"].as_str() {
-        st.team.cancel_queued_wakes(origin, id).await;
+        st.team.cancel_queued_wakes(st, origin, id).await;
     }
     // Nothing can read a question once its assignment is over: the cards it left
     // pending are closed with no prompt, and its Manager is told without content.
@@ -187,8 +187,7 @@ async fn close_pending_questions(st: &AppState, delegation_id: &str, side_sessio
     }
 }
 
-/// A brief the restart cut off is never redelivered and has no reply to re-offer
-/// (an interrupted row is deliberately not in [`Storage::delegation_pending_replies`]),
+/// A brief the restart cut off is never redelivered and has no reply to re-offer/// (an interrupted row is deliberately not in [`Storage::delegation_pending_replies`]),
 /// so the Manager is told once, without content, that the work stopped.
 async fn notice_interrupted(st: &AppState, row: &Value) {
     let (Some(origin), Some(side)) = (row["originSessionId"].as_str(), row["sideSessionId"].as_str()) else { return };
@@ -226,7 +225,7 @@ async fn relay_stopped(st: &AppState, row: &Value) {
         "cancelled" => None,
         _ => row["error"].as_str().map(str::to_owned),
     };
-    let text = format!("[Reply from {name}]\n{}", crate::team::reply_text(kind, source.as_deref()));
+    let text = format!("[Reply from {name}]\n{}", crate::team::relay_body(&crate::team::reply_text(kind, source.as_deref()), row["doneGoal"].as_str()));
     let depth = st.team.depth_of(side);
     let delivery = crate::team::deliver_reply(st, origin, side, agent, &name, text, Some(id), depth).await;
     settle_reply(st, row, delivery == crate::team::Delivery::Sent);
@@ -272,7 +271,7 @@ pub(crate) async fn question_resolved(st: &AppState, side_session_id: &str, requ
     // stays sent (nothing is unsent).
     if !delegation.is_empty() {
         let _ = st.db.delegation_wake_settle(delegation, request_id, "dropped");
-        st.team.cancel_queued_wake(origin, delegation, request_id).await;
+        st.team.cancel_queued_wake(st, origin, delegation, request_id).await;
     }
     crate::team::note(st, origin, &format!("{name}'s question was {phrase}."), json!({
         "kind": "question_resolved",
@@ -296,6 +295,16 @@ pub(crate) enum TurnEnd {
     Waiting,
     /// The assignment's reply is owed, and its row is the once-only claim.
     Owed(Value),
+    /// The assignment finished with nothing to report (its whole reply was
+    /// `(pass)`): it is completed, silent, and no reply is owed.
+    Silent,
+}
+
+/// Whether a turn's whole reply is the silent `(pass)` a teammate sends when a
+/// check found nothing (wave 12, part D). Any case, exact match, trimmed.
+fn silent_reply(st: &AppState, side_session_id: &str, turn: Option<&str>) -> bool {
+    turn.and_then(|turn| st.db.turn_reply(side_session_id, turn).ok().flatten())
+        .is_some_and(|reply| reply.trim().eq_ignore_ascii_case("(pass)"))
 }
 
 /// Turn-end hook for a side conversation: the assignment that owned the turn gets
@@ -359,6 +368,20 @@ pub(crate) async fn after_turn(st: &AppState, side_session_id: &str, turn: Optio
             // Manager may not relay one in its place.
             if question_holds_assignment_open(st, &row) {
                 return TurnEnd::Waiting;
+            }
+            // A teammate with nothing to report says exactly `(pass)`: the
+            // assignment completes silently, so no reply is claimed and nothing
+            // wakes the Manager.
+            if silent_reply(st, side_session_id, turn.as_deref()) {
+                match st.db.delegation_mark_silent_complete(&id) {
+                    Ok(dto) => {
+                        emit(st, &dto).await;
+                        let _ = st.db.delegation_drop_pending_wake(&id);
+                        if let Some(origin) = dto["originSessionId"].as_str() { st.team.cancel_queued_wakes(st, origin, &id).await; }
+                        return TurnEnd::Silent;
+                    }
+                    Err(_) => return TurnEnd::Ungoverned,
+                }
             }
             match finish(st, &id, "completed", None).await { Some(dto) => TurnEnd::Owed(dto), None => TurnEnd::Ungoverned }
         }
@@ -756,7 +779,7 @@ pub async fn startup(st: &AppState) {
         // No notice is written: the "Waiting for" line is already in the transcript,
         // and the brief is redelivered exactly once, by the drain.
         let meta = json!({"kind":"blob_message","fromAgentId":from,"fromName":name,"delegationId":id});
-        st.team.restore_queued(side, text.to_owned(), meta, row["deliveryDepth"].as_u64().unwrap_or(0) as u32).await;
+        st.team.restore_queued(st, side, text.to_owned(), meta, row["deliveryDepth"].as_u64().unwrap_or(0) as u32).await;
     }
     // An assignment that ended while its reply was still waiting for a busy
     // Manager when the daemon stopped is offered again, exactly once per boot: the
@@ -824,7 +847,7 @@ async fn offer_wake(st: &AppState, row: &Value) {
     let meta = json!({"kind":"blob_update","fromAgentId":agent,"fromName":name,
         "sideSessionId":row["sideSessionId"],"delegationId":id,"requestId":request,
         "requestKind":kind,"title":title});
-    st.team.restore_queued(origin, text, meta, row["deliveryDepth"].as_u64().unwrap_or(0) as u32).await;
+    st.team.restore_queued(st, origin, text, meta, row["deliveryDepth"].as_u64().unwrap_or(0) as u32).await;
 }
 
 /// Queue one assignment's reply for the Manager, composed exactly as the live path
@@ -851,7 +874,7 @@ async fn offer_reply(st: &AppState, row: &Value) {
     let agent = row["targetAgentId"].as_str().unwrap_or("");
     let name = st.db.agent_get(agent).ok().and_then(|agent| agent["name"].as_str().map(str::to_owned)).unwrap_or_else(|| "Teammate".to_owned());
     let meta = json!({"kind":"blob_reply","fromAgentId":agent,"fromName":name,"sideSessionId":side,"delegationId":id});
-    st.team.restore_queued(origin, format!("[Reply from {name}]\n{reply}"), meta, row["deliveryDepth"].as_u64().unwrap_or(0) as u32).await;
+    st.team.restore_queued(st, origin, format!("[Reply from {name}]\n{}", crate::team::relay_body(&reply, row["doneGoal"].as_str())), meta, row["deliveryDepth"].as_u64().unwrap_or(0) as u32).await;
 }
 
 /// Clears the answer hold of one assignment's questions when nothing can start the
@@ -968,10 +991,22 @@ pub(crate) fn is_terminal(row: &Value) -> bool {
     matches!(row["status"].as_str(), Some("completed" | "failed" | "cancelled" | "interrupted"))
 }
 
+/// Whether one assignment ends through the full path (stopping its turn cascades
+/// to what that turn started, wave 12 part C) or quietly (a cascade already walks
+/// the chain itself, so it must not start a second one).
+enum CancelFlow {
+    Cascade,
+    Quiet,
+}
+
 /// Stops one assignment and returns its row as it stands after the attempt. A
 /// terminal row is returned unchanged; nothing is ever forced on a live turn
 /// that this assignment does not own.
 async fn cancel_row(st: &AppState, row: &Value) -> Value {
+    cancel_row_flow(st, row, CancelFlow::Cascade).await
+}
+
+async fn cancel_row_flow(st: &AppState, row: &Value, flow: CancelFlow) -> Value {
     let id = row["id"].as_str().unwrap_or("");
     if is_terminal(row) { return row.clone(); }
     let side = row["sideSessionId"].as_str().unwrap_or("");
@@ -986,7 +1021,7 @@ async fn cancel_row(st: &AppState, row: &Value) -> Value {
     if row["status"] == "queued" {
         // The brief is still only text: take it out of the queue before the row
         // is closed, so the drain can never deliver a cancelled assignment.
-        st.team.cancel_queued(side, id).await;
+        st.team.cancel_queued(st, side, id).await;
         let ended = finish(st, id, "cancelled", None).await.unwrap_or_else(|| row.clone());
         relay_stopped(st, &ended).await;
         return ended;
@@ -997,7 +1032,11 @@ async fn cancel_row(st: &AppState, row: &Value) -> Value {
     // happens while that exact turn is still the conversation's live one.
     let turn = row["sideTurnId"].as_str().unwrap_or("");
     if !turn.is_empty() && origin != side {
-        match crate::cancel_session_turn_if(st, side, turn).await {
+        let stopped = match flow {
+            CancelFlow::Cascade => crate::cancel_session_turn_if(st, side, turn).await,
+            CancelFlow::Quiet => crate::cancel_session_turn_if_quiet(st, side, turn).await,
+        };
+        match stopped {
             // The turn that was read here is still the live one and the stop was
             // asked for: the turn's own end hook marks the row through
             // `after_turn`, so the row is answered as it stands.
@@ -1053,4 +1092,33 @@ async fn cancel_row(st: &AppState, row: &Value) -> Value {
         relay_stopped(st, &ended).await;
         ended
     }
+}
+
+/// Wave 12, part C: stopping one turn also stops the assignments that turn
+/// started. Every assignment of `origin` made in `turn` that is still `queued` or
+/// `running` is cancelled, and the chain is then walked downward: each cancelled
+/// assignment's own turn is stopped, which is what makes its children (rows whose
+/// origin is that side conversation and that side turn) belong to the next step.
+///
+/// The walk is one loop, never nested: `cancel_row_flow` stops a child turn
+/// through the quiet session-cancel path, so this function is the only thing that
+/// cascades and the count it returns is the whole chain. A terminal row is never
+/// touched, so a second stop cancels nothing.
+pub(crate) async fn cancel_turn_group(st: &AppState, origin: &str, turn: &str) -> usize {
+    if origin.is_empty() || turn.is_empty() { return 0; }
+    let mut pending: Vec<(String, String)> = vec![(origin.to_owned(), turn.to_owned())];
+    let mut cancelled = 0usize;
+    while let Some((session, turn)) = pending.pop() {
+        let rows = st.db.delegation_list_for_origin(&session).unwrap_or_default();
+        for row in rows {
+            if row["originTurnId"].as_str() != Some(turn.as_str()) { continue; }
+            if !matches!(row["status"].as_str(), Some("queued" | "running")) { continue; }
+            let side = row["sideSessionId"].as_str().unwrap_or("").to_owned();
+            let side_turn = row["sideTurnId"].as_str().unwrap_or("").to_owned();
+            cancel_row_flow(st, &row, CancelFlow::Quiet).await;
+            cancelled += 1;
+            if !side.is_empty() && !side_turn.is_empty() { pending.push((side, side_turn)); }
+        }
+    }
+    cancelled
 }

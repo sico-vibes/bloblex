@@ -25,7 +25,7 @@ use chrono::{SecondsFormat, Utc};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet}, future::IntoFuture, net::SocketAddr, path::PathBuf, sync::Arc,
+    collections::{HashMap, HashSet}, future::IntoFuture, net::SocketAddr, path::{Path, PathBuf}, sync::Arc,
     time::Instant,
 };
 use tokio::{
@@ -61,6 +61,8 @@ mod proposals;
 mod knowledge;
 mod skills;
 mod commands;
+// Wave 12, part F: the Doctor's read-only checks and their safe fixes.
+mod doctor;
 // FIX39 P10: linked git worktrees so parallel code tasks in one repo cannot clash.
 mod worktree;
 mod workspace;
@@ -1197,11 +1199,25 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "permission.reply" => {
             let id = p["permissionId"].as_str().unwrap_or("");
             let choice = p["choice"].as_str().unwrap_or("");
+            let remember = match p.get("remember") {
+                None | Some(Value::Null) => false,
+                Some(value) => value.as_bool().ok_or_else(|| derr("invalid_argument", "remember must be true or false.", StatusCode::BAD_REQUEST))?,
+            };
             // A proposal has its own decision route; the permission card is only
             // its surface.
             if st.db.permission_kind(id).ok().flatten().as_deref() == Some("proposal") {
                 return Err(derr("invalid_argument", "Decide a proposal with proposal.decide.", StatusCode::BAD_REQUEST));
             }
+            // Wave 12, part A: "Always allow" applies only to an allow choice on a
+            // request the daemon itself marked rememberable. Anything else is refused
+            // before the card is claimed, so a refused save leaves it answerable.
+            let rule_source = if remember {
+                let allow = matches!(choice.to_ascii_lowercase().as_str(), "allow" | "allow_once" | "accept" | "yes");
+                match st.db.permission_get(id).ok().filter(|card| card["rememberable"] == true && allow) {
+                    Some(card) => Some(card),
+                    None => return Err(derr("invalid_argument", "This request cannot be remembered. Allow it once, or deny it.", StatusCode::BAD_REQUEST)),
+                }
+            } else { None };
             let Some((session_id, provider_id)) = st
                 .db
                 .begin_permission_reply(id, choice)
@@ -1257,6 +1273,26 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 return Err(derr("not_found", "session is no longer active", StatusCode::NOT_FOUND));
             }
             st.db.finish_permission_reply(id, true).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            // The owner allowed this request and asked to remember it: the rule is
+            // written now, so the next identical request for this bot is answered
+            // without a card.
+            let saved_rule = match rule_source {
+                Some(card) => {
+                    let agent = st.db.session_brief(&session_id).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned));
+                    match agent {
+                        Some(agent) => {
+                            let (kind, key) = (card["kind"].as_str().unwrap_or(""), card["matchKey"].as_str().unwrap_or(""));
+                            let label = card["rememberLabel"].as_str().unwrap_or("");
+                            match st.db.permission_rule_create(&agent, kind, key, label) {
+                                Ok(rule) => { st.emit("permission.rules.changed", json!({"agentId": agent})).await; Some(rule) }
+                                Err(_) => None,
+                            }
+                        }
+                        None => None,
+                    }
+                }
+                None => None,
+            };
             let _ = st.db.update_session_state(&session_id, "working");
             if let Ok(summary) = st.db.session_event_summary(&session_id) { st.emit("session.changed", summary).await; }
             if matches!(choice.to_ascii_lowercase().as_str(), "deny" | "reject" | "no") {
@@ -1265,9 +1301,34 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             st.emit("permission.resolved", json!({"permissionId":id,"choice":choice})).await;
             if is_question { crate::delegations::question_resolved(st, &session_id, id, if choice == "answer" { "answered" } else { "dismissed" }).await; }
             crate::tasks::permission_resolved(st, &session_id).await;
-            Ok(json!({"resolved":true}))
+            let mut result = json!({"resolved":true});
+            if let Some(rule) = saved_rule {
+                result["rule"] = json!({"id":rule["id"],"agentId":rule["agentId"],"kind":rule["kind"],"label":rule["label"],"createdAt":rule["createdAt"]});
+            }
+            Ok(result)
         }
         "proposal.decide" => crate::proposals::decide(st, &p).await,
+        // Wave 12, part A: the rules "Always allow" saved, and their removal. Both
+        // are host-only (`never` in remote/tiers.json): the list names the owner's
+        // projects and commands.
+        "permission.rules.list" => {
+            let agent_id = match p.get("agentId") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(value.as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "agentId must be a string", StatusCode::BAD_REQUEST))?),
+            };
+            let rules = st.db.permission_rules(agent_id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+            Ok(json!({"rules": rules}))
+        }
+        "permission.rules.delete" => {
+            let id = p["id"].as_str().map(str::trim).filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
+            let rule = st.db.permission_rule_get(id).map_err(|_| derr("not_found", "That rule no longer exists.", StatusCode::NOT_FOUND))?;
+            if !st.db.permission_rule_delete(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))? {
+                return Err(derr("not_found", "That rule no longer exists.", StatusCode::NOT_FOUND));
+            }
+            st.emit("permission.rules.changed", json!({"agentId": rule["agentId"]})).await;
+            Ok(json!({"deleted":true}))
+        }
+        "doctor.run" => crate::doctor::run(st).await,
         "budget.list" | "budget.set" | "budget.delete" => Err(derr("unsupported", "budget controls have been retired; historical records are preserved", StatusCode::NOT_FOUND)),
         "usage.summary" => st.db.usage_summary(&p).map_err(|e| {
             derr(
@@ -1605,6 +1666,57 @@ fn normalized_permission(provider:&str,raw:&Value)->(String,Value){
     if kind.is_empty(){let title=raw["params"]["toolCall"]["title"].as_str().or_else(||raw["toolCall"]["title"].as_str()).unwrap_or("").to_ascii_lowercase();if title.contains("command")||title.contains("shell")||title.contains("terminal"){kind="shell".into();}}
     kind=match kind.as_str(){"bash"|"shell"|"terminal"|"command"=>"shell".into(),"read"|"glob"|"grep"|"ls"|"list"|"search"=>kind,"notebookread"=>"notebook_read".into(),"edit"|"write"=>kind,"notebookedit"=>"edit".into(),_=>"unknown".into()};
     (kind,body)
+}
+/// Every path-like value in a permission request, first one first. The classifier
+/// walks the same keys, so a remembered edit rule names the file that was judged.
+fn permission_paths(value:&Value)->Vec<String>{
+    let mut out=Vec::new();
+    fn collect(value:&Value,out:&mut Vec<String>){
+        match value{
+            Value::Object(map)=>for(key,child)in map{if ["path","file_path","filePath","target","uri"].contains(&key.as_str()){if let Some(path)=child.as_str(){out.push(path.to_owned());}}else{collect(child,out);}},
+            Value::Array(values)=>for child in values{collect(child,out);},
+            _=>{}
+        }
+    }
+    collect(value,&mut out);
+    out
+}
+/// One path as the project sees it: relative when it is inside the project folder,
+/// otherwise the absolute path with forward slashes. Windows compares the prefix
+/// without case, so `C:\Work` and `c:\work` name one folder.
+fn project_relative(project:&Path,path:&str)->String{
+    let raw=PathBuf::from(path);
+    let joined=if raw.is_absolute(){raw}else{project.join(&raw)};
+    let project=project.canonicalize().unwrap_or_else(|_|project.to_path_buf());
+    let full=joined.canonicalize().unwrap_or(joined);
+    if let Ok(rest)=full.strip_prefix(&project){return rest.to_string_lossy().replace('\\',"/");}
+    let wanted=project.to_string_lossy().replace('\\',"/").to_ascii_lowercase();
+    let text=full.to_string_lossy().replace('\\',"/");
+    match text.to_ascii_lowercase().strip_prefix(&wanted){Some(rest)if rest.starts_with('/')=>rest.trim_start_matches('/').to_owned(),_=>text}
+}
+/// The exact target a remembered rule matches: the whole command for a command,
+/// the project-relative path for a file edit or write, and the tool name otherwise
+/// (wave 12, part A).
+fn permission_match_key(kind:&str,body:&Value,project:&Path)->String{
+    let kind=kind.to_ascii_lowercase();
+    if ["shell","bash","command","terminal"].contains(&kind.as_str()){
+        return body.get("command").and_then(Value::as_str).or_else(||body.get("rawInput").and_then(Value::as_str)).or_else(||body["toolCall"]["rawInput"].as_str()).or_else(||body["params"]["toolCall"]["rawInput"].as_str()).or_else(||body.as_str()).unwrap_or("").trim().to_owned();
+    }
+    if ["read","glob","grep","ls","list","search","notebook_read","edit","write","file_edit","file_write"].contains(&kind.as_str()){
+        if let Some(path)=permission_paths(body).into_iter().next(){return project_relative(project,&path);}
+    }
+    kind
+}
+/// The sentence a saved rule carries, for the card and for Settings.
+fn permission_rule_label(kind:&str,match_key:&str)->String{
+    let kind=kind.to_ascii_lowercase();
+    let target=match_key.chars().take(120).collect::<String>();
+    match kind.as_str(){
+        "shell"|"bash"|"command"|"terminal"=>format!("Run `{target}`"),
+        "edit"|"write"|"file_edit"|"file_write"|"notebookedit"=>format!("Edit `{target}`"),
+        "read"|"glob"|"grep"|"ls"|"list"|"search"|"notebook_read"=>format!("Read `{target}`"),
+        _=>format!("Use `{target}`"),
+    }
 }
 async fn emit_codex_startup_rejections(st:&AppState,session_id:&str,agent_id:Option<&str>,runtime_id:&str,options:&ExecOptions){
     for (setting,requested) in [("model",options.model.as_ref()),("thinking",options.thinking.as_ref()),("serviceTier",options.service_tier.as_ref()),("instructions",options.instructions.as_ref())] {
@@ -2556,7 +2668,7 @@ pub(crate) async fn cancel_session_turn(st: &AppState, id: &str) -> Result<Value
     if !id.is_empty() {
         retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
     }
-    cancel_session_turn_matched(st, id, None).await
+    cancel_session_turn_matched(st, id, None, true).await
 }
 
 /// Stop a conversation's turn only while it is still `expected_turn_id`.
@@ -2572,10 +2684,20 @@ pub(crate) async fn cancel_session_turn_if(st: &AppState, id: &str, expected_tur
     if expected_turn_id.is_empty() {
         return Ok(json!({"cancellationRequested": false, "reason": "turn_changed"}));
     }
-    cancel_session_turn_matched(st, id, Some(expected_turn_id)).await
+    cancel_session_turn_matched(st, id, Some(expected_turn_id), true).await
 }
 
-/// The one body both forms share. A turn that is still starting has no provider
+/// The same checked stop, without the assignment cascade (wave 12, part C): the
+/// cascade walks the chain itself, one level at a time, so a child's stop must
+/// not start a second walk from inside it.
+pub(crate) async fn cancel_session_turn_if_quiet(st: &AppState, id: &str, expected_turn_id: &str) -> Result<Value, DispatchError> {
+    if expected_turn_id.is_empty() {
+        return Ok(json!({"cancellationRequested": false, "reason": "turn_changed"}));
+    }
+    cancel_session_turn_matched(st, id, Some(expected_turn_id), false).await
+}
+
+/// The one body all forms share. A turn that is still starting has no provider
 /// handle, so the stop is recorded instead; `starting_cancels` is keyed by turn
 /// id, and the turn driver checks it before delivering the prompt.
 enum CancelTarget {
@@ -2583,7 +2705,7 @@ enum CancelTarget {
     Active(Box<ActiveSession>),
 }
 
-async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&str>) -> Result<Value, DispatchError> {
+async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&str>, cascade: bool) -> Result<Value, DispatchError> {
     let gate = gate_for_session(st, id).await;
     // A checked assignment stop must keep turn admission excluded until the
     // provider has received the interrupt. Otherwise a completed turn can be
@@ -2608,7 +2730,11 @@ async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&
         match stop {
             None | Some(Ok(Ok(()))) => {
                 retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
-                return Ok(json!({"cancellationRequested": true}));
+                // Wave 12, part C: the stop is confirmed, so the assignments this
+                // turn started are stopped too. Never under the gate, and after the
+                // provider has been asked.
+                let cascaded = if cascade { Box::pin(crate::delegations::cancel_turn_group(st, id, expected_turn)).await } else { 0 };
+                return Ok(json!({"cancellationRequested": true, "cascaded": cascaded}));
             }
             Some(Ok(Err(error))) => {
                 restore_cancel_state_for_turn(st, id, &gate, expected_turn).await;
@@ -2622,7 +2748,7 @@ async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&
             }
         }
     }
-    let target = {
+    let (target, live_turn) = {
         let _guard = gate.lock().await;
         if session_is_deleted(st, id).await { return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND)); }
         // One read of the live turn inside the gate. A new turn reservation needs
@@ -2638,14 +2764,14 @@ async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&
             Some(active) => {
                 st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
                 if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
-                CancelTarget::Active(Box::new(active))
+                (CancelTarget::Active(Box::new(active)), live)
             }
             None => {
-                if let Some(turn_id) = live {
+                if let Some(turn_id) = live.clone() {
                     st.starting_cancels.lock().await.insert(turn_id);
                     st.db.update_session_state(id, "cancelling").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
                     if let Ok(summary) = st.db.session_event_summary(id) { st.emit("session.changed", summary).await; }
-                    CancelTarget::Starting
+                    (CancelTarget::Starting, live)
                 } else {
                     return Err(derr("not_found", "active session not found", StatusCode::NOT_FOUND));
                 }
@@ -2664,7 +2790,13 @@ async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&
             if expected.is_some() && !id.is_empty() {
                 retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
             }
-            return Ok(json!({"cancellationRequested":true}));
+            // The stop is recorded for the turn driver, so the assignments this
+            // turn started are stopped too (wave 12, part C).
+            let cascaded = match (cascade, live_turn.as_deref()) {
+                (true, Some(turn)) => Box::pin(crate::delegations::cancel_turn_group(st, id, turn)).await,
+                _ => 0,
+            };
+            return Ok(json!({"cancellationRequested":true,"cascaded":cascaded}));
         }
         CancelTarget::Active(active) => active,
     };
@@ -2676,7 +2808,13 @@ async fn cancel_session_turn_matched(st: &AppState, id: &str, expected: Option<&
         let _ = restore_cancel_state(st, id, &gate).await;
         return Err(derr("unsupported",&e.to_string(),StatusCode::BAD_REQUEST));
     }
-    Ok(json!({"cancellationRequested":true}))
+    // Wave 12, part C: the provider confirmed the stop, so everything this turn
+    // started is cancelled too. The cascade runs off the gate, after the interrupt.
+    let cascaded = match (cascade, live_turn.as_deref()) {
+        (true, Some(turn)) => Box::pin(crate::delegations::cancel_turn_group(st, id, turn)).await,
+        _ => 0,
+    };
+    Ok(json!({"cancellationRequested":true,"cascaded":cascaded}))
 }
 
 /// Close a conversation's adapter process and release its turn. Shared by the
@@ -4296,6 +4434,26 @@ async fn forward_events_with_timeouts(
                 raw,
             } => {
                 let id = Uuid::new_v4().to_string();
+                let session=st.db.session_detail(&sid).unwrap_or(Value::Null);
+                let default=st.db.default_approval_mode().unwrap_or_else(|_|"ask".into());
+                let (mode,plan_mode)=exec_options_for_session(&st,&session).map(|options|(options.approval_mode.as_str().to_owned(),options.plan_mode)).unwrap_or((default,false));
+                let turn_id=turn.clone();
+                let (kind,normalized)=normalized_permission(&provider,&raw);
+                let project=PathBuf::from(session["projectPath"].as_str().unwrap_or(""));
+                let base_summary=bloblex_agent_core::permission_summary(&kind,&normalized,&project);
+                let is_automation = is_unattended(&session["link"]);
+                let is_team_tool = is_team_tool_permission(&raw);
+                let classified=bloblex_agent_core::classify_permission(&kind,&normalized,&project);
+                // Wave 12, part A: what "Always allow" would save here. Only a bot
+                // conversation offers it, never a team tool (the daemon already
+                // answers those), never an unattended run, and only for a category
+                // the `auto` mode would allow, so destructive, network-wide and
+                // out-of-project requests can never be remembered.
+                let agent_id=session["agentId"].as_str().filter(|id|!id.is_empty()).map(str::to_owned);
+                let match_key=permission_match_key(&kind,&normalized,&project);
+                let remember_label=permission_rule_label(&kind,&match_key);
+                let rememberable=agent_id.is_some()&&!is_team_tool&&!is_automation&&classified.allowed&&!match_key.is_empty();
+                let marks=json!({"kind":kind.clone(),"matchKey":match_key.clone(),"rememberable":rememberable,"rememberLabel":remember_label.clone()});
                 let inserted = st.db.insert_permission(
                     &id,
                     &sid,
@@ -4304,19 +4462,21 @@ async fn forward_events_with_timeouts(
                     detail.as_deref(),
                     &choices,
                     &raw,
+                    &marks,
                 );
-                let session=st.db.session_detail(&sid).unwrap_or(Value::Null);
-                let default=st.db.default_approval_mode().unwrap_or_else(|_|"ask".into());
-                let mode=exec_options_for_session(&st,&session).map(|options|options.approval_mode.as_str().to_owned()).unwrap_or(default);
-                let turn_id=turn.clone();
-                let (kind,normalized)=normalized_permission(&provider,&raw);
-                let base_summary=bloblex_agent_core::permission_summary(&kind,&normalized,&PathBuf::from(session["projectPath"].as_str().unwrap_or("")));
-                let is_automation = is_unattended(&session["link"]);
-                let (summary,decision)=if is_team_tool_permission(&raw) { (base_summary,Some(("policy:team".to_owned(),"TEAM".to_owned()))) }
+                // A remembered rule answers this request before any mode does, in
+                // `ask` and `auto` alike: the owner already allowed this exact
+                // target for this bot. Never in plan mode, and never unattended.
+                let rule= match agent_id.as_deref() {
+                    Some(agent) if !is_team_tool && !is_automation && !plan_mode => st.db.permission_rule_find(agent,&kind,&match_key).ok().flatten(),
+                    _ => None,
+                };
+                let rule_id=rule.as_ref().and_then(|rule|rule["id"].as_str()).map(str::to_owned);
+                let (summary,decision)=if is_team_tool { (base_summary,Some(("policy:team".to_owned(),"TEAM".to_owned()))) }
+                else if let Some(rule_id)=&rule_id { (classified.summary.clone(),Some((format!("policy:rule:{rule_id}"),classified.category.to_owned()))) }
                 else if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
                 else if mode=="auto" || is_automation {
-                    let project=PathBuf::from(session["projectPath"].as_str().unwrap_or(""));
-                    let classified=bloblex_agent_core::classify_permission(&kind,&normalized,&project);let category=classified.category.to_owned();let decision=(mode=="auto"&&classified.allowed).then(||("policy:auto".to_owned(),category));(classified.summary,decision)
+                    let decision=(mode=="auto"&&classified.allowed).then(||("policy:auto".to_owned(),classified.category.to_owned()));(classified.summary,decision)
                 } else {(base_summary,None)};
                 let auto_approved = decision.is_some();
                 if inserted.is_ok() && session["state"]=="working" && st.active_turns.lock().await.contains_key(&sid) {
@@ -4334,7 +4494,7 @@ async fn forward_events_with_timeouts(
                             { break; }
                             if reply_result.is_ok() {
                                 let _=st.db.finish_permission_policy_reply(&id,true,&resolved_by,&choice);
-                                st.emit("permission.auto_resolved",json!({"permissionId":id,"sessionId":sid,"turnId":turn_id,"agentId":session["agentId"],"mode":mode,"decision":choice,"category":category,"summary":summary.chars().take(160).collect::<String>()})).await;
+                                st.emit("permission.auto_resolved",json!({"permissionId":id,"sessionId":sid,"turnId":turn_id,"agentId":session["agentId"],"mode":mode,"decision":choice,"category":category,"ruleId":rule_id,"summary":summary.chars().take(160).collect::<String>()})).await;
                                 st.emit("permission.resolved",json!({"permissionId":id,"choice":choice})).await;
                                 continue;
                             } else { let _=st.db.finish_permission_policy_reply(&id,false,&resolved_by,&choice); }
@@ -4389,7 +4549,7 @@ async fn forward_events_with_timeouts(
                 // A board task waiting for this approval is not "running" on
                 // the board until someone answers.
                 crate::tasks::permission_pending(&st, &sid).await;
-                ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending"}))
+                ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending","rememberable":rememberable,"rememberLabel":rememberable.then(||remember_label.clone())}))
             }
             AgentEvent::UsageUpdated {
                 raw: _,
@@ -4821,6 +4981,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Durable tasks: ambiguous claims become needs_you (never a duplicate
     // spawn) and queued work is resumed once.
     tasks::startup(&st).await;
+    // Wave 12, part B: the team queue is durable, so boot offers every message
+    // that was still waiting for a busy teammate. This runs before the ledger's
+    // own briefs below, which dedupe against what is already waiting.
+    st.team.restore_persisted_queue(&st).await;
     // FIX47: a lane that was live when the daemon stopped gets its turn's own
     // outcome or an honest `interrupted`, and waiting briefs go back in the queue
     // (they are drained once below, after the team address exists).
@@ -5918,8 +6082,11 @@ mod phase2a_tests {
         std::fs::remove_dir_all(path).unwrap();
     }
 
-    pub(crate) fn state()->(AppState,broadcast::Receiver<EventEnvelope>){
-        let db=Arc::new(Storage::open_in_memory().unwrap());db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
+    pub(crate) fn state()->(AppState,broadcast::Receiver<EventEnvelope>){ state_with(Storage::open_in_memory().unwrap()) }
+    /// A state over the given database, so a test can simulate a restart by opening
+    /// a second state on the same file.
+    pub(crate) fn state_with(db:Storage)->(AppState,broadcast::Receiver<EventEnvelope>){
+        let db=Arc::new(db);db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
         let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
@@ -7211,7 +7378,7 @@ mod phase2a_tests {
         st.db.create_session("s-denied", "rt-test", "codex", ".", "Denied").unwrap();
         st.db.create_turn("t-denied", "s-denied").unwrap();
         st.active_turns.lock().await.insert("s-denied".into(), "t-denied".into());
-        st.db.insert_permission("p-denied", "s-denied", "provider-denied", "Protected action", None, &["deny".into()], &json!({})).unwrap();
+        st.db.insert_permission("p-denied", "s-denied", "provider-denied", "Protected action", None, &["deny".into()], &json!({}), &json!({})).unwrap();
         let adapter = Arc::new(PolicyAdapter::default());
         let handle = SessionHandle { session_id: "s-denied".into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
         let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
@@ -7776,6 +7943,420 @@ mod phase2a_tests {
         st.db.agent_update(&agent_id,&json!({"approvalMode":"bypass"})).unwrap();st.db.update_session_state(sid,"cancelling").unwrap();tx.send(AgentEvent::PermissionRequested{provider_request_id:"req-cancelled".into(),title:"Unknown tool".into(),detail:None,choices:vec!["allow".into(),"deny".into()],raw:json!({"request":{"tool_name":"NetworkFetch","input":{"url":"https://example.invalid"}}})}).await.unwrap();drop(tx);tokio::time::timeout(std::time::Duration::from_secs(5), task).await.unwrap().unwrap();
         assert_eq!(adapter.replies.load(std::sync::atomic::Ordering::SeqCst),1);let mut audited=Some(resolved.payload);let mut surfaced=false;while let Ok(ev)=observed.try_recv(){if ev.event_type=="permission.auto_resolved"{audited=Some(ev.payload)}else if ev.event_type=="permission.requested"{surfaced=true;}}let event=audited.expect("automatic decision audit");assert_eq!(event["mode"],"auto");assert_eq!(event["category"],"READ");assert!(event["summary"].as_str().unwrap().contains("README.md"));assert_eq!(st.db.permission_resolved_by(event["permissionId"].as_str().unwrap()).unwrap().as_deref(),Some("policy:auto"));assert!(surfaced,"cancelled session permission remains visible for user approval");let _=std::fs::remove_dir_all(root);
     }
+    // ── Wave 12, part A: "Always allow" approval rules ──────────────────────
+
+    /// One bot conversation that can receive provider events: a working turn, a
+    /// live session and the forwarding task whose events the test observes.
+    async fn permission_fixture(st: &mut AppState, sid: &str, agent_id: &str, project: &Path) -> tokio::sync::mpsc::Sender<AgentEvent> {
+        st.db.create_session_for_agent(sid, "rt-test", "claude", &project.to_string_lossy(), "Chat", Some(agent_id)).unwrap();
+        let turn = format!("{sid}-turn");
+        st.db.create_turn(&turn, sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.to_owned(), turn);
+        let adapter = Arc::new(PolicyAdapter::default());
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: "native".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "claude".into(), executable: PathBuf::from("fake"), args: vec![], cwd: Some(project.to_path_buf()) };
+        st.sessions.lock().await.insert(sid.to_owned(), ActiveSession { handle, runtime, adapter, launch_approval_mode: ApprovalMode::Ask });
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(forward_events(st.clone(), sid.to_owned(), "claude".into(), "rt-test".into(), rx));
+        tx
+    }
+
+    /// One read request for `file` inside the conversation's own project.
+    fn read_request(file: &str) -> AgentEvent {
+        AgentEvent::PermissionRequested {
+            provider_request_id: format!("req-{}", Uuid::new_v4()),
+            title: "Read file".into(),
+            detail: None,
+            choices: vec!["allow".into(), "deny".into()],
+            raw: json!({"request":{"tool_name":"Read","input":{"file_path":file}}}),
+        }
+    }
+
+    fn shell_request(command: &str) -> AgentEvent {
+        AgentEvent::PermissionRequested {
+            provider_request_id: format!("req-{}", Uuid::new_v4()),
+            title: "Run command".into(),
+            detail: None,
+            choices: vec!["allow".into(), "deny".into()],
+            raw: json!({"request":{"tool_name":"Bash","input":{"command":command}}}),
+        }
+    }
+
+    /// The next event of `kind`; every other event on the way is dropped.
+    async fn next_rule_event(events: &mut broadcast::Receiver<EventEnvelope>, kind: &str) -> Value {
+        for _ in 0..400 {
+            if let Ok(Ok(event)) = tokio::time::timeout(std::time::Duration::from_millis(25), events.recv()).await {
+                if event.event_type == kind { return event.payload; }
+            }
+        }
+        panic!("no {kind} event arrived");
+    }
+
+    fn rules_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("bloblex-{name}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("README.md"), "safe").unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_remembered_allow_resolves_the_next_identical_request() {
+        let (mut st, mut events) = state();
+        let root = rules_root("rules-remember");
+        let agent = st.db.agent_create(&json!({"name":"Remember","runtimeId":"rt-test"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap().to_owned();
+        let sid = "rules-session";
+        let tx = permission_fixture(&mut st, sid, &agent_id, &root).await;
+        tx.send(read_request("README.md")).await.unwrap();
+        let card = next_rule_event(&mut events, "permission.requested").await;
+        assert_eq!(card["sessionId"], sid);
+        assert_eq!(card["rememberable"], true, "{card}");
+        assert_eq!(card["rememberLabel"], "Read `README.md`");
+        // The snapshot carries the same two fields for every pending card.
+        let snapshot = st.db.snapshot().unwrap();
+        let pending = snapshot["permissions"].as_array().unwrap().iter().find(|row| row["id"] == card["id"]).cloned().expect("the card is in the snapshot");
+        assert_eq!(pending["rememberable"], true);
+        assert_eq!(pending["rememberLabel"], "Read `README.md`");
+        let replied = dispatch(&st, "permission.reply", json!({"permissionId":card["id"],"choice":"allow","remember":true})).await.unwrap();
+        assert_eq!(replied["resolved"], true);
+        assert_eq!(replied["rule"]["agentId"], agent_id.as_str());
+        assert_eq!(replied["rule"]["kind"], "read");
+        assert_eq!(replied["rule"]["label"], "Read `README.md`");
+        assert!(replied["rule"]["createdAt"].as_str().is_some());
+        assert_eq!(next_rule_event(&mut events, "permission.rules.changed").await["agentId"], agent_id.as_str());
+        let listed = dispatch(&st, "permission.rules.list", json!({"agentId":agent_id})).await.unwrap();
+        assert_eq!(listed["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["rules"][0]["matchKey"], "README.md");
+        // The same request, same bot: answered without a card.
+        tx.send(read_request("README.md")).await.unwrap();
+        let resolved = next_rule_event(&mut events, "permission.auto_resolved").await;
+        assert_eq!(resolved["ruleId"], replied["rule"]["id"]);
+        assert_eq!(resolved["category"], "READ");
+        assert_eq!(resolved["mode"], "ask", "a rule answers in ask mode too");
+        let expected = format!("policy:rule:{}", replied["rule"]["id"].as_str().unwrap());
+        assert_eq!(st.db.permission_resolved_by(resolved["permissionId"].as_str().unwrap()).unwrap().as_deref(), Some(expected.as_str()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_remembered_rule_never_answers_another_bot_plan_mode_or_an_unattended_run() {
+        let (mut st, mut events) = state();
+        let root = rules_root("rules-scope");
+        let agent = st.db.agent_create(&json!({"name":"Owner","runtimeId":"rt-test"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap().to_owned();
+        let rule = st.db.permission_rule_create(&agent_id, "read", "README.md", "Read `README.md`").unwrap();
+        let own = permission_fixture(&mut st, "rules-own", &agent_id, &root).await;
+        own.send(read_request("README.md")).await.unwrap();
+        assert_eq!(next_rule_event(&mut events, "permission.auto_resolved").await["ruleId"], rule["id"]);
+        // Another bot's conversation has its own rules: this one asks.
+        let other = st.db.agent_create(&json!({"name":"Other","runtimeId":"rt-test"})).unwrap().0;
+        let other_tx = permission_fixture(&mut st, "rules-other", other["id"].as_str().unwrap(), &root).await;
+        other_tx.send(read_request("README.md")).await.unwrap();
+        let card = next_rule_event(&mut events, "permission.requested").await;
+        assert_eq!(card["sessionId"], "rules-other");
+        // Plan mode never uses a rule: the owner reads a plan before anything runs.
+        st.db.session_apply_model_change("rules-own", &json!({"model":null,"thinking":null,"planMode":true}), false).unwrap();
+        own.send(read_request("README.md")).await.unwrap();
+        let planned = next_rule_event(&mut events, "permission.requested").await;
+        assert_eq!(planned["sessionId"], "rules-own");
+        // An unattended run is answered by the automation policy, never by a rule.
+        let unattended = permission_fixture(&mut st, "rules-automation", &agent_id, &root).await;
+        st.db.set_session_link("rules-automation", &json!({"kind":"automation","automationId":"a1","runId":"r1"})).unwrap();
+        unattended.send(read_request("README.md")).await.unwrap();
+        let resolved = next_rule_event(&mut events, "permission.auto_resolved").await;
+        assert_eq!(resolved["sessionId"], "rules-automation");
+        assert!(resolved["ruleId"].is_null(), "{resolved}");
+        assert_eq!(st.db.permission_resolved_by(resolved["permissionId"].as_str().unwrap()).unwrap().as_deref(), Some("policy:auto"));
+        assert_eq!(st.db.permission_get(resolved["permissionId"].as_str().unwrap()).unwrap()["rememberable"], false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_destructive_command_is_not_rememberable_and_remember_is_refused() {
+        let (mut st, mut events) = state();
+        let root = rules_root("rules-destructive");
+        let agent = st.db.agent_create(&json!({"name":"Cautious","runtimeId":"rt-test"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap().to_owned();
+        let tx = permission_fixture(&mut st, "rules-destructive", &agent_id, &root).await;
+        tx.send(shell_request("rm -rf build")).await.unwrap();
+        let card = next_rule_event(&mut events, "permission.requested").await;
+        assert_eq!(card["rememberable"], false, "{card}");
+        assert!(card["rememberLabel"].is_null(), "no label is offered for a rule that cannot exist");
+        let refused = dispatch(&st, "permission.reply", json!({"permissionId":card["id"],"choice":"allow","remember":true})).await.unwrap_err();
+        assert_eq!(refused.1.code, "invalid_argument");
+        assert!(refused.1.message.contains("cannot be remembered"), "{}", refused.1.message);
+        assert!(st.db.permission_rules(Some(&agent_id)).unwrap().is_empty(), "nothing was saved");
+        // The card is still answerable, and allowing it once writes no rule.
+        let allowed = dispatch(&st, "permission.reply", json!({"permissionId":card["id"],"choice":"allow"})).await.unwrap();
+        assert_eq!(allowed["resolved"], true);
+        assert!(allowed["rule"].is_null());
+        assert!(st.db.permission_rules(Some(&agent_id)).unwrap().is_empty());
+        // Remembering is also refused when the choice is not an allow.
+        tx.send(shell_request("git status")).await.unwrap();
+        let allowed_command = next_rule_event(&mut events, "permission.requested").await;
+        assert_eq!(allowed_command["rememberable"], true, "{allowed_command}");
+        assert_eq!(allowed_command["rememberLabel"], "Run `git status`");
+        let denied = dispatch(&st, "permission.reply", json!({"permissionId":allowed_command["id"],"choice":"deny","remember":true})).await.unwrap_err();
+        assert_eq!(denied.1.code, "invalid_argument");
+        assert!(st.db.permission_rules(Some(&agent_id)).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_rule_makes_the_next_request_ask_again() {
+        let (mut st, mut events) = state();
+        let root = rules_root("rules-delete");
+        let agent = st.db.agent_create(&json!({"name":"Forgetful","runtimeId":"rt-test"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap().to_owned();
+        let rule = st.db.permission_rule_create(&agent_id, "read", "README.md", "Read `README.md`").unwrap();
+        let tx = permission_fixture(&mut st, "rules-delete", &agent_id, &root).await;
+        tx.send(read_request("README.md")).await.unwrap();
+        let first = next_rule_event(&mut events, "permission.auto_resolved").await;
+        assert_eq!(first["ruleId"], rule["id"]);
+        assert_eq!(dispatch(&st, "permission.rules.delete", json!({"id":rule["id"]})).await.unwrap()["deleted"], true);
+        assert_eq!(next_rule_event(&mut events, "permission.rules.changed").await["agentId"], agent_id.as_str());
+        assert_eq!(dispatch(&st, "permission.rules.list", json!({})).await.unwrap()["rules"].as_array().unwrap().len(), 0);
+        tx.send(read_request("README.md")).await.unwrap();
+        let card = next_rule_event(&mut events, "permission.requested").await;
+        assert_eq!(card["sessionId"], "rules-delete", "the request is the owner's again");
+        assert_eq!(card["rememberable"], true);
+        // Deleting it twice is a refusal, not a second event.
+        assert_eq!(dispatch(&st, "permission.rules.delete", json!({"id":rule["id"]})).await.unwrap_err().1.code, "not_found");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // ── Wave 12, part C: stopping a turn stops what it started ──────────────
+
+    #[derive(Default)]
+    struct StopAdapter { cancels: StdMutex<Vec<String>>, prompts: StdMutex<Vec<String>> }
+
+    #[async_trait::async_trait]
+    impl bloblex_agent_core::AgentAdapter for StopAdapter {
+        async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn new_session(&self, _: &RuntimeSpec, _: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+        async fn prompt(&self, _: &SessionHandle, request: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { self.prompts.lock().unwrap().push(request.text); Ok(()) }
+        async fn cancel(&self, handle: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { self.cancels.lock().unwrap().push(handle.provider_session_id.clone()); Ok(()) }
+        async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+        async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    }
+
+    /// A live conversation with one running turn and a session handle whose adapter
+    /// records every stop it is asked for.
+    async fn live_turn(st: &mut AppState, adapter: &Arc<StopAdapter>, sid: &str, turn: &str, agent: Option<&str>) {
+        match agent {
+            Some(agent) => st.db.create_session_for_agent(sid, "rt-test", "codex", ".", "Chat", Some(agent)).unwrap(),
+            None => st.db.create_session(sid, "rt-test", "codex", ".", "Chat").unwrap(),
+        }
+        st.db.create_turn(turn, sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.to_owned(), turn.to_owned());
+        let handle = SessionHandle { session_id: sid.into(), provider_session_id: format!("provider-{sid}"), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        st.sessions.lock().await.insert(sid.to_owned(), ActiveSession { handle, runtime, adapter: adapter.clone(), launch_approval_mode: ApprovalMode::Ask });
+    }
+
+    /// One ledger row for `side`, started by `origin` in `origin_turn`; `side_turn`
+    /// marks it running, an empty one leaves it queued.
+    fn delegation_row(st: &AppState, origin: &str, origin_turn: Option<&str>, side: &str, side_turn: &str) -> Value {
+        let row = st.db.delegation_create(&json!({
+            "originSessionId":origin, "originTurnId":origin_turn, "sideSessionId":side,
+            "fromAgentId":"manager", "targetAgentId":"worker", "topic":"Work", "briefPreview":"Do it",
+            "workspacePath":".", "deliveryDepth":1
+        })).unwrap().0;
+        if side_turn.is_empty() { row } else { st.db.delegation_mark_running(row["id"].as_str().unwrap(), side_turn).unwrap() }
+    }
+
+    #[tokio::test]
+    async fn stopping_a_manager_turn_cancels_the_assignments_it_started() {
+        let (mut st, _events) = state();
+        let adapter = Arc::new(StopAdapter::default());
+        live_turn(&mut st, &adapter, "cascade-manager", "turn-manager", None).await;
+        live_turn(&mut st, &adapter, "cascade-a", "turn-a", None).await;
+        live_turn(&mut st, &adapter, "cascade-b", "turn-b", None).await;
+        live_turn(&mut st, &adapter, "cascade-old", "turn-old", None).await;
+        let a = delegation_row(&st, "cascade-manager", Some("turn-manager"), "cascade-a", "turn-a");
+        let b = delegation_row(&st, "cascade-manager", Some("turn-manager"), "cascade-b", "turn-b");
+        let old = delegation_row(&st, "cascade-manager", Some("turn-before"), "cascade-old", "turn-old");
+        let stopped = dispatch(&st, "session.cancel", json!({"sessionId":"cascade-manager"})).await.unwrap();
+        assert_eq!(stopped["cancellationRequested"], true);
+        assert_eq!(stopped["cascaded"], 2, "{stopped}");
+        let cancels = adapter.cancels.lock().unwrap().clone();
+        assert!(cancels.contains(&"provider-cascade-a".to_owned()), "{cancels:?}");
+        assert!(cancels.contains(&"provider-cascade-b".to_owned()), "{cancels:?}");
+        assert!(!cancels.contains(&"provider-cascade-old".to_owned()), "an earlier turn's work keeps running: {cancels:?}");
+        assert_eq!(st.db.delegation_get(old["id"].as_str().unwrap()).unwrap()["status"], "running");
+        // Each stopped turn ends as cancelled through the ordinary turn-end hook.
+        for (side, turn, id) in [
+            ("cascade-a", "turn-a", a["id"].as_str().unwrap().to_owned()),
+            ("cascade-b", "turn-b", b["id"].as_str().unwrap().to_owned()),
+        ] {
+            st.db.update_turn_outcome(turn, "cancelled", Some("cancelled")).unwrap();
+            st.active_turns.lock().await.remove(side);
+            crate::delegations::after_turn(&st, side, Some(turn.into()), "turn.cancelled", None).await;
+            assert_eq!(st.db.delegation_get(&id).unwrap()["status"], "cancelled", "{side}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_queued_assignment_is_withdrawn_when_its_manager_turn_is_stopped() {
+        let (mut st, _events) = state();
+        let adapter = Arc::new(StopAdapter::default());
+        live_turn(&mut st, &adapter, "queue-manager", "turn-manager", None).await;
+        st.db.create_session("queue-side", "rt-test", "codex", ".", "Side").unwrap();
+        st.db.update_session_state("queue-side", "idle").unwrap();
+        let row = delegation_row(&st, "queue-manager", Some("turn-manager"), "queue-side", "");
+        assert_eq!(row["status"], "queued");
+        let id = row["id"].as_str().unwrap().to_owned();
+        st.team.restore_queued(&st, "queue-side", "Do it".into(), json!({"kind":"blob_message","delegationId":id}), 1).await;
+        assert_eq!(st.team.queued_len("queue-side").await, 1);
+        let stopped = dispatch(&st, "session.cancel", json!({"sessionId":"queue-manager"})).await.unwrap();
+        assert_eq!(stopped["cascaded"], 1, "{stopped}");
+        assert_eq!(st.db.delegation_get(&id).unwrap()["status"], "cancelled");
+        assert_eq!(st.team.queued_len("queue-side").await, 0, "the brief never goes out");
+        assert!(st.db.team_queue_rows(Some("queue-side")).unwrap().is_empty(), "and it cannot come back after a restart");
+        assert_eq!(adapter.cancels.lock().unwrap().clone(), vec!["provider-queue-manager".to_owned()], "only the Manager's own turn is stopped; the waiting brief never started");
+    }
+
+    #[tokio::test]
+    async fn a_second_stop_after_the_cascade_is_a_no_op() {
+        let (mut st, _events) = state();
+        let adapter = Arc::new(StopAdapter::default());
+        live_turn(&mut st, &adapter, "idem-manager", "turn-manager", None).await;
+        live_turn(&mut st, &adapter, "idem-a", "turn-a", None).await;
+        let a = delegation_row(&st, "idem-manager", Some("turn-manager"), "idem-a", "turn-a");
+        let first = crate::delegations::cancel_turn_group(&st, "idem-manager", "turn-manager").await;
+        assert_eq!(first, 1);
+        // The stopped turn ends, and the assignment with it.
+        st.db.update_turn_outcome("turn-a", "cancelled", Some("cancelled")).unwrap();
+        st.active_turns.lock().await.remove("idem-a");
+        crate::delegations::after_turn(&st, "idem-a", Some("turn-a".into()), "turn.cancelled", None).await;
+        assert_eq!(st.db.delegation_get(a["id"].as_str().unwrap()).unwrap()["status"], "cancelled");
+        let before = adapter.cancels.lock().unwrap().len();
+        let second = crate::delegations::cancel_turn_group(&st, "idem-manager", "turn-manager").await;
+        assert_eq!(second, 0, "a finished assignment is never cancelled twice");
+        assert_eq!(adapter.cancels.lock().unwrap().len(), before, "nothing is asked to stop again");
+    }
+
+    // ── Wave 12, part B: the team queue survives a restart ──────────────────
+
+    /// A file-backed database for the restart tests: the same file, two states.
+    fn queue_store(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("bloblex-{name}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bitbots.db");
+        (dir, path)
+    }
+
+    /// The side conversation that a queued brief waits for: busy in the first state,
+    /// free in the restarted one.
+    fn queued_side(st: &AppState, side: &str, agent: &str, busy: bool) {
+        st.db.create_session_for_agent(side, "rt-test", "codex", ".", "Side", Some(agent)).unwrap();
+        st.db.set_session_link(side, &json!({"kind":"side","peerAgentId":agent,"originSessionId":"queue-boss"})).unwrap();
+        st.db.update_session_state(side, if busy { "working" } else { "idle" }).unwrap();
+    }
+
+    /// Marks a conversation mid-turn, so a delivery waits for it.
+    async fn set_busy(st: &mut AppState, sid: &str, turn: &str) {
+        st.db.create_turn(turn, sid).unwrap();
+        st.db.update_session_state(sid, "working").unwrap();
+        st.active_turns.lock().await.insert(sid.to_owned(), turn.to_owned());
+    }
+
+    /// Waits until the adapter has been asked to run a prompt.
+    async fn wait_for_prompt(adapter: &Arc<StopAdapter>) -> bool {
+        for _ in 0..300 {
+            if !adapter.prompts.lock().unwrap().is_empty() { return true; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn the_team_queue_survives_a_restart_and_is_delivered_once_free() {
+        let (dir, path) = queue_store("team-queue");
+        {
+            let (mut st, _events) = state_with(Storage::open(&path).unwrap());
+            let agent = st.db.agent_create(&json!({"name":"Worker","runtimeId":"rt-test"})).unwrap().0;
+            let agent_id = agent["id"].as_str().unwrap().to_owned();
+            st.db.create_session("queue-boss", "rt-test", "codex", ".", "Manager").unwrap();
+            queued_side(&st, "queue-side", &agent_id, true);
+            set_busy(&mut st, "queue-side", "turn-side").await;
+            let row = delegation_row(&st, "queue-boss", Some("turn-boss"), "queue-side", "");
+            let id = row["id"].as_str().unwrap().to_owned();
+            st.team.restore_queued(&st, "queue-side", "Do it".into(), json!({"kind":"blob_message","delegationId":id}), 1).await;
+            assert_eq!(st.team.queued_len("queue-side").await, 1, "the brief waits behind the busy turn");
+            assert_eq!(st.db.team_queue_rows(Some("queue-side")).unwrap().len(), 1, "and it is stored");
+            drop(agent_id);
+        }
+        // A restart: a new state over the same database, and the boot restore.
+        let (restarted, _events) = state_with(Storage::open(&path).unwrap());
+        restarted.team.restore_persisted_queue(&restarted).await;
+        assert_eq!(restarted.team.queued_len("queue-side").await, 1, "the waiting brief came back");
+        assert_eq!(restarted.team.queued_texts("queue-side").await, vec!["Do it".to_owned()]);
+        // The teammate is free now, and the delivery starts its turn.
+        let adapter = Arc::new(StopAdapter::default());
+        restarted.db.update_session_state("queue-side", "idle").unwrap();
+        restarted.active_turns.lock().await.remove("queue-side");
+        let handle = SessionHandle { session_id: "queue-side".into(), provider_session_id: "queue-side-provider".into(), capabilities: bloblex_agent_core::AgentCapabilities::default() };
+        let runtime = RuntimeSpec { runtime_id: "rt-test".into(), provider: "codex".into(), executable: PathBuf::from("fake"), args: vec![], cwd: None };
+        restarted.sessions.lock().await.insert("queue-side".into(), ActiveSession { handle, runtime, adapter: adapter.clone(), launch_approval_mode: ApprovalMode::Ask });
+        team::drain_queued_deliveries(&restarted, None).await;
+        assert!(wait_for_prompt(&adapter).await, "the brief reached the provider");
+        assert_eq!(adapter.prompts.lock().unwrap()[0], "Do it");
+        assert_eq!(restarted.team.queued_len("queue-side").await, 0);
+        assert!(restarted.db.team_queue_rows(Some("queue-side")).unwrap().is_empty(), "a delivered brief is gone from the table");
+        assert_eq!(restarted.db.delegation_get(&delegation_id_of(&restarted, "queue-side")).unwrap()["status"], "running");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The id of the one assignment in this database, so a test never re-guesses it.
+    fn delegation_id_of(st: &AppState, side: &str) -> String {
+        st.db.delegation_list_for_side(side).unwrap()[0]["id"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn a_queued_delivery_is_never_stored_twice_and_dedupe_survives_the_restart() {
+        let (dir, path) = queue_store("team-dedupe");
+        let meta = json!({"kind":"blob_message","delegationId":"same-assignment"});
+        {
+            let (st, _events) = state_with(Storage::open(&path).unwrap());
+            let agent = st.db.agent_create(&json!({"name":"Worker","runtimeId":"rt-test"})).unwrap().0;
+            queued_side(&st, "dedupe-side", agent["id"].as_str().unwrap(), true);
+            st.team.restore_queued(&st, "dedupe-side", "Do it".into(), meta.clone(), 1).await;
+            st.team.restore_queued(&st, "dedupe-side", "Do it again".into(), meta.clone(), 1).await;
+            assert_eq!(st.team.queued_len("dedupe-side").await, 1, "one delivery, not two");
+            assert_eq!(st.db.team_queue_rows(Some("dedupe-side")).unwrap().len(), 1);
+        }
+        let (restarted, _events) = state_with(Storage::open(&path).unwrap());
+        restarted.team.restore_persisted_queue(&restarted).await;
+        assert_eq!(restarted.team.queued_texts("dedupe-side").await, vec!["Do it".to_owned()]);
+        restarted.team.restore_queued(&restarted, "dedupe-side", "Do it again".into(), meta, 1).await;
+        assert_eq!(restarted.team.queued_len("dedupe-side").await, 1, "the dedupe survived the restart");
+        assert_eq!(restarted.db.team_queue_rows(Some("dedupe-side")).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_queue_for_a_deleted_session_is_dropped() {
+        let (dir, path) = queue_store("team-deleted");
+        {
+            let (st, _events) = state_with(Storage::open(&path).unwrap());
+            let agent = st.db.agent_create(&json!({"name":"Worker","runtimeId":"rt-test"})).unwrap().0;
+            queued_side(&st, "gone-side", agent["id"].as_str().unwrap(), true);
+            st.team.restore_queued(&st, "gone-side", "Do it".into(), json!({"kind":"blob_message","delegationId":"gone"}), 1).await;
+            assert_eq!(st.db.team_queue_rows(Some("gone-side")).unwrap().len(), 1);
+            st.db.update_session_state("gone-side", "idle").unwrap();
+            st.db.session_delete("gone-side").unwrap();
+            assert!(st.db.team_queue_rows(None).unwrap().is_empty(), "a deleted conversation takes its queue with it");
+        }
+        let (restarted, _events) = state_with(Storage::open(&path).unwrap());
+        restarted.team.restore_persisted_queue(&restarted).await;
+        assert_eq!(restarted.team.queued_len("gone-side").await, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn session_new_agent_xor_and_archived_conflict_are_validated(){
         let(st,_)=state();let a=dispatch(&st,"agent.create",json!({"name":"Agent","runtimeId":"rt-test"})).await.unwrap()["agent"]["id"].as_str().unwrap().to_owned();let _=dispatch(&st,"agent.delete",json!({"agentId":a})).await.unwrap();

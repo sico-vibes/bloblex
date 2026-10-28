@@ -547,7 +547,7 @@ async fn apply_task(st: &AppState, session_id: &str, payload: &Value) -> Result<
     }
     let brief = format!("{}\n\nDone goal:\n{}\n\nReport back:\n{}", payload["brief"].as_str().unwrap_or(""), payload["doneGoal"].as_str().unwrap_or(""), payload["reportBack"].as_str().unwrap_or(""));
     let topic = payload["topic"].as_str().filter(|topic| !topic.is_empty()).map(str::to_owned).unwrap_or_else(|| crate::team::topic_from(payload["brief"].as_str().unwrap_or("Task")));
-    let delegation = crate::team::delegate_approved(st, session_id, &json!({"blob": bot, "message": brief, "projectPath": project_path,"topic":topic,"conversation":payload["conversation"]})).await.map_err(invalid)?;
+    let delegation = crate::team::delegate_approved(st, session_id, &json!({"blob": bot, "message": brief, "projectPath": project_path,"topic":topic,"conversation":payload["conversation"],"doneGoal":payload["doneGoal"]})).await.map_err(invalid)?;
     // A replayed approval must not read as a second task: it names the assignment
     // that already exists.
     let verb = if delegation.duplicate.is_some() { "had already sent this task to" } else if delegation.started { "started a task for" } else { "queued a task for" };

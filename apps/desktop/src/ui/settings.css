@@ -187,3 +187,16 @@
 .diagnostics-contents li { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
 .diagnostics-contents small { color: var(--text-3); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .diagnostics-total { color: var(--text-3); font-size: var(--fs-xs); }
+
+/* Settings → Approvals and Health check (27 October 2026). */
+.approval-rule-list, .health-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.approval-rule-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 30px; }
+.approval-rule-list li span { min-width: 0; overflow-wrap: anywhere; color: var(--text-1); font-size: var(--fs-sm); }
+.health-list li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 16px; }
+.health-list li + li { border-top: 1px solid var(--line); }
+.health-list li[data-status="ok"] svg { color: var(--text-3); }
+.health-list li[data-status="warn"] svg { color: var(--warning); }
+.health-list li[data-status="fail"] svg { color: var(--status-danger); }
+.health-copy { display: grid; gap: 2px; min-width: 0; }
+.health-copy strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 560; }
+.health-copy small { color: var(--text-3); font-size: var(--fs-xs); overflow-wrap: anywhere; }

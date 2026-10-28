@@ -1042,11 +1042,65 @@ fn ensure_delegation_schema(c: &Connection) -> Result<(), StorageError> {
     // instead of missing its row.
     let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='turn_ids')", [], |r| r.get(0))?;
     if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN turn_ids TEXT;")?; }
+    // Wave 12, part D: the observable "done when" the owner (or the Manager) set
+    // for the work, relayed back with the reply so the Manager compares instead of
+    // guessing. Capped at create time like every other tool argument.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='done_goal')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN done_goal TEXT;")?; }
+    // Wave 12, part D: a side conversation that answered exactly `(pass)` finished
+    // silently. The flag is the record that no reply was ever owed, so a restart
+    // neither re-offers one nor reads the silence as a lost message.
+    let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('delegations') WHERE name='silent')", [], |r| r.get(0))?;
+    if !present { c.execute_batch("ALTER TABLE delegations ADD COLUMN silent INTEGER NOT NULL DEFAULT 0;")?; }
     c.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_delegations_dedupe ON delegations(dedupe_key) WHERE dedupe_key IS NOT NULL;
          CREATE INDEX IF NOT EXISTS idx_delegations_side_turn ON delegations(side_session_id, side_turn_id);
          CREATE INDEX IF NOT EXISTS idx_delegations_wake_pending ON delegations(wake_state) WHERE wake_state='pending';
          CREATE INDEX IF NOT EXISTS idx_permission_requests_delegation ON permission_requests(json_extract(data,'$.delegationId'));")?;
+    Ok(())
+}
+
+/// "Always allow" approval rules (wave 12, part A): one row per bot, normalized
+/// permission kind and exact target. `match_key` is the full command text for a
+/// command, the project-relative path for a file edit or write, and the tool name
+/// otherwise; `label` is the sentence the card and Settings show. Additive and
+/// idempotent, so an older database gains the table on open. The unique index is
+/// the rule: one bot remembers one target once.
+fn ensure_permission_rules_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS permission_rules(
+        id TEXT PRIMARY KEY NOT NULL,
+        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        match_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_permission_rules_match ON permission_rules(agent_id, kind, match_key);
+    CREATE INDEX IF NOT EXISTS idx_permission_rules_agent ON permission_rules(agent_id, created_at);")?;
+    Ok(())
+}
+
+/// The columns of one approval rule as JSON, so the DTO is built in one place.
+const PERMISSION_RULE_COLUMNS: &str = "'id',id,'agentId',agent_id,'kind',kind,'matchKey',match_key,'label',label,'createdAt',created_at";
+
+/// The team delivery queue made durable (wave 12, part B): `st.team.queued` was
+/// memory only, so a restart lost the messages waiting for a busy teammate.
+/// `position` orders one session's rows (lower first), `meta_json` is the
+/// delivery's routing data, and `depth` is the hop depth it was made at. Additive
+/// and idempotent like every other `ensure_*` schema.
+fn ensure_team_queue_schema(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS team_queue(
+        id TEXT PRIMARY KEY NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        meta_json TEXT NOT NULL,
+        depth INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_team_queue_session ON team_queue(session_id, position);")?;
     Ok(())
 }
 
@@ -1071,7 +1125,7 @@ pub const QUEUE_NOT_SENT_ERROR: &str = "Bitbots stopped before sending this. It 
 /// this module except for a restart's redelivery. `dedupe_key` and `turn_ids` are
 /// bookkeeping as well: the first is only compared inside an insert, the second
 /// only searched by [`Storage::delegation_open_rows_for_turn`].
-const DELEGATION_COLUMNS: &str = "'id',id,'originSessionId',origin_session_id,'originTurnId',origin_turn_id,'sideSessionId',side_session_id,'sideTurnId',side_turn_id,'fromAgentId',from_agent_id,'targetAgentId',target_agent_id,'topic',topic,'briefPreview',brief_preview,'status',status,'error',error,'workspacePath',workspace_path,'worktree',json(worktree_json),'createdAt',created_at,'startedAt',started_at,'finishedAt',finished_at,'updatedAt',updated_at,'queueReason',queue_reason";
+const DELEGATION_COLUMNS: &str = "'id',id,'originSessionId',origin_session_id,'originTurnId',origin_turn_id,'sideSessionId',side_session_id,'sideTurnId',side_turn_id,'fromAgentId',from_agent_id,'targetAgentId',target_agent_id,'topic',topic,'briefPreview',brief_preview,'status',status,'error',error,'workspacePath',workspace_path,'worktree',json(worktree_json),'createdAt',created_at,'startedAt',started_at,'finishedAt',finished_at,'updatedAt',updated_at,'queueReason',queue_reason,'doneGoal',done_goal,'silent',json(CASE WHEN silent=1 THEN 'true' ELSE 'false' END)";
 
 /// One stored row (as built by [`DELEGATION_COLUMNS`]) to the wire DTO: the
 /// workspace becomes one object with its folder and, when the lane was isolated,
@@ -1956,7 +2010,7 @@ impl Storage {
     /// database from an earlier version failed with `no such table: tasks` (FIX43).
     fn migrate(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         let storage = Self::migrate_versions(conn, path)?;
-        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
+        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
         Ok(storage)
     }
     fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
@@ -2950,7 +3004,7 @@ impl Storage {
             tx.execute("DELETE FROM active_turn_reservations WHERE session_id=?1", [session])?;
             tx.execute("DELETE FROM exec_snapshots WHERE session_id=?1", [session])?;
             tx.execute("DELETE FROM usage_valuations WHERE usage_event_id IN (SELECT id FROM usage_events WHERE session_id=?1)", [session])?;
-            for table in ["messages", "tool_calls", "file_changes", "permission_requests", "usage_events", "turns", "queued_prompts", "proposals"] {
+            for table in ["messages", "tool_calls", "file_changes", "permission_requests", "usage_events", "turns", "queued_prompts", "proposals", "team_queue"] {
                 tx.execute(&format!("DELETE FROM {table} WHERE session_id=?1"), [session])?;
             }
             tx.execute("DELETE FROM app_events WHERE json_valid(payload) AND (json_extract(payload,'$.sessionId')=?1 OR json_extract(payload,'$.session.id')=?1 OR (event_type='session.changed' AND json_extract(payload,'$.id')=?1))", [session])?;
@@ -3411,7 +3465,7 @@ impl Storage {
         tx.execute("DELETE FROM active_turn_reservations WHERE session_id=?1", [id])?;
         tx.execute("DELETE FROM exec_snapshots WHERE session_id=?1", [id])?;
         tx.execute("DELETE FROM usage_valuations WHERE usage_event_id IN (SELECT id FROM usage_events WHERE session_id=?1)", [id])?;
-        for table in ["messages", "tool_calls", "file_changes", "permission_requests", "usage_events", "turns"] {
+        for table in ["messages", "tool_calls", "file_changes", "permission_requests", "usage_events", "turns", "team_queue"] {
             tx.execute(&format!("DELETE FROM {table} WHERE session_id=?1"), [id])?;
         }
         tx.execute("DELETE FROM queued_prompts WHERE session_id=?1", [id])?;
@@ -3858,6 +3912,8 @@ impl Storage {
         let depth = match input.get("deliveryDepth") { None | Some(Value::Null) => 0, Some(value) => value.as_u64().filter(|depth| *depth <= 64).ok_or(StorageError::InvalidAgent)? as i64 };
         let worktree = match input.get("worktree") { Some(value) if value.is_object() => Some(value.to_string()), _ => None };
         let dedupe = input["dedupeKey"].as_str().map(str::trim).filter(|key| !key.is_empty()).map(str::to_owned);
+        // The observable "done when" for the work, if the Manager supplied one.
+        let done_goal = input["doneGoal"].as_str().map(str::trim).filter(|goal| !goal.is_empty()).map(|goal| goal.chars().take(4000).collect::<String>());
         let queue_reason = match input["queueReason"].as_str() { Some(reason @ ("busy" | "slots")) => Some(reason.to_owned()), _ => None };
         let id = Uuid::new_v4().to_string();
         let now = task_stamp();
@@ -3869,8 +3925,8 @@ impl Storage {
             if !c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get::<_, bool>(0))? { return Err(StorageError::AgentNotFound); }
         }
         let inserted = c.execute(
-            "INSERT OR IGNORE INTO delegations(id,origin_session_id,origin_turn_id,side_session_id,side_turn_id,from_agent_id,target_agent_id,topic,brief_preview,status,error,delivery_text,delivery_depth,workspace_path,worktree_json,created_at,started_at,finished_at,updated_at,dedupe_key,queue_reason) VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,'queued',NULL,?9,?10,?11,?12,?13,NULL,NULL,?13,?14,?15)",
-            params![id, origin, origin_turn, side, from_agent, target_agent, topic, preview, delivery, depth, workspace, worktree, now, dedupe, queue_reason],
+            "INSERT OR IGNORE INTO delegations(id,origin_session_id,origin_turn_id,side_session_id,side_turn_id,from_agent_id,target_agent_id,topic,brief_preview,status,error,delivery_text,delivery_depth,workspace_path,worktree_json,created_at,started_at,finished_at,updated_at,dedupe_key,queue_reason,done_goal) VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,'queued',NULL,?9,?10,?11,?12,?13,NULL,NULL,?13,?14,?15,?16)",
+            params![id, origin, origin_turn, side, from_agent, target_agent, topic, preview, delivery, depth, workspace, worktree, now, dedupe, queue_reason, done_goal],
         )?;
         // A concurrent replay won the unique index between the lookup above and
         // this insert: return its row instead of a second assignment.
@@ -3937,6 +3993,33 @@ impl Storage {
         if !DELEGATION_STATES.contains(&status) { return Err(StorageError::InvalidAgent); }
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         delegation_list(&c, &format!("SELECT json_object({DELEGATION_COLUMNS}) FROM delegations WHERE status=?1 ORDER BY created_at,rowid"), status)
+    }
+
+    /// The assignment finished silently: a side conversation whose whole reply was
+    /// `(pass)` completed it and nothing was sent to its Manager, so nothing is
+    /// owed either (wave 12, part D). One statement, so the flag and the terminal
+    /// status can never disagree.
+    pub fn delegation_mark_silent_complete(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = task_stamp();
+        c.execute(
+            "UPDATE delegations SET status='completed',error=NULL,delivery_text=NULL,silent=1,finished_at=COALESCE(finished_at,?2),updated_at=?2 WHERE id=?1 AND status IN ('queued','running')",
+            params![id, now],
+        )?;
+        delegation_read(&c, id)
+    }
+
+    /// The Doctor's database reading: SQLite's own quick check, the schema version
+    /// this build expects, and the file's size. Read-only, and it never returns a
+    /// row of user data.
+    pub fn diagnosis(&self) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let check: String = c.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let migrations: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+        let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let page_size: i64 = c.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        Ok(json!({"quickCheck":check,"schemaVersion":version,"schemaMigrations":migrations,"sizeBytes":pages*page_size}))
     }
 
     /// The assignment whose turn this was, if any.
@@ -5844,11 +5927,20 @@ impl Storage {
         detail: Option<&str>,
         choices: &[String],
         raw: &Value,
+        marks: &Value,
     ) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
         if !exists { return Ok(()); }
-        let data = json!({"id":id,"sessionId":session,"title":title,"detail":detail,"choices":choices,"status":"pending","raw":raw});
+        let mut data = json!({"id":id,"sessionId":session,"title":title,"detail":detail,"choices":choices,"status":"pending","raw":raw});
+        // The daemon's own reading of the request travels with the card: the
+        // normalized kind and exact target a remembered rule would use, whether
+        // it may be remembered at all, and the sentence that rule carries. The
+        // snapshot and `permission.requested` both read them back, so the two
+        // surfaces can never disagree about what "Always allow" would save.
+        if let (Some(target), Some(extra)) = (data.as_object_mut(), marks.as_object()) {
+            for (key, value) in extra { target.insert(key.clone(), value.clone()); }
+        }
         c.execute("INSERT INTO permission_requests(id,session_id,provider_request_id,status,data) VALUES(?1,?2,?3,'pending',?4)",params![id,session,provider_id,data.to_string()])?;
         Ok(())
     }
@@ -5908,7 +6000,7 @@ impl Storage {
         Ok(())
     }
     pub fn resolve_permission_policy(&self,id:&str,resolved_by:&str,choice:&str)->Result<(),StorageError>{
-        if !["policy:auto","policy:bypass","policy:automation"].contains(&resolved_by){return Err(StorageError::InvalidAgent)}
+        if !["policy:auto","policy:bypass","policy:automation"].contains(&resolved_by) && !resolved_by.starts_with("policy:rule:") {return Err(StorageError::InvalidAgent)}
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         let changed=c.execute("UPDATE permission_requests SET status='resolved',resolved_by=?2,data=json_set(data,'$.status','resolved','$.choice',?3,'$.resolvedBy',?2) WHERE id=?1 AND status='resolving'",params![id,resolved_by,choice])?;
         if changed!=1{return Err(StorageError::AgentConflict)} Ok(())
@@ -5917,6 +6009,101 @@ impl Storage {
         if ok {self.resolve_permission_policy(id,resolved_by,choice)} else {self.finish_permission_reply(id,false)}
     }
     pub fn permission_resolved_by(&self,id:&str)->Result<Option<String>,StorageError>{let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;Ok(c.query_row("SELECT resolved_by FROM permission_requests WHERE id=?1",[id],|r|r.get(0)).optional()?.flatten())}
+    // ── "Always allow" approval rules ──────────────────────────────────────
+    /// One remembered allow: the bot, the normalized permission kind and the
+    /// exact target are the key, so saving the same rule twice keeps one row.
+    pub fn permission_rule_create(&self, agent_id: &str, kind: &str, match_key: &str, label: &str) -> Result<Value, StorageError> {
+        if agent_id.is_empty() || kind.is_empty() || match_key.is_empty() || label.trim().is_empty() { return Err(StorageError::InvalidAgent); }
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1)", [agent_id], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        let id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO permission_rules(id,agent_id,kind,match_key,label,created_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(agent_id,kind,match_key) DO UPDATE SET label=excluded.label",
+            params![id, agent_id, kind, match_key, label, task_stamp()],
+        )?;
+        let raw: String = tx.query_row(
+            &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3"),
+            params![agent_id, kind, match_key], |r| r.get(0),
+        )?;
+        tx.commit()?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+    /// Every rule, newest first: all of them, or one bot's.
+    pub fn permission_rules(&self, agent_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        match agent_id.filter(|id| !id.is_empty()) {
+            Some(id) => query_jsons(&c, &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 ORDER BY created_at DESC,rowid DESC"), id),
+            None => query_jsons(&c, &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules ORDER BY created_at DESC,rowid DESC"), ""),
+        }
+    }
+    /// The rule one request matches, so the permission arm can answer it without
+    /// the owner: the bot, the kind and the exact target must all agree.
+    pub fn permission_rule_find(&self, agent_id: &str, kind: &str, match_key: &str) -> Result<Option<Value>, StorageError> {
+        if agent_id.is_empty() || kind.is_empty() || match_key.is_empty() { return Ok(None); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(
+            &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3"),
+            params![agent_id, kind, match_key], |r| r.get(0),
+        ).optional()?;
+        Ok(match raw { Some(raw) => Some(serde_json::from_str(&raw)?), None => None })
+    }
+    pub fn permission_rule_get(&self, id: &str) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let raw: Option<String> = c.query_row(&format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE id=?1"), [id], |r| r.get(0)).optional()?;
+        Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
+    }
+    /// Removes one rule; false when it was already gone.
+    pub fn permission_rule_delete(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("DELETE FROM permission_rules WHERE id=?1", [id])? == 1)
+    }
+    // ── Durable team delivery queue ────────────────────────────────────────
+    /// Appends one waiting delivery and returns its row id, which the in-memory
+    /// queue keeps so the row is removed the moment the delivery leaves. `front`
+    /// puts it before everything else in its session with no notice (a refused
+    /// retry), `false` behind them (a first arrival).
+    pub fn team_queue_add(&self, session_id: &str, text: &str, meta: &Value, depth: u32, front: bool) -> Result<String, StorageError> {
+        if session_id.is_empty() || text.trim().is_empty() { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session_id], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        let edge: i64 = if front {
+            c.query_row("SELECT COALESCE(MIN(position),0)-1 FROM team_queue WHERE session_id=?1", [session_id], |r| r.get(0))?
+        } else {
+            c.query_row("SELECT COALESCE(MAX(position),0)+1 FROM team_queue WHERE session_id=?1", [session_id], |r| r.get(0))?
+        };
+        let id = Uuid::new_v4().to_string();
+        c.execute(
+            "INSERT INTO team_queue(id,session_id,position,text,meta_json,depth,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![id, session_id, edge, text, meta.to_string(), depth as i64, task_stamp()],
+        )?;
+        Ok(id)
+    }
+    /// Every waiting delivery, for one session or for all of them, in the order
+    /// they will be offered: `position`, front first.
+    pub fn team_queue_rows(&self, session_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let sql = "SELECT json_object('id',id,'sessionId',session_id,'position',position,'text',text,'meta',json(meta_json),'depth',depth,'createdAt',created_at) FROM team_queue";
+        match session_id.filter(|id| !id.is_empty()) {
+            Some(id) => query_jsons(&c, &format!("{sql} WHERE session_id=?1 ORDER BY position,rowid"), id),
+            None => query_jsons(&c, &format!("{sql} ORDER BY session_id,position,rowid"), ""),
+        }
+    }
+    /// Removes one waiting delivery: it left the queue, was cancelled, or its
+    /// session is gone. False when it was already removed.
+    pub fn team_queue_remove(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("DELETE FROM team_queue WHERE id=?1", [id])? == 1)
+    }
+    /// Drops every waiting delivery of one conversation, used when a session is
+    /// deleted rather than archived.
+    pub fn team_queue_clear_session(&self, session_id: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("DELETE FROM team_queue WHERE session_id=?1", [session_id])?;
+        Ok(())
+    }
     pub fn default_approval_mode(&self)->Result<String,StorageError>{
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         let raw:String=c.query_row("SELECT value FROM settings WHERE key='permissions.default_mode'",[],|r|r.get(0)).optional()?.unwrap_or("\"ask\"".into());
@@ -6294,7 +6481,7 @@ impl Storage {
         }
         let permissions = query_jsons(
             c,
-            "SELECT json_object('id',p.id,'sessionId',p.session_id,'runtimeId',s.runtime_id,'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices'),'kind',json_extract(p.data,'$.kind'),'questions',json_extract(p.data,'$.questions'),'proposal',json_extract(p.data,'$.proposal'),'status',p.status,'expiresAt',p.expires_at) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 ORDER BY p.rowid",
+            "SELECT json_object('id',p.id,'sessionId',p.session_id,'runtimeId',s.runtime_id,'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices'),'kind',json_extract(p.data,'$.kind'),'questions',json_extract(p.data,'$.questions'),'proposal',json_extract(p.data,'$.proposal'),'status',p.status,'expiresAt',p.expires_at,'rememberable',json(CASE WHEN json_extract(p.data,'$.rememberable')=1 THEN 'true' ELSE 'false' END),'rememberLabel',json_extract(p.data,'$.rememberLabel')) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 ORDER BY p.rowid",
             "",
         )?;
         let usage = self.usage_rows_locked(c)?;
@@ -7727,7 +7914,7 @@ mod tests {
             assert_eq!(db.append_message("s-controls", "late-turn", "assistant", "late output").unwrap(), Value::Null);
             assert_eq!(db.upsert_tool("s-controls", "late-tool", "command", "late", "completed", &json!({})).unwrap(), Value::Null);
             db.insert_file("s-controls", "late-file", &json!({})).unwrap();
-            db.insert_permission("late-permission", "s-controls", "late-request", "late", None, &[], &json!({})).unwrap();
+            db.insert_permission("late-permission", "s-controls", "late-request", "late", None, &[], &json!({}), &json!({})).unwrap();
             db.insert_usage(&json!({"id":"late-usage","runtimeId":"rt-controls","sessionId":"s-controls","provider":"codex","timestamp":"now","source":"stream","raw":{}})).unwrap();
             let c = db.conn.lock().unwrap();
             for (table, column) in [("sessions", "id"), ("messages", "session_id"), ("turns", "session_id"), ("tool_calls", "session_id"), ("file_changes", "session_id"), ("permission_requests", "session_id"), ("usage_events", "session_id"), ("exec_snapshots", "session_id")] {
@@ -7984,7 +8171,7 @@ mod tests {
     fn migration_3_to_4_preserves_rows_seeds_default_and_is_idempotent(){
         let dir=std::env::temp_dir().join(format!("bloblex-v4-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");
         let agent_id;
-        {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-v4","provider":"codex"})).unwrap();let (agent,_)=db.agent_create(&json!({"name":"Existing","runtimeId":"rt-v4"})).unwrap();agent_id=agent["id"].as_str().unwrap().to_owned();db.create_session_for_agent("session-v4","rt-v4","codex","C:/project","Existing",Some(&agent_id)).unwrap();db.insert_permission("perm-v4","session-v4","request-v4","Read file",None,&["allow".into(),"deny".into()],&json!({"toolCall":{"kind":"read"},"path":"README.md"})).unwrap();}
+        {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-v4","provider":"codex"})).unwrap();let (agent,_)=db.agent_create(&json!({"name":"Existing","runtimeId":"rt-v4"})).unwrap();agent_id=agent["id"].as_str().unwrap().to_owned();db.create_session_for_agent("session-v4","rt-v4","codex","C:/project","Existing",Some(&agent_id)).unwrap();db.insert_permission("perm-v4","session-v4","request-v4","Read file",None,&["allow".into(),"deny".into()],&json!({"toolCall":{"kind":"read"},"path":"README.md"}),&json!({})).unwrap();}
         {let c=Connection::open(&path).unwrap();remove_session_controls_migration(&c);c.execute_batch("DELETE FROM schema_migrations WHERE version=5; PRAGMA user_version=4; ALTER TABLE turns DROP COLUMN failure_class; ALTER TABLE turns DROP COLUMN started_at; DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; ALTER TABLE agents DROP COLUMN approval_mode; ALTER TABLE permission_requests DROP COLUMN resolved_by; DELETE FROM settings WHERE key='permissions.default_mode';").unwrap();}
         {let db=Storage::open(&path).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");let agent=db.agent_get(&agent_id).unwrap();assert!(agent["approvalMode"].is_null());assert_eq!(agent["effectiveApprovalMode"],"ask");let c=Connection::open(&path).unwrap();assert_eq!(c.query_row("SELECT status FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,String>(0)).unwrap(),"pending");assert!(c.query_row("SELECT resolved_by FROM permission_requests WHERE id='perm-v4'",[],|r|r.get::<_,Option<String>>(0)).unwrap().is_none());assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),12);}
         let backups=fs::read_dir(dir.join("backups")).unwrap().count();drop(Storage::open(&path).unwrap());assert_eq!(fs::read_dir(dir.join("backups")).unwrap().count(),backups);
@@ -7992,7 +8179,7 @@ mod tests {
     }
     #[test]
     fn automatic_permission_resolution_is_conditional_and_persists_policy_source(){
-        let db=Storage::open_in_memory().unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");assert!(matches!(db.set_setting("permissions.default_mode",&json!("bypass")),Err(StorageError::InvalidAgent)));db.upsert_runtime(&json!({"id":"rt-policy","provider":"codex"})).unwrap();db.create_session_for_agent("s-policy","rt-policy","codex",".","Policy",None).unwrap();db.insert_permission("p-policy","s-policy","provider-request","Check",None,&["allow".into(),"deny".into()],&json!({})).unwrap();assert_eq!(db.begin_permission_reply("p-policy","allow").unwrap().unwrap().1,"provider-request");db.finish_permission_policy_reply("p-policy",true,"policy:auto","allow").unwrap();assert_eq!(db.permission_resolved_by("p-policy").unwrap().as_deref(),Some("policy:auto"));assert!(db.begin_permission_reply("p-policy","allow").unwrap().is_none());
+        let db=Storage::open_in_memory().unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");assert!(matches!(db.set_setting("permissions.default_mode",&json!("bypass")),Err(StorageError::InvalidAgent)));db.upsert_runtime(&json!({"id":"rt-policy","provider":"codex"})).unwrap();db.create_session_for_agent("s-policy","rt-policy","codex",".","Policy",None).unwrap();db.insert_permission("p-policy","s-policy","provider-request","Check",None,&["allow".into(),"deny".into()],&json!({}),&json!({})).unwrap();assert_eq!(db.begin_permission_reply("p-policy","allow").unwrap().unwrap().1,"provider-request");db.finish_permission_policy_reply("p-policy",true,"policy:auto","allow").unwrap();assert_eq!(db.permission_resolved_by("p-policy").unwrap().as_deref(),Some("policy:auto"));assert!(db.begin_permission_reply("p-policy","allow").unwrap().is_none());
     }
     #[test]
     fn migration_5_backup_failure_keeps_v4_schema_untouched(){
@@ -8042,6 +8229,7 @@ mod tests {
             "Run command",
             Some("command"),
             &["allow_once".into(), "deny".into()],
+            &json!({}),
             &json!({}),
         )
         .unwrap();
@@ -10254,6 +10442,33 @@ mod task_ledger_tests {
             assert!(db.task_list(None, None, None, None).unwrap().is_empty());
             let created = db.task_create(&json!({"title":"First task"})).unwrap();
             assert_eq!(db.task_get(created["id"].as_str().unwrap()).unwrap()["title"], "First task");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_existing_database_without_the_rule_and_queue_tables_gains_them_on_open() {
+        let path = std::env::temp_dir().join(format!("bloblex-rules-upgrade-{}.db", Uuid::new_v4()));
+        {
+            let db = Storage::open(&path).unwrap();
+            let c = db.conn.lock().unwrap();
+            c.execute_batch("DROP TABLE permission_rules; DROP TABLE team_queue;").unwrap();
+            let present: i64 = c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('permission_rules','team_queue')", [], |r| r.get(0)).unwrap();
+            assert_eq!(present, 0, "the shape an older version left");
+        }
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-upgrade","provider":"codex"})).unwrap();
+            let agent = db.agent_create(&json!({"name":"Rules","runtimeId":"rt-upgrade"})).unwrap().0;
+            let agent_id = agent["id"].as_str().unwrap();
+            let rule = db.permission_rule_create(agent_id, "shell", "git status", "Run git status").unwrap();
+            assert_eq!(db.permission_rules(Some(agent_id)).unwrap(), vec![rule.clone()], "an older database gains the table and keeps a rule");
+            assert_eq!(db.permission_rule_find(agent_id, "shell", "git status").unwrap().unwrap()["id"], rule["id"]);
+            db.create_session("upgrade-session", "rt-upgrade", "codex", ".", "Upgrade").unwrap();
+            let id = db.team_queue_add("upgrade-session", "Hello", &json!({"kind":"blob_message"}), 1, false).unwrap();
+            assert_eq!(db.team_queue_rows(Some("upgrade-session")).unwrap().len(), 1);
+            assert!(db.team_queue_remove(&id).unwrap());
+            assert!(db.team_queue_rows(Some("upgrade-session")).unwrap().is_empty());
         }
         let _ = std::fs::remove_file(&path);
     }

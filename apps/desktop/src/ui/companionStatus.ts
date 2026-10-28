@@ -2,6 +2,12 @@ import { usageLimitLabel } from './errorCopy'
 import type { BlobMood } from '../blob/BlobCanvas'
 import type { Runtime, Session } from '../types'
 import { presentedSessionState } from './sessionOutcome'
+import { doingNowLabel } from './doingNow'
+import { lastSessionActivity } from './sessionActivity'
+import { providerBrand } from './providerBrand'
+
+/** A working turn that has heard nothing for this long says it is waiting on the coding agent. */
+export const SILENT_AFTER_MS = 60_000
 
 /** Short labels for the compact bar, one per resting/attention mood. The full
  *  status line stays descriptive; the island bar keeps to these words. */
@@ -54,8 +60,11 @@ export function deriveCompanionStatus(input: { connected: boolean; runtime?: Run
   const activeTurnId = activeTurn?.id ?? session?.turnId
   const belongsToActiveTurn = (item: Record<string, unknown>) => !activeTurnId || item.turnId === activeTurnId
   const latestTool = [...(session?.tools ?? [])].reverse().find((item) => belongsToActiveTurn(item) && ['running', 'pending', 'started'].includes(String(item.state ?? '').toLowerCase()))
-  if (latestTool) {
-    return { mood: 'tool_activity', label: typeof latestTool.title === 'string' ? latestTool.title : 'Tool activity' }
+  if (latestTool) return { mood: 'tool_activity', label: doingNowLabel(latestTool) }
+  // No tool is running and nothing has arrived for a while: say who it is waiting on.
+  if (['working', 'starting'].includes(session?.state ?? '') && session?.id) {
+    const heard = lastSessionActivity(session.id) ?? Date.parse(String(session.updatedAt ?? ''))
+    if (Number.isFinite(heard) && (input.now ?? Date.now()) - heard >= SILENT_AFTER_MS) return { mood: 'working', label: `Waiting for ${providerBrand(runtime.provider ?? '').name}…` }
   }
   const latestMessage = session?.messages?.at(-1)
   const latestFile = [...(session?.files ?? [])].reverse().find(belongsToActiveTurn)

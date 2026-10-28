@@ -48,3 +48,21 @@ describe('ApprovalCard keyboard choices', () => {
     expect(reply).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('ApprovalCard Always allow', () => {
+  it('offers Always allow between Allow once and Deny only when the daemon marks the request rememberable', () => {
+    const reply = vi.fn()
+    const permission = { id: 'p', choices: ['allow_once', 'deny'], rememberable: true, rememberLabel: 'Run `npm test`' }
+    mount(<ApprovalCard permission={permission} onReply={reply} focusOnMount={false} />)
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.permission-actions button')]
+    expect(buttons.map((button) => button.textContent?.replace(/Enter|Esc/, '').trim())).toEqual(['Allow once', 'Always allow', 'Deny'])
+    expect(buttons[1]!.title).toContain('Run `npm test`')
+    act(() => buttons[1]!.click())
+    expect(reply).toHaveBeenLastCalledWith('allow_once', { remember: true })
+    act(() => buttons[0]!.click())
+    expect(reply).toHaveBeenLastCalledWith('allow_once')
+
+    act(() => root.render(<ApprovalCard permission={{ id: 'p2', choices: ['allow_once', 'deny'] }} onReply={reply} focusOnMount={false} />))
+    expect([...host.querySelectorAll('.permission-actions button')].some((button) => button.textContent === 'Always allow')).toBe(false)
+  })
+})

@@ -18,7 +18,7 @@
 import { parsePermissionsPolicy, type PermissionsPolicy } from '../approvalContract'
 import type { UsageAnalyticsRequest } from '../analyticsTypes'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from '../executionContract'
-import type { DaemonEvent, JsonRecord, Snapshot, WindowBackdrop } from '../types'
+import type { DaemonEvent, DaemonSupervisor, JsonRecord, Snapshot, WindowBackdrop } from '../types'
 import { normalizeAnalytics } from '../ui/analyticsFormat'
 import type { SettingsPageName } from '../ui/settingsIndex'
 import type { UpdateCheckResult, UpdateInfo, UpdatePhaseState, UpdatePreferences, UpdateProgress, UpdatesState } from '../updatesContract'
@@ -188,6 +188,12 @@ export async function setCompanionSizePreset(preset: 'large' | 'normal' | 'defau
 export async function quitBloblex(): Promise<void> { /* a device cannot quit the host */ }
 export async function startDaemonEventStream(): Promise<void> { /* the socket opens with the first listener */ }
 export async function ensureDaemon(): Promise<void> { /* the host runs the daemon */ }
+
+/** The daemon supervisor lives in the desktop shell; a phone sees it as running. */
+const REMOTE_SUPERVISOR: DaemonSupervisor = { state: 'running', attempt: 0, nextRetryMs: null, lastExitCode: null }
+export async function listenForDaemonSupervisor(_handler: (state: DaemonSupervisor) => void): Promise<UnlistenFn> { return () => undefined }
+export async function daemonSupervisorState(): Promise<DaemonSupervisor> { return REMOTE_SUPERVISOR }
+export async function restartDaemonNow(): Promise<DaemonSupervisor> { return REMOTE_SUPERVISOR }
 export async function setApprovalBadge(count: number): Promise<void> { void count }
 
 /** Empty values where a caller expects a list or a nullable display name. */

@@ -17,6 +17,7 @@ use std::{
     sync::Mutex as StdMutex,
 };
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 /// Longest chain of blob-to-blob hops one user request may start.
 const MAX_DEPTH: u32 = 6;
@@ -38,7 +39,7 @@ pub struct Team {
 }
 
 #[derive(Clone)]
-struct Queued { text: String, meta: Value, depth: u32 }
+struct Queued { id: String, text: String, meta: Value, depth: u32 }
 
 /// Whether a waiting item is the same delivery: one assignment's brief, one
 /// assignment's reply, or one request's update, is never queued twice. An update
@@ -53,11 +54,10 @@ fn same_delivery(item: &Queued, meta: &Value) -> bool {
 
 /// Adds one delivery to a session's queue, at the back or at the front, unless
 /// that same delivery already waits there. Returns `(pushed, was_empty)`.
-fn enqueue(queues: &mut HashMap<String, VecDeque<Queued>>, session_id: &str, text: String, meta: Value, depth: u32, front: bool) -> (bool, bool) {
+fn enqueue(queues: &mut HashMap<String, VecDeque<Queued>>, session_id: &str, item: Queued, front: bool) -> (bool, bool) {
     let queue = queues.entry(session_id.to_owned()).or_default();
     let was_empty = queue.is_empty();
-    if queue.iter().any(|item| same_delivery(item, &meta)) { return (false, was_empty); }
-    let item = Queued { text, meta, depth };
+    if queue.iter().any(|existing| same_delivery(existing, &item.meta)) { return (false, was_empty); }
     if front { queue.push_front(item); } else { queue.push_back(item); }
     (true, was_empty)
 }
@@ -99,44 +99,76 @@ impl Team {
     /// transcript, and this is the same delivery continuing. A brief that is
     /// already waiting (a row that was both persisted and still in memory) is
     /// not added a second time.
-    pub(crate) async fn restore_queued(&self, session_id: &str, text: String, meta: Value, depth: u32) {
-        enqueue(&mut *self.queued.lock().await, session_id, text, meta, depth, false);
+    pub(crate) async fn restore_queued(&self, st: &AppState, session_id: &str, text: String, meta: Value, depth: u32) {
+        self.push_queued(st, session_id, text, meta, depth, false).await;
+    }
+    /// Wave 12, part B: the queue is durable, so boot offers every message that was
+    /// still waiting for a busy teammate. A row whose conversation is gone is
+    /// dropped (nothing could ever receive it); a row whose conversation is
+    /// archived stays in storage and is not offered, so restoring it later still
+    /// finds its queue.
+    pub(crate) async fn restore_persisted_queue(&self, st: &AppState) {
+        for row in st.db.team_queue_rows(None).unwrap_or_default() {
+            let (Some(id), Some(session)) = (row["id"].as_str(), row["sessionId"].as_str()) else { continue };
+            let Some(text) = row["text"].as_str().filter(|text| !text.is_empty()) else { let _ = st.db.team_queue_remove(id); continue; };
+            match st.db.session_brief(session) {
+                Ok(brief) if brief["archived"] != true => {}
+                Ok(_) => continue,
+                Err(_) => { let _ = st.db.team_queue_remove(id); continue; }
+            }
+            let meta = row["meta"].clone();
+            let depth = row["depth"].as_u64().unwrap_or(0) as u32;
+            let item = Queued { id: id.to_owned(), text: text.to_owned(), meta, depth };
+            enqueue(&mut *self.queued.lock().await, session, item, false);
+        }
+    }
+    /// Writes one delivery to the queue table and puts it in memory, so a restart
+    /// can still offer it. Dedupe comes first: the same brief is never stored or
+    /// queued twice. A failed write leaves the delivery in memory only, exactly as
+    /// the queue behaved before it was durable.
+    async fn push_queued(&self, st: &AppState, session_id: &str, text: String, meta: Value, depth: u32, front: bool) -> (bool, bool) {
+        let mut queues = self.queued.lock().await;
+        let was_empty = queues.get(session_id).is_none_or(VecDeque::is_empty);
+        if queues.get(session_id).is_some_and(|queue| queue.iter().any(|item| same_delivery(item, &meta))) { return (false, was_empty); }
+        let id = st.db.team_queue_add(session_id, &text, &meta, depth, front).unwrap_or_else(|_| Uuid::new_v4().to_string());
+        enqueue(&mut queues, session_id, Queued { id, text, meta, depth }, front)
     }
     /// Takes the waiting brief of one assignment out of a session's queue, so a
     /// cancelled assignment is never delivered. Returns how many items went.
-    pub(crate) async fn cancel_queued(&self, session_id: &str, delegation_id: &str) -> usize {
-        let mut queues = self.queued.lock().await;
-        let Some(queue) = queues.get_mut(session_id) else { return 0 };
-        let before = queue.len();
-        queue.retain(|item| item.meta["delegationId"].as_str() != Some(delegation_id));
-        before - queue.len()
+    pub(crate) async fn cancel_queued(&self, st: &AppState, session_id: &str, delegation_id: &str) -> usize {
+        self.retain_queued(st, session_id, |item| item.meta["delegationId"].as_str() != Some(delegation_id)).await
     }
     /// Takes the wakes of one assignment out of a session's queue (Lane V1): once
     /// the assignment is over its pending wake is dropped, and a notice still
     /// waiting in memory must not go out afterwards. Other items of the same
     /// assignment, and every other assignment's, are left where they are.
-    pub(crate) async fn cancel_queued_wakes(&self, session_id: &str, delegation_id: &str) -> usize {
-        let mut queues = self.queued.lock().await;
-        let Some(queue) = queues.get_mut(session_id) else { return 0 };
-        let before = queue.len();
-        queue.retain(|item| !(item.meta["kind"] == "blob_update" && item.meta["delegationId"].as_str() == Some(delegation_id)));
-        before - queue.len()
+    pub(crate) async fn cancel_queued_wakes(&self, st: &AppState, session_id: &str, delegation_id: &str) -> usize {
+        self.retain_queued(st, session_id, |item| !(item.meta["kind"] == "blob_update" && item.meta["delegationId"].as_str() == Some(delegation_id))).await
     }
     /// Takes one request's wake out of a session's queue, leaving a newer request's
     /// wake on the same assignment alone: the request it announced was answered or
     /// dismissed, so that notice is no longer meaningful.
-    pub(crate) async fn cancel_queued_wake(&self, session_id: &str, delegation_id: &str, request_id: &str) -> usize {
+    pub(crate) async fn cancel_queued_wake(&self, st: &AppState, session_id: &str, delegation_id: &str, request_id: &str) -> usize {
+        self.retain_queued(st, session_id, |item| !(item.meta["kind"] == "blob_update"
+            && item.meta["delegationId"].as_str() == Some(delegation_id)
+            && item.meta["requestId"].as_str() == Some(request_id))).await
+    }
+    /// Keeps the items `keep` accepts and removes the rest from memory and from the
+    /// queue table, so a cancelled delivery can never come back after a restart.
+    async fn retain_queued(&self, st: &AppState, session_id: &str, keep: impl Fn(&Queued) -> bool) -> usize {
         let mut queues = self.queued.lock().await;
         let Some(queue) = queues.get_mut(session_id) else { return 0 };
         let before = queue.len();
-        queue.retain(|item| !(item.meta["kind"] == "blob_update"
-            && item.meta["delegationId"].as_str() == Some(delegation_id)
-            && item.meta["requestId"].as_str() == Some(request_id)));
-        before - queue.len()
+        let mut removed = Vec::new();
+        queue.retain(|item| { if keep(item) { true } else { removed.push(item.id.clone()); false } });
+        let count = before - queue.len();
+        drop(queues);
+        for id in removed { let _ = st.db.team_queue_remove(&id); }
+        count
     }
     #[cfg(test)]
     pub(crate) async fn enqueue_for_test(&self, session_id: &str, text: &str) {
-        self.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { text: text.to_owned(), meta: json!({}), depth: 0 });
+        self.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { id: Uuid::new_v4().to_string(), text: text.to_owned(), meta: json!({}), depth: 0 });
     }
     #[cfg(test)]
     pub(crate) async fn queued_len(&self, session_id: &str) -> usize {
@@ -146,7 +178,7 @@ impl Team {
     /// notice (`kind: "blob_message"`) or the silent reply path (`blob_reply`).
     #[cfg(test)]
     pub(crate) async fn enqueue_meta_for_test(&self, session_id: &str, text: &str, meta: Value) {
-        self.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { text: text.to_owned(), meta, depth: 0 });
+        self.queued.lock().await.entry(session_id.to_owned()).or_default().push_back(Queued { id: Uuid::new_v4().to_string(), text: text.to_owned(), meta, depth: 0 });
     }
     /// The texts currently queued for a session, front first, so a test can prove
     /// a refused retry did not reorder the queue.
@@ -363,6 +395,11 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         lines.push("Read details with your read tools, and make consequential changes an approval card: creating or updating projects and bots, assigning a task, opening a conversation and changing a permission are proposed and wait for the owner. A message to a teammate is not consequential: `message_blob` is sent at once with no approval, so use it for ordinary delegation and only use `assign_task` when the user wants the work tracked as a task. Fill the brief or message yourself, and for a task also doneGoal and reportBack; never ask the user to fill a task form. Use a new topic for parallel work or conversation to follow up. Locked bots refuse settings changes; never propose Full access. After delegating, say briefly who will do what and end your turn. Approval outcomes are recorded here; teammate replies arrive later and wake you to report back.".into());
         lines.push("Your notes about the user and your playbook are yours across model changes: keep the profile current with `remember_about_user` (read it with `recall_about_user`), and propose playbook edits with `update_playbook`. Never store secrets in either.".to_owned());
         lines.push("A message that starts with [Update from NAME] means a teammate is waiting for the user to approve or answer something in that teammate's own conversation. Tell the user briefly which teammate and what is being asked, point them to that conversation, and do not try to answer for them, approve anything, or send the task again.".to_owned());
+        // Wave 12, part D: the relay carries the assignment's own "Done when" line,
+        // so the Manager checks instead of trusting the prose, and says nothing
+        // when there is nothing to say.
+        lines.push("Before you report a finished assignment, compare the reply with its 'Done when' line and start your report with 'Checked:' or 'Not done yet:' and why.".to_owned());
+        lines.push("When nothing changed and nothing needs the user, say nothing or one short line.".to_owned());
     } else {
         match st.db.manager_agent().ok().flatten() {
             Some(manager) => lines.push(format!("You cannot create projects or {nouns}; the Manager does that. If the user asks you to, say so briefly and tag the Manager as @{} so the user can ask them.", agent_name(&manager))),
@@ -383,6 +420,7 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         lines.push(format!("This is a side conversation. Messages here come from {peer}, another {noun}, not from the user. Do what {peer} asks and answer them directly; your final message each turn is delivered back to {peer} automatically. Keep it focused: results, evidence and open questions."));
         if let Some(topic) = link["topic"].as_str().filter(|topic| !topic.trim().is_empty()) { lines.push(format!("Topic of this conversation: {topic}.")); }
         lines.push("If you need a decision or information only the user can give, use the ask_user tool, then end your turn. Your Manager is told you are waiting, but only the user can answer; their answer arrives as your next message. Do not ask the Manager to answer for the user.".into());
+        lines.push("If you were asked to check something and there is nothing to report, reply exactly `(pass)`.".into());
     }
     format!("<bloblex_team>\n{}\n</bloblex_team>", lines.join("\n"))
 }
@@ -426,7 +464,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
     let mut list: Vec<Value> = vec![
         json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the Manager.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}}),
-        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Use it whenever the user asks you to message, ask or hand work to a teammate: it is sent at once, with no approval card. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
+        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Use it whenever the user asks you to message, ask or hand work to a teammate: it is sent at once, with no approval card. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"doneGoal":{"type":"string","description":"What must be true for the work to count as done. It is relayed back with the reply as a 'Done when' line (optional)."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
         json!({"name":"schedule_task","description":format!("Propose a scheduled task for your {noun}. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":format!("List this {noun}'s scheduled tasks, whether each is enabled, and when it next runs."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
@@ -864,7 +902,7 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
         "originSessionId": session_id, "originTurnId": &origin_turn, "sideSessionId": &side,
         "fromAgentId": &from_id, "targetAgentId": &target_id, "topic": &title, "briefPreview": &preview,
         "workspacePath": &workspace_path, "worktree": &worktree, "deliveryText": &message, "deliveryDepth": depth,
-        "dedupeKey": &dedupe_key, "queueReason": &queue_reason,
+        "dedupeKey": &dedupe_key, "queueReason": &queue_reason, "doneGoal": args["doneGoal"],
     })).await;
     // A concurrent replay lost the race to record: its row is the assignment, and
     // nothing is announced or delivered here.
@@ -1073,8 +1111,7 @@ async fn queue_delivery(st: &AppState, session_id: &str, text: String, meta: Val
     // delivery retried as slots come and go does not stack "Waiting for" lines.
     // The same brief is never queued twice, however often it is offered.
     let (pushed, was_empty) = {
-        let mut queues = st.team.queued.lock().await;
-        enqueue(&mut queues, session_id, text, meta, depth, false)
+        st.team.push_queued(st, session_id, text, meta, depth, false).await
     };
     if !pushed || !was_empty || !notify { return; }
     let name = st.db.session_detail(session_id).ok()
@@ -1089,7 +1126,7 @@ async fn queue_delivery(st: &AppState, session_id: &str, text: String, meta: Val
 /// (the global limit is held by another conversation), so re-delivering it must
 /// not move it behind messages that arrived after it.
 async fn requeue_front(st: &AppState, session_id: &str, text: String, meta: Value, depth: u32) {
-    enqueue(&mut *st.team.queued.lock().await, session_id, text, meta, depth, true);
+    st.team.push_queued(st, session_id, text, meta, depth, true).await;
 }
 
 /// Whether a delivery that has reached the front belongs to an assignment that is
@@ -1128,6 +1165,9 @@ pub(crate) async fn drain_queued_deliveries(st: &AppState, preferred: Option<&st
         loop {
             let next = st.team.queued.lock().await.get_mut(&sid).and_then(VecDeque::pop_front);
             let Some(next) = next else { break };
+            // The durable row goes the moment the delivery leaves the queue, so a
+            // restart can never offer something that already went out.
+            let _ = st.db.team_queue_remove(&next.id);
             if stopped_delegation(st, &next.meta) {
                 // A wake whose assignment ended while it waited is recorded as
                 // dropped, so a later boot does not offer it again.
@@ -1173,6 +1213,17 @@ pub(crate) fn reply_text(outcome_kind: &str, reply_or_detail: Option<&str>) -> S
     }
 }
 
+/// The body of one relay: the reply itself, then the assignment's own "Done when"
+/// line when it has one (wave 12, part D), so the Manager compares the result with
+/// what was asked instead of guessing. Shared by the live relay, a stop and the
+/// startup re-offer, so all three read the same.
+pub(crate) fn relay_body(reply: &str, done_goal: Option<&str>) -> String {
+    match done_goal.map(str::trim).filter(|goal| !goal.is_empty()) {
+        Some(goal) => format!("{reply}\nDone when: {goal}"),
+        None => reply.to_owned(),
+    }
+}
+
 /// Runs after every turn: relays side-conversation replies and drains queues.
 pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome: &str, detail: Option<String>) {
     let st = st.clone();
@@ -1191,7 +1242,8 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                 // A turn that ended on a question only the owner can answer has
                 // not finished the assignment: nothing is relayed, and the
                 // assignment keeps running until the answer's next turn ends it.
-                let origin = (!matches!(end, crate::delegations::TurnEnd::Waiting))
+                // A silent `(pass)` assignment is finished but owes no reply either.
+                let origin = (!matches!(end, crate::delegations::TurnEnd::Waiting | crate::delegations::TurnEnd::Silent))
                     .then(|| link["originSessionId"].as_str().filter(|origin| st.db.session_exists(origin).unwrap_or(false)))
                     .flatten();
                 if let Some(origin) = origin {
@@ -1200,26 +1252,20 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                     // that finds it empty sends. A turn no assignment tracks (or
                     // one an automatic retry continues) has nothing to claim.
                     let owed: Option<&Value> = match &end {
-                        crate::delegations::TurnEnd::Ungoverned | crate::delegations::TurnEnd::Waiting => None,
+                        crate::delegations::TurnEnd::Ungoverned | crate::delegations::TurnEnd::Waiting | crate::delegations::TurnEnd::Silent => None,
                         crate::delegations::TurnEnd::Owed(row) => Some(row),
                     };
                     if owed.is_none_or(|row| crate::delegations::claim_reply(&st, row)) {
                         let target_id = row["agentId"].as_str().unwrap_or("").to_owned();
                         let name = st.db.agent_get(&target_id).map(|a| agent_name(&a)).unwrap_or_else(|_| "Teammate".into());
-                        let reply = {
-                            let kind = match outcome.as_str() {
-                                "turn.completed" => "completed",
-                                "turn.cancelled" => "cancelled",
-                                _ => "failed",
-                            };
-                            let source = match kind {
-                                "completed" => turn.as_deref().and_then(|turn| st.db.turn_reply(&session_id, turn).ok().flatten()),
-                                "cancelled" => None,
-                                _ => detail.clone(),
-                            };
-                            reply_text(kind, source.as_deref())
+                        let kind = match outcome.as_str() { "turn.completed" => "completed", "turn.cancelled" => "cancelled", _ => "failed" };
+                        let source = match kind {
+                            "completed" => turn.as_deref().and_then(|turn| st.db.turn_reply(&session_id, turn).ok().flatten()),
+                            "cancelled" => None,
+                            _ => detail.clone(),
                         };
-                        let text = format!("[Reply from {name}]\n{reply}");
+                        let reply = reply_text(kind, source.as_deref());
+                        let text = format!("[Reply from {name}]\n{}", relay_body(&reply, owed.and_then(|row| row["doneGoal"].as_str())));
                         let delegation = owed.and_then(|row| row["id"].as_str());
                         let delivery = deliver_reply(&st, origin, &session_id, &target_id, &name, text, delegation, depth).await;
                         // A reply still waiting in the queue keeps `pending`, so the

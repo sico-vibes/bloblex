@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { UsageAnalyticsRequest } from './analyticsTypes'
 import { parsePermissionsPolicy, type PermissionsPolicy } from './approvalContract'
 import { parseCapabilities, parseExecSnapshot, parseModelCatalog } from './executionContract'
-import type { DaemonEvent, JsonRecord, Snapshot, WindowBackdrop } from './types'
+import type { DaemonEvent, DaemonSupervisor, JsonRecord, Snapshot, WindowBackdrop } from './types'
 import { normalizeAnalytics } from './ui/analyticsFormat'
 import { settingsPageFromEvent, type SettingsPageName } from './ui/settingsIndex'
 import {
@@ -288,6 +288,27 @@ export async function startDaemonEventStream(): Promise<void> {
 
 export async function ensureDaemon(): Promise<void> {
   if (inDesktop) await invoke('ensure_daemon')
+}
+
+/** Outside the desktop app the daemon is never supervised here, so it reads as running. */
+const NO_SUPERVISOR: DaemonSupervisor = { state: 'running', attempt: 0, nextRetryMs: null, lastExitCode: null }
+
+/** Every change of the daemon supervisor: running, restarting, gave up. */
+export async function listenForDaemonSupervisor(handler: (state: DaemonSupervisor) => void): Promise<UnlistenFn> {
+  if (!inDesktop) return () => undefined
+  return listen<DaemonSupervisor>('daemon-supervisor', (event) => handler(event.payload))
+}
+
+/** The supervisor's current reading, or `running` outside the desktop app. */
+export async function daemonSupervisorState(): Promise<DaemonSupervisor> {
+  if (!inDesktop) return NO_SUPERVISOR
+  try { return await invoke<DaemonSupervisor>('daemon_supervisor_state') } catch { return NO_SUPERVISOR }
+}
+
+/** Restarts the daemon now, whatever the backoff was. */
+export async function restartDaemonNow(): Promise<DaemonSupervisor> {
+  if (!inDesktop) return NO_SUPERVISOR
+  return invoke<DaemonSupervisor>('daemon_restart_now')
 }
 
 export async function listenForActiveSession(handler: (sessionId: string | null) => void): Promise<UnlistenFn> {

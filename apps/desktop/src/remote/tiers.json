@@ -1008,6 +1008,27 @@
       "minTier": null,
       "why": "The per-turn change report lists file paths and diff counts from the host's repository, which the remote redaction does not reduce, so it stays on the host.",
       "params": null
+    },
+    {
+      "method": "permission.rules.list",
+      "class": "never",
+      "minTier": null,
+      "why": "Remembered approvals name the owner's own commands and project paths, so the list stays at the computer.",
+      "params": null
+    },
+    {
+      "method": "permission.rules.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "Deleting a remembered approval changes what the bot may do unattended; only the owner at the desktop may do that.",
+      "params": null
+    },
+    {
+      "method": "doctor.run",
+      "class": "never",
+      "minTier": null,
+      "why": "The Doctor reports the host's executable paths, database file and installed models, which are the owner's at the computer.",
+      "params": null
     }
   ],
   "events": {
@@ -1045,6 +1066,7 @@
     "memory.deleted": "drop",
     "permission.auto_denied": "drop",
     "permission.auto_resolved": "drop",
+    "permission.rules.changed": "drop",
     "permission.bypass_active": "drop",
     "runtime.changed": "drop",
     "session.context.reset": "drop",

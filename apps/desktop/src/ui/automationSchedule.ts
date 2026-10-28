@@ -135,6 +135,11 @@ export const RUN_STATUS_LABEL: Record<string, string> = {
   interrupted: 'Interrupted',
 }
 
+/** A failed run that changed things is never retried by the daemon: the owner decides (wave 13). */
+export function needsManualRetry(run: { status?: string; reason?: string | null } | null | undefined): boolean {
+  return !!run && (run.status === 'failed' || run.status === 'timeout') && !!run.reason?.endsWith('_after_changes')
+}
+
 export function runReasonText(reason: string | null | undefined): string {
   if (!reason) return ''
   if (reason.startsWith('late:')) {
@@ -143,6 +148,9 @@ export function runReasonText(reason: string | null | undefined): string {
   }
   switch (reason) {
     case 'still_running': return 'The previous run was still going.'
+    case 'nothing_to_report': return 'Nothing to report.'
+    case 'error_after_changes': return 'It stopped after changing things, so it was not retried on its own.'
+    case 'timeout_after_changes': return 'It ran out of time after changing things, so it was not retried on its own.'
     case 'busy': return `The ${entityNoun(themeStyle())} was busy for too long.`
     default: return ''
   }

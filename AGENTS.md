@@ -2,6 +2,10 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (28 October 2026): the Director implements
+
+Owner directive in the live session of 28 October 2026 ("close opencode background service and do the job yourself"). From Wave 13, until the owner says otherwise, the Director (Claude) writes backend and UI code itself in the main checkout; no OpenCode lane is started. It still runs every gate before committing and does not push unless asked. All other rules stand.
+
 # Amendment (27 October 2026): two looks, fewer bot arts
 
 Owner decision in the live session of 27 October 2026. It amends the looks and bot art in the 24 and 22 October amendments below.

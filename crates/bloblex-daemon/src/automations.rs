@@ -6,7 +6,9 @@
 //! row. Everything that could run unattended is fenced: approval mode is
 //! clamped to `plan`/`auto`, unclassified permissions are auto-denied,
 //! questions are dismissed, missed occurrences coalesce into one, overlaps are
-//! skipped, and three consecutive failures pause the automation visibly.
+//! skipped, and four consecutive failures pause the automation visibly. A run
+//! that failed after it changed something is never retried automatically: the
+//! owner retries it from its run history (wave 13).
 
 use crate::{derr, new_session, session_prompt_for_automation, AppState, DispatchError};
 use axum::http::StatusCode;
@@ -21,11 +23,11 @@ pub const LATE_THRESHOLD_SECS: i64 = 60;
 /// How long a due automation may wait for the concurrency limit or a live user
 /// turn before it is recorded `skipped` with reason `busy`.
 const BUSY_DEFER_SECS: i64 = 15 * 60;
-/// Retry delay after the first and second failure inside one occurrence.
-const RETRY_FIRST_SECS: i64 = 30;
-const RETRY_SECOND_SECS: i64 = 60;
+/// Retry delays after the first, second and third failure of a run that only
+/// read things (wave 13: 1, 5 and 15 minutes).
+const RETRY_DELAYS_SECS: [i64; 3] = [60, 300, 900];
 /// Consecutive failures before an automation pauses itself.
-const MAX_CONSECUTIVE_FAILURES: i64 = 3;
+const MAX_CONSECUTIVE_FAILURES: i64 = 4;
 /// Scheduler cadence.
 const TICK_SECS: u64 = 10;
 
@@ -34,9 +36,28 @@ const TICK_SECS: u64 = 10;
 #[derive(Default)]
 pub struct Automations {
     busy_since: StdMutex<HashMap<String, DateTime<Utc>>>,
+    /// Automations whose run is being started right now. The scheduler and
+    /// "Run now" both claim here first, so neither opens a second conversation
+    /// while the other is still starting the same automation.
+    starting: StdMutex<std::collections::HashSet<String>>,
+}
+
+/// Releases a start claim when the start finishes, whichever way it ends.
+pub(crate) struct StartClaim<'a> { automations: &'a Automations, id: String }
+
+impl Drop for StartClaim<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut starting) = self.automations.starting.lock() { starting.remove(&self.id); }
+    }
 }
 
 impl Automations {
+    /// The one start claim for an automation, or `None` while another start of
+    /// the same automation is still under way.
+    pub(crate) fn claim_start(&self, id: &str) -> Option<StartClaim<'_>> {
+        let mut starting = self.starting.lock().unwrap_or_else(|poison| poison.into_inner());
+        starting.insert(id.to_owned()).then(|| StartClaim { automations: self, id: id.to_owned() })
+    }
     /// Record (or refresh) the first busy moment for an automation.
     fn mark_busy(&self, id: &str, now: DateTime<Utc>) -> DateTime<Utc> {
         let mut busy = self.busy_since.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -142,6 +163,9 @@ async fn agent_has_live_user_turn(st: &AppState, agent_id: &str) -> bool {
 /// `next_run_at`. Returns the new run DTO.
 async fn start_run(st: &AppState, automation: &Value, scheduled_for: &str, advance: bool) -> Result<Value, DispatchError> {
     let automation_id = automation["id"].as_str().unwrap_or("").to_owned();
+    let Some(_claim) = st.automations.claim_start(&automation_id) else {
+        return Err(derr("conflict", "This automation is already starting.", StatusCode::CONFLICT));
+    };
     let agent_id = automation["agentId"].as_str().unwrap_or("").to_owned();
     let name = automation["name"].as_str().unwrap_or("Automation").to_owned();
     let prompt = automation["prompt"].as_str().unwrap_or("").to_owned();
@@ -195,7 +219,7 @@ async fn start_run(st: &AppState, automation: &Value, scheduled_for: &str, advan
                     // advancing past it.
                     if let Ok(run) = st.db.automation_run_insert(&run_id, &automation_id, None, "failed", Some("session_error"), Some(scheduled_for), &fmt(now_utc())) {
                         emit_run_changed(st, &run).await;
-                        account_failure(st, automation, &run).await;
+                        account_failure(st, automation, &run, false).await;
                     }
                     return Err(error);
                 }
@@ -221,15 +245,22 @@ async fn start_run(st: &AppState, automation: &Value, scheduled_for: &str, advan
     Ok(run)
 }
 
-/// Account a failure against its automation: below the threshold schedule one
-/// retry at 30 s then 60 s; on the third, disable and pause visibly.
-async fn account_failure(st: &AppState, automation: &Value, run: &Value) {
+/// Account a failure against its automation: below the threshold a run that only
+/// read things retries after 1, 5 and 15 minutes; on the fourth failure the
+/// automation disables and pauses visibly. A run that `acted` (edited files or
+/// ran commands) is not retried: it keeps its next scheduled occurrence and the
+/// owner decides whether to retry it now.
+async fn account_failure(st: &AppState, automation: &Value, run: &Value, acted: bool) {
     let id = automation["id"].as_str().unwrap_or("");
     let failures = automation["consecutiveFailures"].as_i64().unwrap_or(0) + 1;
     let updated = if failures >= MAX_CONSECUTIVE_FAILURES {
         st.db.automation_finish_failure(id, failures, None, true)
+    } else if acted {
+        let next = bloblex_storage::cron::parse_schedule(&automation["schedule"], None).ok()
+            .and_then(|schedule| bloblex_storage::cron::next_run_at(&schedule, now_utc()).ok().flatten());
+        st.db.automation_finish_failure(id, failures, next.as_deref(), false)
     } else {
-        let delay = if failures == 1 { RETRY_FIRST_SECS } else { RETRY_SECOND_SECS };
+        let delay = RETRY_DELAYS_SECS[(failures as usize - 1).min(RETRY_DELAYS_SECS.len() - 1)];
         let next = fmt(now_utc() + Duration::seconds(delay));
         st.db.automation_finish_failure(id, failures, Some(&next), false)
     };
@@ -252,7 +283,9 @@ pub async fn after_turn(st: &AppState, session_id: &str, outcome: &str) {
     let Ok(automation) = st.db.automation_get(automation_id) else { return };
     match outcome {
         "turn.completed" => {
-            if let Ok(Some(run)) = st.db.automation_run_finish(run_id, "completed", None) {
+            // A run whose whole reply is `(pass)` found nothing to report.
+            let quiet = st.db.latest_turn_reply(session_id).ok().flatten().is_some_and(|reply| reply.trim().eq_ignore_ascii_case("(pass)"));
+            if let Ok(Some(run)) = st.db.automation_run_finish(run_id, "completed", quiet.then_some("nothing_to_report")) {
                 let schedule = bloblex_storage::cron::parse_schedule(&automation["schedule"], None).ok();
                 let disable = schedule.as_ref().is_some_and(|schedule| schedule.kind == "once");
                 // A `once` automation that already ran has no next occurrence.
@@ -278,9 +311,10 @@ pub async fn after_turn(st: &AppState, session_id: &str, outcome: &str) {
             }
         }
         "turn.error" => {
-            if let Ok(Some(run)) = st.db.automation_run_finish(run_id, "failed", Some("error")) {
+            let acted = run_acted(st, run_id, session_id);
+            if let Ok(Some(run)) = st.db.automation_run_finish(run_id, "failed", Some(if acted { "error_after_changes" } else { "error" })) {
                 emit_run_changed(st, &run).await;
-                account_failure(st, &automation, &run).await;
+                account_failure(st, &automation, &run, acted).await;
             }
         }
         _ => {}
@@ -298,7 +332,8 @@ async fn watchdog(st: &AppState) {
             continue;
         }
         let run_id = run["id"].as_str().unwrap_or("");
-        let Ok(Some(finished)) = st.db.automation_run_finish(run_id, "timeout", Some("timeout")) else { continue };
+        let acted = run["sessionId"].as_str().is_some_and(|session_id| run_acted(st, run_id, session_id));
+        let Ok(Some(finished)) = st.db.automation_run_finish(run_id, "timeout", Some(if acted { "timeout_after_changes" } else { "timeout" })) else { continue };
         if let Some(session_id) = run["sessionId"].as_str() {
             let _ = st.db.update_session_state(session_id, "cancelling");
             let active = st.sessions.lock().await.get(session_id).cloned();
@@ -309,9 +344,17 @@ async fn watchdog(st: &AppState) {
         let automation_id = run["automationId"].as_str().unwrap_or("");
         if let Ok(automation) = st.db.automation_get(automation_id) {
             emit_run_changed(st, &finished).await;
-            account_failure(st, &automation, &finished).await;
+            account_failure(st, &automation, &finished, acted).await;
         }
     }
+}
+
+/// Whether a run changed anything (edited, moved or deleted a file, or ran a
+/// command) since it started. Unknown counts as changed, so a run is only
+/// retried automatically when it is known to have only read.
+fn run_acted(st: &AppState, run_id: &str, session_id: &str) -> bool {
+    let Some(started) = st.db.automation_run_get(run_id).ok().and_then(|run| run["startedAt"].as_str().map(str::to_owned)) else { return true };
+    st.db.session_acted_since(session_id, &started).unwrap_or(true)
 }
 
 /// One scheduler pass: watchdog, then due automations.

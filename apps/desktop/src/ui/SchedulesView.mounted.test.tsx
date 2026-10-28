@@ -175,4 +175,14 @@ describe('SchedulesView', () => {
     expect(onSetPaused).toHaveBeenCalledWith(true)
     expect(q('[role="alert"]')?.textContent).toBe('Real reason')
   })
+  // Wave 13: a run that failed after changing things is retried only by the owner.
+  it('offers Retry now on a run that failed after changing things', async () => {
+    const changed = { id: 'r9', automationId: 's1', sessionId: 'x', status: 'failed', reason: 'error_after_changes', startedAt: new Date(NOW - 60_000).toISOString() }
+    const handlers = view([automation({ id: 's1', name: 'Tidy', lastRun: changed }), automation({ id: 's2', name: 'Read', lastRun: { ...changed, id: 'r8', automationId: 's2', reason: 'error' } })])
+    const line = (name: string) => all('.schedule-card').find((card) => card.querySelector('.schedule-name')?.textContent === name)?.querySelector('.schedule-last')
+    expect(line('Tidy')?.textContent).toContain('It stopped after changing things')
+    expect(line('Read')?.querySelector('button')).toBeNull()
+    await click(line('Tidy')?.querySelector('button'))
+    expect(handlers.onRunNow).toHaveBeenCalledWith('s1')
+  })
 })

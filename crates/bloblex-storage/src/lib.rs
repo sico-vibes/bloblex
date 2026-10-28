@@ -2918,6 +2918,32 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND role IN ('user','assistant'))", [id], |r| r.get(0))?)
     }
+    /// The assistant text of the latest turn that replied, used to recognise a
+    /// scheduled run that ended with the silent `(pass)`.
+    pub fn latest_turn_reply(&self, session: &str) -> Result<Option<String>, StorageError> {
+        let turn: Option<Option<String>> = {
+            let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+            c.query_row("SELECT turn_id FROM messages WHERE session_id=?1 AND role='assistant' ORDER BY sequence DESC LIMIT 1", [session], |r| r.get(0)).optional()?
+        };
+        match turn.flatten().filter(|turn| !turn.is_empty()) {
+            Some(turn) => self.turn_reply(session, &turn),
+            None => Ok(None),
+        }
+    }
+    /// Wave 13: whether a conversation changed anything since `since` (RFC3339):
+    /// a recorded file change, or a tool that is not on the known read-only list.
+    /// An unknown tool kind counts as a change, so a scheduled run is retried on
+    /// its own only when it is known to have only read.
+    pub fn session_acted_since(&self, session: &str, since: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM file_changes WHERE session_id=?1 AND json_extract(data,'$.createdAt')>=?2)
+                OR EXISTS(SELECT 1 FROM tool_calls WHERE session_id=?1 AND json_extract(data,'$.startedAt')>=?2
+                    AND lower(COALESCE(json_extract(data,'$.kind'),'other')) NOT IN ('read','search','fetch','think','grep','glob','list','ls','view','websearch','web_search','webfetch','web_fetch','todo','todoread','todowrite'))",
+            params![session, since],
+            |r| r.get(0),
+        )?)
+    }
     /// The latest assistant text of a turn, used to relay a side reply.
     pub fn turn_reply(&self, session: &str, turn: &str) -> Result<Option<String>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;

@@ -2,6 +2,14 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-28 · Daemon · Wave 13 (loop guards, schedule rules, usage-limit handoff)
+
+- **The hop limit counts round trips, not nesting.** `team::after_turn` relays a reply with the side conversation's depth and the Manager's next `message_blob` adds one, so `MAX_DEPTH` (6) bounds how many sequential hand-offs one request can make. Lowering it cuts ordinary multi-step plans short; real loops are stopped by `waiting_upstream` (refuses a target already up the `originSessionId` chain) and `repeated_failure` (two identical recent failures) in `team.rs`.
+- **"Did the run change anything?" is answered conservatively.** `Storage::session_acted_since` counts any file change and any tool whose kind is not on the read-only list (kinds differ per provider: Codex `commandExecution`, Claude `Read`/`Grep`, ACP `edit`/`execute`), so an unknown tool means "changed" and the run is not retried on its own.
+- **Automation starts are claimed in memory** (`Automations::claim_start`, released on drop). The `automation_runs` single-flight index alone let "Run now" and the scheduler both open a conversation before one insert failed.
+- **A backup coding agent is a handoff, not a model switch.** A conversation's runtime is fixed, so "Continue in another bot…" on a usage-limit notice reuses `session.handoff.draft` and the `HandoffDialog`, listing bots on another provider first; nothing is sent automatically.
+- **Mounted tests: the Automations list is sorted by name**, so select a card by `.schedule-name`, not by position.
+
 ## 2026-10-28 · Daemon · Wave 12 (approval rules, durable team queue, cascaded stops, quiet replies, supervisor, Doctor)
 
 - **The ledger finishes the assignment before `team.rs` relays.** `delegations::after_turn` calls `finish(..., "completed")` and only then returns `TurnEnd::Owed(row)`, so a second pass in `team::after_turn` can no longer change the row (a `(pass)` check there found it already `completed` and relayed anyway). A silent outcome has to be a ledger decision: `TurnEnd::Silent` is returned instead of `Owed`, and `delegation_mark_silent_complete` writes status and `silent=1` in one statement. **Avoid:** any new "the reply is different" rule belongs where the row is finished, not where the reply is composed.

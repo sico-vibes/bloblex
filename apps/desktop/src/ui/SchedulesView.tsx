@@ -13,7 +13,7 @@ import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { Select } from './Select'
 import { ScheduleWhen } from './ScheduleWhen'
 import {
-  RUN_STATUS_LABEL, defaultDraft, describeNextRun, describeSchedule, draftToSchedule, localTimeZone, runReasonText, scheduleToDraft,
+  RUN_STATUS_LABEL, defaultDraft, describeNextRun, describeSchedule, draftToSchedule, localTimeZone, needsManualRetry, runReasonText, scheduleToDraft,
   type DaemonSchedule, type ScheduleDraft, type SchedulePreset,
 } from './automationSchedule'
 import './schedules.css'
@@ -239,7 +239,8 @@ function ScheduleCard({ automation, agent, nowMs, busy, onToggle, onRunNow, onEd
       </div>
     </div>
     {proposal && <p className="schedule-proposal">{agent?.name ?? `A ${noun}`} proposed this. It runs in read-only mode until you approve it.</p>}
-    {last && !open && <p className="schedule-last"><i className={`run-dot ${statusDot(last.status)}`} aria-hidden="true" />Last run {stamp(last.startedAt)} · {RUN_STATUS_LABEL[last.status] ?? last.status}</p>}
+    {last && !open && <p className="schedule-last"><i className={`run-dot ${statusDot(last.status)}`} aria-hidden="true" />Last run {stamp(last.startedAt)} · {RUN_STATUS_LABEL[last.status] ?? last.status}{runReasonText(last.reason) ? ` · ${runReasonText(last.reason)}` : ''}
+      {needsManualRetry(last) && !automation.running && <button type="button" className="queue-link" disabled={busy} onClick={onRunNow}>Retry now</button>}</p>}
     {open && <div className="schedule-history">
       <p className="schedule-prompt" title={automation.prompt}>{automation.prompt}</p>
       {runsError && <p className="schedules-problem" role="alert">{runsError}</p>}

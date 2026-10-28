@@ -78,6 +78,17 @@ const fixtureSkills: Array<Record<string, unknown>> = [
   { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
 ]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
+// `?preset=schedule-retry`: one run failed after changing files, one ended quietly (wave 13).
+if (fixturePreset() === 'schedule-retry') {
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+  const changed = { id: 'run-changed', automationId: 'auto-tidy', sessionId: null, status: 'failed', reason: 'error_after_changes', scheduledFor: at(30), startedAt: at(30), finishedAt: at(28) }
+  const quiet = { id: 'run-quiet', automationId: 'auto-watch', sessionId: null, status: 'completed', reason: 'nothing_to_report', scheduledFor: at(60), startedAt: at(60), finishedAt: at(59) }
+  const base = { agentId: 'agent-codex', sessionMode: 'new', approvalMode: 'auto', maxRuntimeSecs: 1800, enabled: true, createdBy: 'user', consecutiveFailures: 0, pauseReason: null, running: false, nextRunAt: new Date(Date.now() + 20 * 3_600_000).toISOString() }
+  fixtureAutomations.push({ ...base, id: 'auto-tidy', name: 'Tidy the changelog', prompt: 'Tidy CHANGELOG.md.', schedule: { kind: 'cron', cron: '0 9 * * *', timezone: 'UTC' }, consecutiveFailures: 1, lastRunAt: changed.startedAt, lastRun: changed })
+  fixtureAutomations.push({ ...base, id: 'auto-watch', name: 'Watch the build', prompt: 'Check the nightly build.', schedule: { kind: 'cron', cron: '0 * * * *', timezone: 'UTC' }, lastRunAt: quiet.startedAt, lastRun: quiet })
+  fixtureRuns['auto-tidy'] = [changed]
+  fixtureRuns['auto-watch'] = [quiet]
+}
 /** Preview-only Manager knowledge (FIX36 D3): structured facts and a playbook. */
 const fixtureManagerFacts: Array<Record<string, unknown>> = [
   { id: 'fact-name', category: 'identity', key: 'name', value: 'Sico Vibes', source: 'said', locked: true, createdAt: '2026-10-16T09:00:00Z', updatedAt: '2026-10-16T09:00:00Z' },
@@ -137,7 +148,9 @@ let sessions: Session[] = [
       { id: 'composer-preview-user-3', role: 'user', content: 'Check the selected model, effort and context meter.', createdAt: minutesAgo(5) },
     ],
   },
-  { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: 'completed', model: 'claude-opus', updatedAt: minutesAgo(41), messages: [{ id: 'c1', role: 'assistant', content: 'Updated the hero copy and the pricing table.', createdAt: minutesAgo(41) }] },
+  // `?preset=usage-limit`: Claude reached its usage limit, so the conversation offers a handoff (wave 13).
+  { id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Landing page copy', projectPath: 'C:/work/site', state: fixturePreset() === 'usage-limit' ? 'limited' : 'completed', ...(fixturePreset() === 'usage-limit' ? { provider: 'claude', limitedUntil: new Date(Date.now() + 2 * 3_600_000).toISOString() } : {}), model: 'claude-opus', updatedAt: minutesAgo(41), messages: [{ id: 'c1', role: 'assistant', content: 'Updated the hero copy and the pricing table.', createdAt: minutesAgo(41) },
+    ...(fixturePreset() === 'usage-limit' ? [{ id: 'c-limit', role: 'notice', content: "Limited until 14:00. I'll pick up when the window opens.", createdAt: minutesAgo(40), meta: { kind: 'usage_limit' } }] : [])] },
   { id: 'session-opencode', runtimeId: 'runtime-opencode', agentId: 'agent-opencode', title: 'Refactor auth', projectPath: 'C:/work/api', state: 'idle', updatedAt: minutesAgo(60 * 26), messages: [] },
   { id: 'session-legacy', runtimeId: 'runtime-codex', agentId: null, title: 'Untied notes', projectPath: 'C:/work/notes', state: 'idle', updatedAt: minutesAgo(90), messages: [] },
   { id: 'session-claude-2', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Hero follow-up', projectPath: 'c:\\work\\site\\', state: 'idle', updatedAt: minutesAgo(20), modelLock: flags().get('preset') === 'claude-context' ? { model:'claude-sonnet-5-5', thinking:'high' } : undefined, contextUsed: flags().get('preset') === 'claude-context' ? 17_340 : null, contextSize: flags().get('preset') === 'claude-context' ? 1_000_000 : null, contextModel: flags().get('preset') === 'claude-context' ? 'claude-sonnet-5-5' : null, contextEstimated: flags().get('preset') === 'claude-context', messages: [] },

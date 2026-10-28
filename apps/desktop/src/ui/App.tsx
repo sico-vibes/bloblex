@@ -27,7 +27,7 @@ import { applyEvent, formatUnknownSafe, isPermissionReplyAllowed, labelize, isAu
 import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
-import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, UpdateChip, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, UpdateChip, UsageLimitNotice, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
 import { CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
 import { ProposalCard } from './ProposalCard'
@@ -249,6 +249,8 @@ export function App() {
   const [terminalDockOpen, setTerminalDockOpen] = useState(false)
   const [handoffOpen, setHandoffOpen] = useState(false)
   const [handoffBusy, setHandoffBusy] = useState(false)
+  // The coding agent whose usage limit opened the handoff picker, if one did.
+  const [handoffLimited, setHandoffLimited] = useState<string | null>(null)
   const [handoffError, setHandoffError] = useState<string | null>(null)
   const [schedulesAgentId, setSchedulesAgentId] = useState<string | null>(null)
   const [schedulesPaused, setSchedulesPaused] = useState(false)
@@ -1824,6 +1826,11 @@ export function App() {
     if (role === 'user' && meta?.kind === 'auto_retry') {
       return <div key={key} className="team-chip-row"><span className="team-notice"><RotateCw size={11} aria-hidden="true" />Continuing automatically</span></div>
     }
+    if (role === 'notice' && meta?.kind === 'usage_limit') {
+      // Only the latest limit of a conversation that is still limited offers a way out.
+      const offer = !sideSession && selectedSession?.state === 'limited' && message.id === latestLimitId && handoffChoices > 0
+      return <UsageLimitNotice key={key} id={`conversation-message-${encodeURIComponent(key)}`} text={text} onContinue={offer ? () => { setHandoffError(null); setHandoffLimited(selectedSession?.provider ?? null); setHandoffOpen(true) } : undefined} />
+    }
     if (role === 'notice' && meta?.kind === 'context_reset') {
       return <ContextResetDivider key={key} id={`conversation-message-${encodeURIComponent(key)}`} text={text} lost={(message.meta as { contextLost?: unknown }).contextLost === true} />
     }
@@ -2488,6 +2495,8 @@ ${fileReferenceText(sentFile)}` : typed
   const pageLegacy = legacySessions(sessions, (editingAgent ?? activeSelectedAgent)?.runtimeId ?? draft?.runtimeId ?? '')
   const planOn = selectedSession?.modelLock?.planMode === true
   const latestPlanId = [...(selectedSession?.messages ?? [])].reverse().find((message) => message.role === 'plan')?.id ?? null
+  const latestLimitId = [...(selectedSession?.messages ?? [])].reverse().find((message) => message.role === 'notice' && (message.meta as { kind?: unknown } | undefined)?.kind === 'usage_limit')?.id ?? null
+  const handoffChoices = agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length
   const lastTurnWasPlan = planOn && !sessionBusy && (selectedSession?.messages ?? []).some((message) => message.role === 'assistant' || message.role === 'plan')
   const mentionCandidates = mention ? mentionMatches(agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden), mention.query) : []
   const blobSideSessions = activeSelectedAgent ? sideSessionsFor(sessions, activeSelectedAgent.id) : []
@@ -2686,7 +2695,7 @@ ${fileReferenceText(sentFile)}` : typed
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" />{platform.tray && <button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button>}</div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && handoffChoices > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffLimited(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" />{platform.tray && <button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button>}</div>}
             </div>
           </div>
         </header>
@@ -2856,7 +2865,7 @@ ${fileReferenceText(sentFile)}` : typed
           setSearchTarget(result)
         }
       }} />}
-      {handoffOpen && selectedSession && <HandoffDialog agents={agents} sourceAgentId={activeSelectedAgent?.id ?? null} busy={handoffBusy} error={handoffError} onClose={() => setHandoffOpen(false)} onPick={(target) => void (async () => {
+      {handoffOpen && selectedSession && <HandoffDialog agents={agents} sourceAgentId={activeSelectedAgent?.id ?? null} busy={handoffBusy} error={handoffError} limitedProvider={handoffLimited} providerOf={(agent) => runtimes.find((runtime) => runtime.id === agent.runtimeId)?.provider ?? null} onClose={() => setHandoffOpen(false)} onPick={(target) => void (async () => {
         setHandoffBusy(true)
         setHandoffError(null)
         try {

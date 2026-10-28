@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultDraft, describeNextRun, describeSchedule, draftToSchedule, presetCron, runReasonText, scheduleToDraft } from './automationSchedule'
+import { defaultDraft, describeNextRun, describeSchedule, draftToSchedule, presetCron, needsManualRetry, runReasonText, scheduleToDraft } from './automationSchedule'
 
 describe('automation schedule presets', () => {
   it('builds the cron each preset stands for', () => {
@@ -60,5 +60,16 @@ describe('automation schedule presets', () => {
     expect(runReasonText('still_running')).toBe('The previous run was still going.')
     expect(runReasonText('weird_code')).toBe('')
     expect(runReasonText(null)).toBe('')
+    expect(runReasonText('nothing_to_report')).toBe('Nothing to report.')
+    expect(runReasonText('error_after_changes')).toBe('It stopped after changing things, so it was not retried on its own.')
+  })
+
+  // Wave 13: only a failed run that changed things waits for the owner to retry it.
+  it('asks for a manual retry only after a run that changed things failed', () => {
+    expect(needsManualRetry({ status: 'failed', reason: 'error_after_changes' })).toBe(true)
+    expect(needsManualRetry({ status: 'timeout', reason: 'timeout_after_changes' })).toBe(true)
+    expect(needsManualRetry({ status: 'failed', reason: 'error' })).toBe(false)
+    expect(needsManualRetry({ status: 'completed', reason: 'nothing_to_report' })).toBe(false)
+    expect(needsManualRetry(null)).toBe(false)
   })
 })

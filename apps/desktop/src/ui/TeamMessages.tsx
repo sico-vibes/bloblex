@@ -2,11 +2,12 @@
 // side-conversation header, proposed plans, inline questions and @mentions.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
-import { ArrowLeftRight, ArrowUpRight, Check, ChevronDown, ClipboardList, Hash, RotateCw, Send, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowUpRight, Check, ChevronDown, ClipboardList, Gauge, Hash, RotateCw, Send, X } from 'lucide-react'
 import type { Agent, PermissionRequest, Session, UserQuestion } from '../types'
 import { agentLook } from '../blob/look'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex } from './agentColor'
+import { providerBrand } from './providerBrand'
 import { sideTitle } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
 
@@ -75,31 +76,43 @@ function TeamChatChip({ kind, peer, name, topic, failed, text, onOpenConversatio
   </div>
 }
 
-/** Choose which blob continues this conversation. The daemon only drafts the message; nothing is sent. */
-export function HandoffDialog({ agents, sourceAgentId, busy, error, onPick, onClose }: {
+/**
+ * Choose which blob continues this conversation. The daemon only drafts the message; nothing is sent.
+ * `limitedProvider` is set when a usage limit stopped the conversation: bots on another coding agent are listed first.
+ */
+export function HandoffDialog({ agents, sourceAgentId, busy, error, onPick, onClose, providerOf, limitedProvider }: {
   agents: readonly Agent[]
   sourceAgentId: string | null
   busy: boolean
   error: string | null
   onPick: (agent: Agent) => void
   onClose: () => void
+  providerOf?: (agent: Agent) => string | null
+  limitedProvider?: string | null
 }) {
   const entered = useDialogEntered()
   const noun = useEntityNoun()
   const { ref, close } = useDialogAccessibility(onClose, () => !busy)
+  const sameLimit = (agent: Agent) => !!limitedProvider && providerOf?.(agent) === limitedProvider
   const choices = agents.filter((agent) => !agent.archived && !agent.hidden && agent.id !== sourceAgentId)
+    .map((agent, index) => ({ agent, index })).sort((a, b) => Number(sameLimit(a.agent)) - Number(sameLimit(b.agent)) || a.index - b.index).map(({ agent }) => agent)
+  const limitedName = limitedProvider ? providerBrand(limitedProvider).name : null
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className="blob-dialog handoff-dialog" role="dialog" aria-modal="true" aria-labelledby="handoff-title" tabIndex={-1}>
       <h2 id="handoff-title">Continue in another {noun}</h2>
-      <p>Pick who should pick this up. Bitbots puts a short summary and the latest messages in their composer. Nothing is sent until you send it.</p>
+      <p>{limitedName ? `${limitedName} reached its usage limit. Pick a ${noun} on another coding agent to pick this up. ` : 'Pick who should pick this up. '}Bitbots puts a short summary and the latest messages in their composer. Nothing is sent until you send it.</p>
       {choices.length === 0 && <p className="blob-muted">There is no other {noun} to hand this to.</p>}
       <ul className="handoff-list">
-        {choices.map((agent, index) => <li key={agent.id}>
-          <button type="button" className="handoff-choice" data-dialog-initial-focus={index === 0 ? '' : undefined} disabled={busy} onClick={() => onPick(agent)}>
-            <MiniBlob agent={agent} name={agent.name} size={26} />
-            <span><strong>{agent.name}</strong>{agent.role?.trim() ? <small>{agent.role}</small> : null}</span>
-          </button>
-        </li>)}
+        {choices.map((agent, index) => {
+          const provider = providerOf?.(agent) ?? null
+          const detail = [agent.role?.trim(), provider ? providerBrand(provider).name : null, sameLimit(agent) ? 'same limit' : null].filter(Boolean).join(' · ')
+          return <li key={agent.id}>
+            <button type="button" className="handoff-choice" data-dialog-initial-focus={index === 0 ? '' : undefined} disabled={busy} onClick={() => onPick(agent)}>
+              <MiniBlob agent={agent} name={agent.name} size={26} />
+              <span><strong>{agent.name}</strong>{detail ? <small>{detail}</small> : null}</span>
+            </button>
+          </li>
+        })}
       </ul>
       {error && <p className="schedules-problem" role="alert">{error}</p>}
       <div className="blob-dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={close}>Cancel</button></div>
@@ -116,6 +129,14 @@ export function ContextResetDivider({ id, text, lost }: { id?: string; text: str
 export function AutoRetryNotice({ id, text, status, onCancel }: { id?: string; text: string; status: string; onCancel?: () => void }) {
   return <div id={id} className={`team-chip-row auto-retry ${status}`} role="status">
     <span className="team-notice"><RotateCw size={11} aria-hidden="true" />{text}{status === 'scheduled' && onCancel && <button type="button" className="queue-link auto-retry-cancel" onClick={onCancel}>Cancel</button>}</span>
+  </div>
+}
+
+/** The coding agent reached its usage limit. Continuing elsewhere only opens the handoff picker; nothing is sent on its own. */
+export function UsageLimitNotice({ id, text, onContinue }: { id?: string; text: string; onContinue?: () => void }) {
+  const noun = useEntityNoun()
+  return <div id={id} className="team-chip-row usage-limit" role="status">
+    <span className="team-notice"><Gauge size={11} aria-hidden="true" />{text}{onContinue && <button type="button" className="queue-link usage-limit-continue" onClick={onContinue}>Continue in another {noun}…</button>}</span>
   </div>
 }
 

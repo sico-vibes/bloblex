@@ -551,3 +551,49 @@ async fn p7_instructions_ask_for_checked_reports_and_a_pass_reply() {
     let side = runtime_instructions(&st, &st.db.agent_get(&worker).unwrap(), &json!({"kind":"side","peerName":"Manager"}), std::path::Path::new("."));
     assert!(side.contains("If you were asked to check something and there is nothing to report, reply exactly `(pass)`."), "a teammate knows the silent reply");
 }
+
+// Wave 13 loop guard: work is never sent back to a bot that is waiting on it.
+#[tokio::test]
+async fn w13_work_is_not_sent_back_up_the_chain() {
+    let (mut st, boss, worker) = fixture().await;
+    install_delegation(&mut st).await;
+    let helper = st.db.agent_create(&json!({"name":"Helper","runtimeId":"p7-rt"})).unwrap().0;
+    let sent = call(&st, "p7-boss", "message_blob", json!({"blob":worker,"message":"Check the build.","topic":"Build check"})).await;
+    assert_ne!(sent["isError"], true, "{sent}");
+    let side = st.db.side_session(&worker, &boss).unwrap().expect("the side conversation");
+    let back = call(&st, &side, "message_blob", json!({"blob":boss,"message":"Can you check it instead?"})).await;
+    assert_eq!(back["isError"], true, "{back}");
+    assert!(back["content"][0]["text"].as_str().unwrap().contains("go round in a loop"), "{back}");
+    // Passing work on to someone not waiting on it is still allowed.
+    let onward = call(&st, &side, "message_blob", json!({"blob":helper["id"],"message":"Run the linter.","topic":"Lint"})).await;
+    assert_ne!(onward["isError"], true, "{onward}");
+}
+
+// Wave 13 circuit breaker: two identical recent failures stop a third send.
+#[test]
+fn w13_two_identical_failures_trip_the_breaker() {
+    let now = chrono::Utc::now();
+    let at = |minutes: i64| (now - chrono::Duration::minutes(minutes)).to_rfc3339();
+    let row = |target: &str, status: &str, error: &str, minutes: i64| json!({"targetAgentId":target,"status":status,"error":error,"finishedAt":at(minutes)});
+    let same = [row("a", "failed", "Sign-in expired.", 4), row("b", "completed", "", 3), row("a", "failed", "Sign-in expired. ", 2)];
+    assert_eq!(crate::team::repeated_failure(&same, "a", now).as_deref(), Some("Sign-in expired. ".trim()));
+    assert_eq!(crate::team::repeated_failure(&same, "b", now), None, "another teammate is not affected");
+    let different = [row("a", "failed", "Timed out.", 4), row("a", "failed", "Sign-in expired.", 2)];
+    assert_eq!(crate::team::repeated_failure(&different, "a", now), None, "different errors are not a loop");
+    let recovered = [row("a", "failed", "Timed out.", 4), row("a", "completed", "", 3), row("a", "failed", "Timed out.", 2)];
+    assert_eq!(crate::team::repeated_failure(&recovered, "a", now), None, "a success in between resets it");
+    let old = [row("a", "failed", "Timed out.", 40), row("a", "failed", "Timed out.", 30)];
+    assert_eq!(crate::team::repeated_failure(&old, "a", now), None, "old failures do not block a new try");
+    let once = [row("a", "failed", "Timed out.", 2)];
+    assert_eq!(crate::team::repeated_failure(&once, "a", now), None);
+}
+
+// Wave 13: a scheduled run knows it may end quietly.
+#[tokio::test]
+async fn w13_scheduled_runs_are_told_about_the_quiet_reply() {
+    let (st, _, worker) = fixture().await;
+    let run = runtime_instructions(&st, &st.db.agent_get(&worker).unwrap(), &json!({"kind":"automation"}), std::path::Path::new("."));
+    assert!(run.contains("scheduled run") && run.contains("`(pass)`"), "{run}");
+    let chat = runtime_instructions(&st, &st.db.agent_get(&worker).unwrap(), &json!({"kind":"main"}), std::path::Path::new("."));
+    assert!(!chat.contains("scheduled run"), "an ordinary chat is not told this");
+}

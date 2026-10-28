@@ -10365,15 +10365,20 @@ mod phase2a_tests {
         let id=created["id"].as_str().unwrap().to_owned();
         st.db.create_session("auto-session","rt-test","codex",".","Auto").unwrap();
         st.db.update_session_state("auto-session","idle").unwrap();
-        for (run, expected) in [("run-1",1),("run-2",2),("run-3",3)] {
+        // Wave 13 (owner-approved plan, 27 Oct 2026): a run that only read retries
+        // after 1, 5 and 15 minutes, and the fourth failure pauses.
+        for (run, expected, delay) in [("run-1",1,60),("run-2",2,300),("run-3",3,900),("run-4",4,0)] {
             st.db.set_session_link("auto-session",&json!({"kind":"automation","automationId":id,"runId":run,"approvalMode":"auto"})).unwrap();
             st.db.automation_run_insert(run,&id,Some("auto-session"),"running",None,None,&Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true)).unwrap();
             automations::after_turn(&st,"auto-session","turn.error").await;
             let auto=st.db.automation_get(&id).unwrap();
             assert_eq!(auto["consecutiveFailures"],expected);
-            if expected<3 {
+            assert_eq!(st.db.automation_run_get(run).unwrap()["reason"],"error","nothing was changed, so it is a plain failure");
+            if expected<4 {
                 assert_eq!(auto["enabled"],true);
-                assert!(auto["nextRunAt"].is_string(),"a retry is scheduled inside the occurrence");
+                let next=chrono::DateTime::parse_from_rfc3339(auto["nextRunAt"].as_str().expect("a retry is scheduled inside the occurrence")).unwrap();
+                let wait=(next.with_timezone(&Utc)-Utc::now()).num_seconds();
+                assert!((delay-10..=delay).contains(&wait),"retry {expected} waits about {delay}s, got {wait}s");
             }
         }
         let paused=st.db.automation_get(&id).unwrap();
@@ -10391,6 +10396,63 @@ mod phase2a_tests {
         let done=st.db.automation_get(&other_id).unwrap();
         assert_eq!(done["consecutiveFailures"],0);
         assert_eq!(st.db.automation_run_get("reset-run").unwrap()["status"],"completed");
+    }
+
+    #[tokio::test]
+    async fn automation_run_that_changed_things_is_not_retried_automatically(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        // Once a year, so the next occurrence is far from any retry delay.
+        let created=st.db.automation_create(&json!({"agentId":agent,"name":"Acted","prompt":"tidy up","schedule":{"kind":"cron","cron":"0 3 1 1 *","timezone":"UTC"},"enabled":true})).unwrap();
+        let id=created["id"].as_str().unwrap().to_owned();
+        st.db.create_session("auto-acted","rt-test","codex",".","Acted").unwrap();
+        st.db.update_session_state("auto-acted","idle").unwrap();
+        // A change made before the run started never counts against it.
+        st.db.upsert_tool_in_turn("auto-acted",None,"old-edit","edit","Edit","completed",&json!({})).unwrap();
+        let started=(Utc::now()+chrono::Duration::milliseconds(5)).to_rfc3339_opts(chrono::SecondsFormat::Millis,true);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        st.db.set_session_link("auto-acted",&json!({"kind":"automation","automationId":id,"runId":"acted-run","approvalMode":"auto"})).unwrap();
+        st.db.automation_run_insert("acted-run",&id,Some("auto-acted"),"running",None,None,&started).unwrap();
+        st.db.upsert_tool_in_turn("auto-acted",None,"read-1","read","Read","completed",&json!({})).unwrap();
+        assert!(!st.db.session_acted_since("auto-acted",&started).unwrap(),"a read is not a change");
+        st.db.upsert_tool_in_turn("auto-acted",None,"cmd-1","commandExecution","Ran npm run fix","completed",&json!({})).unwrap();
+        assert!(st.db.session_acted_since("auto-acted",&started).unwrap(),"a command counts as a change");
+        automations::after_turn(&st,"auto-acted","turn.error").await;
+        assert_eq!(st.db.automation_run_get("acted-run").unwrap()["reason"],"error_after_changes");
+        let auto=st.db.automation_get(&id).unwrap();
+        assert_eq!(auto["consecutiveFailures"],1);
+        assert_eq!(auto["enabled"],true);
+        let next=chrono::DateTime::parse_from_rfc3339(auto["nextRunAt"].as_str().unwrap()).unwrap();
+        assert!((next.with_timezone(&Utc)-Utc::now()).num_minutes()>20,"no quick retry: it waits for its next scheduled time");
+    }
+
+    #[tokio::test]
+    async fn automation_run_that_passes_finishes_quietly(){
+        let(st,_)=automation_state();
+        let agent=unique_agent(&st,None);
+        let created=cron_automation(&st,&agent,"Watch");
+        let id=created["id"].as_str().unwrap().to_owned();
+        st.db.create_session("auto-pass","rt-test","codex",".","Watch").unwrap();
+        st.db.update_session_state("auto-pass","idle").unwrap();
+        for (run,reply,reason) in [("pass-run","  (PASS) ",json!("nothing_to_report")),("talk-run","Found two broken links.",Value::Null)] {
+            st.db.set_session_link("auto-pass",&json!({"kind":"automation","automationId":id,"runId":run,"approvalMode":"auto"})).unwrap();
+            st.db.automation_run_insert(run,&id,Some("auto-pass"),"running",None,None,&Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis,true)).unwrap();
+            st.db.append_message("auto-pass",&format!("turn-{run}"),"assistant",reply).unwrap();
+            automations::after_turn(&st,"auto-pass","turn.completed").await;
+            let finished=st.db.automation_run_get(run).unwrap();
+            assert_eq!(finished["status"],"completed");
+            assert_eq!(finished["reason"],reason,"{run}");
+        }
+    }
+
+    #[test]
+    fn automation_start_is_claimed_once_at_a_time(){
+        let automations=automations::Automations::default();
+        let first=automations.claim_start("a1").expect("the first start claims it");
+        assert!(automations.claim_start("a1").is_none(),"a second start of the same automation waits");
+        assert!(automations.claim_start("a2").is_some(),"another automation is not blocked");
+        drop(first);
+        assert!(automations.claim_start("a1").is_some(),"the claim ends with the start");
     }
 
     #[tokio::test]

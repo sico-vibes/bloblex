@@ -2,6 +2,10 @@
 
 Last reviewed: 2026-10-22. The governing rules are the top amendments in `AGENTS.md`; this file is the practical how-to. When the owner changes the arrangement, update both.
 
+## Wave 13 onwards: the Director does everything (owner, 28 October 2026)
+
+The owner's words: "close opencode background service and do the job yourself". The Director (Claude) implements backend and UI in the main checkout, with no OpenCode lane and no lane worktree, then runs the gates and commits (no push unless asked). Until the owner says otherwise.
+
 ## T3 wave (owner, 26 October 2026)
 
 Director UI in `D:\t3`; OpenCode `opencode-go/deepseek-v4.1-flash#high` lanes in `D:\t3p` (native terminal), `D:\t3d` (delegation, workspace), `D:\t3m` (media, checkpoints), each cut from `main` with the dirty baseline applied (see "Lane on a dirty tree"). **Owner rule for this wave: no application tests, no screenshots, no browser automation, no scratch probes, no `cargo test` or `cargo check --tests`, for every lane, overriding the repo gates.** Allowed: typecheck, `cargo check` of production targets, the production build, and source review. Lanes were told to leave tests untouched; briefs and reports are in `docs/history/t3/`. The isolated preview launcher (own Cargo target, database, app identifier `com.bitbots.desktop.t3dev` and Vite ports 1440 to 1459) is `D:\t3\target\lane\run-t3dev.ps1`; it never touches a running Bitbots.

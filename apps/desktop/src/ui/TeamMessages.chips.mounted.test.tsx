@@ -2,7 +2,8 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CreatedBotChip, DelegationChip, ReplyChip } from './TeamMessages'
+import { CreatedBotChip, DelegationChip, HandoffDialog, ReplyChip, UsageLimitNotice } from './TeamMessages'
+import type { Agent } from '../types'
 
 let root: Root | null = null
 let host: HTMLDivElement | null = null
@@ -55,5 +56,29 @@ describe('created-bot chip', () => {
     expect(chip.getAttribute('aria-label')).toBe('Created bot Dex, Engineer · crewspan. Open Dex')
     await act(async () => { chip.click() })
     expect(onOpen).toHaveBeenCalledOnce()
+  })
+})
+
+// Wave 13: a usage limit offers to hand the work to a bot on another coding agent.
+describe('usage limit handoff', () => {
+  const bot = (id: string, name: string, runtimeId: string) => ({ id, name, color: '#82aaff', runtimeId, sortOrder: 0 } as Agent)
+  const providers: Record<string, string> = { 'rt-claude': 'claude', 'rt-codex': 'codex' }
+
+  it('offers to continue elsewhere only when asked to', async () => {
+    const onContinue = vi.fn()
+    const view = mount(<UsageLimitNotice text="Limited until 14:00." onContinue={onContinue} />)
+    await act(async () => { view.querySelector<HTMLButtonElement>('.usage-limit-continue')!.click() })
+    expect(onContinue).toHaveBeenCalledOnce()
+    act(() => root!.render(<UsageLimitNotice text="Limited until 14:00." />))
+    expect(view.querySelector('.usage-limit-continue')).toBeNull()
+  })
+
+  it('lists bots on another coding agent first and marks the same limit', () => {
+    const agents = [bot('me', 'Lead', 'rt-claude'), bot('c2', 'Writer', 'rt-claude'), bot('x1', 'Builder', 'rt-codex')]
+    const view = mount(<HandoffDialog agents={agents} sourceAgentId="me" busy={false} error={null} onPick={vi.fn()} onClose={vi.fn()} limitedProvider="claude" providerOf={(agent) => providers[agent.runtimeId] ?? null} />)
+    const names = [...view.querySelectorAll('.handoff-choice strong')].map((node) => node.textContent)
+    expect(names).toEqual(['Builder', 'Writer'])
+    expect(view.querySelectorAll('.handoff-choice small')[1]?.textContent).toContain('same limit')
+    expect(view.querySelector('#handoff-title')?.nextElementSibling?.textContent).toContain('reached its usage limit')
   })
 })

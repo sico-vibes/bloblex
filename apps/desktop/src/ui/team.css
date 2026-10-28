@@ -73,6 +73,9 @@
 .team-chip-more:hover, .team-chip-link:hover { text-decoration: underline; }
 .team-chip-more:focus-visible, .team-chip-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .team-notice { padding: 4px 10px; color: var(--text-3); border-radius: var(--radius-pill); background: var(--surface-subtle); font-size: var(--fs-xs); }
+/* A usage limit: the reset time, and the owner's way to hand the work on (wave 13). */
+.usage-limit .team-notice { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.usage-limit-continue { margin-left: 2px; }
 
 /* Where the provider's context changed. Quiet by default; amber only when the agent lost earlier turns. */
 .context-divider { margin: 10px 0 6px; display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: var(--fs-xs); }

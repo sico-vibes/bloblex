@@ -212,6 +212,41 @@ pub(crate) fn depth_error() -> String {
     format!("This request has already passed between too many {}. Report back to the user instead.", entity_noun(true))
 }
 
+/// Wave 13 loop guard: the bots already waiting on this chain of work, nearest
+/// first (the sender's origin, that origin's origin, and so on). Sending work to
+/// one of them would go round in a loop, so `delegate_with` refuses it.
+fn waiting_upstream(st: &AppState, session_id: &str) -> Vec<String> {
+    let mut agents = Vec::new();
+    let mut current = session_id.to_owned();
+    for _ in 0..=MAX_DEPTH {
+        let Ok(row) = st.db.session_brief(&current) else { break };
+        if row["link"]["kind"] != "side" { break; }
+        let Some(origin) = row["link"]["originSessionId"].as_str().filter(|origin| !origin.is_empty() && *origin != current).map(str::to_owned) else { break };
+        if let Some(agent) = st.db.session_brief(&origin).ok().and_then(|row| row["agentId"].as_str().map(str::to_owned)) {
+            if !agents.contains(&agent) { agents.push(agent); }
+        }
+        current = origin;
+    }
+    agents
+}
+
+/// How recent two failures must be for the circuit breaker below to trip.
+const REPEATED_FAILURE_WINDOW_SECS: i64 = 600;
+
+/// Wave 13 circuit breaker: the last two assignments this conversation gave this
+/// teammate both failed with the same error in the last ten minutes, so a third
+/// is refused and the sender is told to stop and report. Returns that error.
+pub(crate) fn repeated_failure(rows: &[Value], target_id: &str, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    let mut latest = rows.iter().rev().filter(|row| row["targetAgentId"] == target_id);
+    let (last, before) = (latest.next()?, latest.next()?);
+    let recent = |row: &Value| row["finishedAt"].as_str().or(row["updatedAt"].as_str())
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| (now - at.with_timezone(&chrono::Utc)).num_seconds() <= REPEATED_FAILURE_WINDOW_SECS);
+    let error = last["error"].as_str().map(str::trim).filter(|error| !error.is_empty())?;
+    let same = [last, before].iter().all(|row| row["status"] == "failed" && recent(row) && row["error"].as_str().map(str::trim) == Some(error));
+    same.then(|| error.to_owned())
+}
+
 fn user_name(st: &AppState) -> Option<String> {
     st.db.settings().ok().and_then(|settings| settings["profile.name"].as_str().map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned))
 }
@@ -421,6 +456,11 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
         if let Some(topic) = link["topic"].as_str().filter(|topic| !topic.trim().is_empty()) { lines.push(format!("Topic of this conversation: {topic}.")); }
         lines.push("If you need a decision or information only the user can give, use the ask_user tool, then end your turn. Your Manager is told you are waiting, but only the user can answer; their answer arrives as your next message. Do not ask the Manager to answer for the user.".into());
         lines.push("If you were asked to check something and there is nothing to report, reply exactly `(pass)`.".into());
+    }
+    // Wave 13: a scheduled run with nothing to say ends quietly too.
+    if link["kind"] == "automation" {
+        lines.push(String::new());
+        lines.push("This conversation is a scheduled run that nobody is watching live. If the check found nothing worth the user's attention, reply exactly `(pass)`.".into());
     }
     format!("<bloblex_team>\n{}\n</bloblex_team>", lines.join("\n"))
 }
@@ -798,6 +838,9 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
     let target_name = agent_name(&target);
     if target_id == from_id { return Err("You cannot message yourself.".into()); }
+    if waiting_upstream(st, session_id).contains(&target_id) {
+        return Err(format!("{target_name} is already waiting on this work (it asked you, directly or through a teammate), so sending it back would go round in a loop. Reply with your result or your question instead and end your turn; your reply reaches {target_name} automatically."));
+    }
     // Why this teammate cannot take work now, before any conversation is made.
     if target["hidden"] == true {
         return Err(format!("{target_name} is hidden from the team, so work cannot be sent to it. Ask the user to show it in the team, or pick another teammate."));
@@ -827,6 +870,11 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
     // to relay.
     if honour_pause && st.db.delegation_paused().unwrap_or(false) {
         return Err("Delegation is paused. Ask the user to resume it in Manager settings, or do the work yourself.".into());
+    }
+    let earlier = st.db.delegation_list_for_origin(session_id).unwrap_or_default();
+    if let Some(error) = repeated_failure(&earlier, &target_id, chrono::Utc::now()) {
+        let error = error.chars().take(200).collect::<String>();
+        return Err(format!("{target_name} failed twice in a row with the same error ({error}). Do not send it again: tell the user what failed so they can fix it, or do the work another way."));
     }
     let wanted_conversation = args["conversation"].as_str().map(str::trim).filter(|id| !id.is_empty());
     let existing = match wanted_conversation {

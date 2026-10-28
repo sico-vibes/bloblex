@@ -316,6 +316,11 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The hook bridge is installed beside the daemon, not beside its private run
+    // copy, so the daemon is told where it is (Health check, outside sessions).
+    if let Some(bridge) = executable.parent().map(|folder| folder.join(if cfg!(windows) { "bitbots-hook.exe" } else { "bitbots-hook" })).filter(|path| path.is_file()) {
+        command.env("BITBOTS_HOOK_BRIDGE", bridge);
+    }
     // When the packaged remote web app is installed beside the shell, hand its
     // folder to the daemon so the remote gateway can serve it (WP6c builds it).
     if let Ok(remote_web) = app

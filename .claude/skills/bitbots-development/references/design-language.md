@@ -28,6 +28,15 @@ Haze is **frosted glass**: the real desktop behind the main window is actually b
 - **Density:** the old "about 80%" is the rough goal for the overall density (system acrylic plus the tint), not a number to paint over the blur. The veil and blob strengths are a starting point and were **not measured or seen** (owner rule: no screenshots); tune by eye in a development window. Never hide the blur with an opaque layer or a fake screenshot; text, controls, menus, dialogs, the settings sheet, the composer and the terminal dock keep their own surfaces and stay readable.
 - **Unverified:** that Windows really draws the blur in the decorated, transparent WebView2 window, and how it looks, has not been checked at runtime. Known Windows caveat: the Windows 10 and early Windows 11 acrylic path can lag while dragging or resizing a window.
 
+## Haze: no flat grey blocks (owner, 28 October 2026)
+
+- Sheets, dialogs, the bot save bar, the first-run prompt and the terminal dock are frosted glass in Haze: `--haze-glass` (dark 62%, light 64%) with `backdrop-filter: blur(28px) saturate(1.15)` (`themes/haze.css`). Never put `--surface-panel` (a 97% grey) behind a Haze surface.
+- **Hover is a text highlight, not a box:** in lists and rows, hover brightens or underlines the text; where a background is unavoidable, give it padding and space from the dividers around it.
+- **Composer:** the provider logo in the model pill is 16 px (it must read as large as the speed icon beside it); the thinking level wears one static Brain icon (the menu keeps each level's bars); Steer / Queue sits in the composer bar beside the stop and send buttons, not in the status line above the text box.
+- **Conversations panel:** the title alone in its header; one dashed full-width "New conversation" button under it; hiding and showing the panel is one toggle beside the bot's name in the main header.
+- **Tables:** headers never break a word; an opened row is a two-column sheet (labels in one column, full values beside them).
+- **Changes card:** at most 8 files, then "Show all N files"; a folder that is not a Git repository (always the Manager's) is explained calmly, never shown as an error.
+
 ## Haze: backdrop opacity (owner directive, 26 October 2026, corrected the same day; the fallback look when no native blur is drawn)
 
 The main Haze window's background is **about 80% opaque, 20% transparent**, with the large blended coloured blobs kept in dark and light. (Earlier readings, "90% transparent" and "80% transparent", were wrong; the owner meant 80% opaque, and the picture had become nearly invisible.) This is the background only; text, controls, menus, dialogs, the settings sheet, the composer and the terminal dock keep their own surfaces and stay readable.
@@ -109,7 +118,7 @@ Hide the Colour control when a premade `char-*` portrait is selected. Show it ag
 
 ## Manager assignments (FIX47, 26 October 2026)
 
-- **One flat card per Manager turn** in the conversation that sent the messages (`DelegationGroup`): a header with up to three bot arts, "Assigned to N bots", a one-line count ("2 working · 1 done") and total elapsed time; rows with the bot's own art, name, topic, status and elapsed time, a details toggle and an Open button (Review while approval is waiting). The card is open while anything is queued, working or waiting, and the owner's toggle wins afterwards. Status colour only while something is happening (amber working and approval, red failed or interrupted, neutral done, cancelled and queued); the status mark is a 7 px rounded square, not a dot.
+- **One "Messaged" chip per Manager turn** (owner, 28 October 2026; it replaced the FIX47 card): centred like "Message from", reading "Messaged [up to three bot arts] Vex, Coco +2 · 4 done · 58s" with a caret; clicking opens the rows in place below it, centred, between two hairlines, with no card box. Each row: chevron, the bot's art, name and topic, then the status in its own column on the same line as **Open**, then Stop. The details panel sits under the row with room above and below.
 - **Honest labels:** Queued, Working, Needs approval, Done, Failed, Cancelled, Interrupted, and "Earlier message" for pre-ledger messages. Approving stays in the teammate's conversation; the card only navigates. A shared folder's branch and changes read as the folder's ("whole folder, not only this bot"); only a worktree's own branch is attributed to the bot.
 
 ## Rich blocks, media, terminal and review cards (T3 wave, 26 October 2026)

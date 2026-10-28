@@ -67,8 +67,13 @@ pub fn claude_settings_path() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|| home.map(|home| home.join(".claude"))).map(|base| base.join("settings.json"))
 }
 
-/// The hook bridge the shell stages beside the daemon.
+/// The hook bridge. The desktop shell names it (`BITBOTS_HOOK_BRIDGE`), because the
+/// daemon runs from a private copy that has no bridge beside it; a daemon started
+/// by hand finds it beside its own executable.
 pub fn hook_bridge_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("BITBOTS_HOOK_BRIDGE").map(PathBuf::from).filter(|path| path.is_file()) {
+        return Some(path);
+    }
     let name = if cfg!(windows) { "bitbots-hook.exe" } else { "bitbots-hook" };
     std::env::current_exe().ok()?.parent().map(|folder| folder.join(name)).filter(|path| path.is_file())
 }

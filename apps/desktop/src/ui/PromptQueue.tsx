@@ -108,7 +108,15 @@ export function QueueBanner({ items, paused, sessionBusy, nowMs, disabled, onSen
  * rows on demand, says when a message is paused or a retry is waiting, and
  * stays visible for the whole busy turn.
  */
-export function ComposerStatus({ items, paused, sessionBusy, mode, steerChoice = false, onModeChange, notice, nowMs, disabled, expanded, onToggle, onResume, onCancelRetry, onSendNow, onDelete, onUpdate, onReorder, onInterrupt }: {
+/** How the next message reaches a running turn: added to it now, or sent after it. It sits beside the send button. */
+export function DeliveryModeToggle({ mode, steerChoice, disabled, onModeChange }: { mode: 'steer' | 'queue'; steerChoice: boolean; disabled?: boolean; onModeChange: (mode: 'steer' | 'queue') => void }) {
+  return <span className="composer-status-modes" role="radiogroup" aria-label="How your next message reaches the bot">
+    <button type="button" role="radio" aria-checked={mode === 'steer'} className={mode === 'steer' ? 'active' : ''} disabled={disabled || !steerChoice} title={steerChoice ? 'Steer: add it to the turn that is running now' : 'This coding agent cannot take a message while it works, so it waits in the queue'} onClick={() => onModeChange('steer')}>Steer</button>
+    <button type="button" role="radio" aria-checked={mode === 'queue'} className={mode === 'queue' ? 'active' : ''} disabled={disabled} title="Queue: send it after this turn ends" onClick={() => onModeChange('queue')}>Queue</button>
+  </span>
+}
+
+export function ComposerStatus({ items, paused, sessionBusy, mode, steerChoice = false, onModeChange, modeInBar = false, notice, nowMs, disabled, expanded, onToggle, onResume, onCancelRetry, onSendNow, onDelete, onUpdate, onReorder, onInterrupt }: {
   /** Stop the running turn, wait for it to end, then send what is in the box as a fresh message. Absent when there is nothing to send. */
   onInterrupt?: () => void
   items: readonly QueuedPrompt[]
@@ -120,6 +128,8 @@ export function ComposerStatus({ items, paused, sessionBusy, mode, steerChoice =
   steerChoice?: boolean
   /** Picks how the next message is sent while a turn runs. Absent: the mode is shown as plain text. */
   onModeChange?: (mode: 'steer' | 'queue') => void
+  /** The composer bar shows the Steer / Queue choice beside the send button (owner, 28 October 2026), so this line leaves it out. */
+  modeInBar?: boolean
   /** Why the last message went to the queue instead of reaching the turn. */
   notice?: string | null
   nowMs: number
@@ -136,7 +146,7 @@ export function ComposerStatus({ items, paused, sessionBusy, mode, steerChoice =
   const failed = items.filter((item) => item.status === 'failed').length
   const retrying = items.some((item) => item.kind === 'retry')
   const count = items.length
-  if (count === 0 && !sessionBusy && !paused && !retrying && !notice) return null
+  if (count === 0 && !(sessionBusy && (!modeInBar || onInterrupt)) && !paused && !retrying && !notice) return null
   return <div className="composer-status" role="group" aria-label="Delivery status">
     <div className="composer-status-line">
       {count > 0
@@ -146,11 +156,8 @@ export function ComposerStatus({ items, paused, sessionBusy, mode, steerChoice =
             <ChevronDown size={12} aria-hidden="true" className={`composer-status-chevron${expanded ? ' open' : ''}`} />
           </button>
         : null}
-      {sessionBusy && (onModeChange
-        ? <span className="composer-status-modes" role="radiogroup" aria-label="How your next message reaches the bot">
-            <button type="button" role="radio" aria-checked={mode === 'steer'} className={mode === 'steer' ? 'active' : ''} disabled={disabled || !steerChoice} title={steerChoice ? 'Add it to the turn that is running now' : 'This coding agent cannot take a message while it works, so it waits in the queue'} onClick={() => onModeChange('steer')}>Steer now</button>
-            <button type="button" role="radio" aria-checked={mode === 'queue'} className={mode === 'queue' ? 'active' : ''} disabled={disabled} title="Send it after the turn ends" onClick={() => onModeChange('queue')}>After this turn</button>
-          </span>
+      {sessionBusy && !modeInBar && (onModeChange
+        ? <DeliveryModeToggle mode={mode} steerChoice={steerChoice} disabled={disabled} onModeChange={onModeChange} />
         : <span className="composer-status-mode" role="status" title={mode === 'steer' ? 'Ctrl+Enter queues instead' : 'Ctrl+Enter steers instead'}>{mode === 'steer' ? 'Steer · reaches this turn now' : 'Queue · sends after this turn'}</span>)}
       {sessionBusy && onInterrupt && <button type="button" className="queue-link composer-status-interrupt" disabled={disabled} onClick={onInterrupt} title="Stops what the bot is doing now, then sends this message as a new one. Work already done is kept.">Stop and send instead</button>}
       {paused && <span className="composer-status-paused" role="status">{failed ? 'Paused: a message could not be sent' : 'Paused until you resume'}<button type="button" className="queue-link" disabled={disabled} onClick={onResume}>Resume</button></span>}

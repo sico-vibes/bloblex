@@ -1,8 +1,8 @@
-// The Manager's assignments in the conversation that made them: one expandable card per run of messages sent in a
-// turn, a row per bot with its art, a status the daemon recorded, elapsed time, and a way into the teammate's
+// The Manager's assignments in the conversation that made them: a centred "Messaged ..." chip per run of messages sent
+// in a turn (like "Message from"), opening in place to a row per bot with its art, a status the daemon recorded, elapsed time, and a way into the teammate's
 // own conversation. Approving stays in that conversation; nothing here decides anything for the owner.
 import { useEffect, useState } from 'react'
-import { ArrowUpRight, ChevronRight, Square } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight, Square } from 'lucide-react'
 import { rpc } from '../tauri'
 import type { Agent } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -64,8 +64,10 @@ function Row({ row, now, onOpen, onError, onFollowUp }: { row: DelegationRowMode
       <button type="button" className="delegation-row-toggle" aria-expanded={open} aria-controls={panel} onClick={() => setOpen((value) => !value)}>
         <ChevronRight size={12} className={open ? 'open' : ''} aria-hidden="true" />
         <Art agent={row.agent} name={row.name} size={24} mood={MOOD[row.bucket]} />
-        <span className="delegation-row-copy"><span className="delegation-row-name"><strong>{row.name}</strong><span className="delegation-status"><i className="delegation-mark" aria-hidden="true" />{row.label}{elapsed !== '—' && <><span aria-hidden="true"> · </span><time aria-label="Elapsed time">{elapsed}</time></>}</span></span><span className="delegation-row-topic" title={row.topic}>{row.topic}</span></span>
+        <span className="delegation-row-copy"><strong>{row.name}</strong><span className="delegation-row-topic" title={row.topic}>{row.topic}</span></span>
       </button>
+      {/* Its own column, so the status sits on the same line as Open (owner, 28 October 2026). */}
+      <span className="delegation-status"><i className="delegation-mark" aria-hidden="true" />{row.label}{elapsed !== '—' && <><span aria-hidden="true"> · </span><time aria-label="Elapsed time">{elapsed}</time></>}</span>
       {stoppable(row) && <StopControl row={row} onError={onError} />}
       <button type="button" className="delegation-open" disabled={!row.sideSessionId} onClick={() => row.sideSessionId && onOpen(row.sideSessionId)} aria-label={`${row.bucket === 'approval' ? 'Open to approve' : 'Open'} the conversation with ${row.name}: ${row.topic}`}>{row.bucket === 'approval' ? 'Review' : 'Open'}<ArrowUpRight size={12} aria-hidden="true" /></button>
     </div>
@@ -107,17 +109,22 @@ export function DelegationGroup({ rows, onOpen, originSessionId, onFollowUp }: {
   }
   const faces = [...new Map(rows.map((row) => [row.agent?.id ?? row.key, row])).values()]
   const title = rows.length === 1 ? `Assigned to ${rows[0].name}` : `Assigned to ${rows.length} ${nouns}`
+  const names = faces.length <= 2 ? faces.map((row) => row.name).join(' and ') : `${faces.slice(0, 2).map((row) => row.name).join(', ')} +${faces.length - 2}`
   const total = groupElapsed(rows, now)
   const attention = rows.some((row) => row.bucket === 'approval')
   const failed = rows.some((row) => row.bucket === 'failed' || row.bucket === 'interrupted')
   const id = `delegation-group-${rows[0].key}`.replace(/[^A-Za-z0-9_-]/g, '')
-  return <section className={`delegation-group${anyActive ? ' active' : ''}${attention ? ' attention' : ''}${failed ? ' failed' : ''}`} aria-label={title}>
-    <button type="button" className="delegation-head" aria-expanded={expanded} aria-controls={id} onClick={() => setManual(!expanded)}>
-      <ChevronRight size={13} className={expanded ? 'open' : ''} aria-hidden="true" />
-      <span className="delegation-faces" aria-hidden="true">{faces.slice(0, 3).map((row) => <Art key={row.agent?.id ?? row.key} agent={row.agent} name={row.name} size={22} mood={MOOD[row.bucket]} />)}{faces.length > 3 && <span className="delegation-more">+{faces.length - 3}</span>}</span>
-      <span className="delegation-head-copy"><strong>{title}</strong><span>{summarizeBuckets(rows)}</span></span>
-      {total !== '—' && <time className="delegation-total" aria-label="Elapsed time">{total}</time>}
-    </button>
+  return <section className={`delegation-group${expanded ? ' open' : ''}${anyActive ? ' active' : ''}${attention ? ' attention' : ''}${failed ? ' failed' : ''}`} aria-label={title}>
+    {/* Owner, 28 October 2026: a "Messaged" chip like "Message from", centred, that opens in place. */}
+    <div className="team-chip-row delegation-chip-row">
+      <button type="button" className="team-chip delegation-head" aria-expanded={expanded} aria-controls={id} onClick={() => setManual(!expanded)}>
+        <span>Messaged</span>
+        <span className="delegation-faces" aria-hidden="true">{faces.slice(0, 3).map((row) => <Art key={row.agent?.id ?? row.key} agent={row.agent} name={row.name} size={18} mood={MOOD[row.bucket]} />)}{faces.length > 3 && <span className="delegation-more">+{faces.length - 3}</span>}</span>
+        <b className="delegation-names">{names}</b>
+        <em className="delegation-summary">{summarizeBuckets(rows)}{total !== '—' && <> · <time aria-label="Elapsed time">{total}</time></>}</em>
+        <ChevronDown size={12} className={`delegation-caret${expanded ? ' open' : ''}`} aria-hidden="true" />
+      </button>
+    </div>
     {expanded && <ul id={id} className="delegation-list">{rows.map((row) => <Row key={row.key} row={row} now={now} onOpen={onOpen} onError={setProblem} onFollowUp={onFollowUp} />)}</ul>}
     {((stopRows.length > 1 && !!originSessionId) || problem) && <div className="delegation-foot">
       {problem && <p className="delegation-error" role="alert">{problem}</p>}

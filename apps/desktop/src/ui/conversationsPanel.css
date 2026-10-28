@@ -63,7 +63,11 @@
 @media (prefers-reduced-motion: reduce) { .convo-twisty svg, .convo-actions { transition: none; } }
 
 /* Finding and starting conversations (27 October 2026): a labelled New chat button, a filter once the list is long, and plain words for states that need the owner. */
-.convo-new { gap: 5px; white-space: nowrap; }
+.convo-new-row { flex: 0 0 auto; padding: 0 10px 8px; display: flex; justify-content: center; }
+.convo-new { width: 100%; height: 32px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-2); border: 1px dashed var(--line-strong); border-radius: 10px; background: transparent; font: inherit; font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.convo-new:hover:not(:disabled) { color: var(--text-1); border-style: solid; background: var(--surface-hover); }
+.convo-new:disabled { cursor: default; opacity: .5; }
+.convo-new:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .convo-filter { margin: 0 8px 8px; padding: 0 9px; height: 30px; display: flex; align-items: center; gap: 7px; color: var(--text-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; }
 .convo-filter:focus-within { border-color: var(--line-strong); box-shadow: var(--focus-ring); }
 .convo-filter input { min-width: 0; flex: 1; color: var(--text-1); border: 0; outline: 0; background: transparent; font: inherit; font-size: var(--fs-xs); }

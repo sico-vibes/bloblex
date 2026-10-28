@@ -4,6 +4,8 @@
 
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) {
   --haze-base: #1a1b1d;
+  /* Frosted glass for sheets, dialogs and bars: a light tint that blurs the haze behind it. */
+  --haze-glass: rgb(30 31 34 / .62);
   --haze-d1: #8794a3; --haze-d2: #b48d68; --haze-d3: #5f8196; --haze-d4: #d8c4a6;
   --surface-app: transparent;
   --surface-sidebar: rgb(16 17 19 / .08);
@@ -35,6 +37,7 @@
 :root[data-style="haze"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) {
   color-scheme: light;
   --haze-base: #f1efeb;
+  --haze-glass: rgb(250 249 247 / .64);
   --haze-d1: #a9b4c0; --haze-d2: #d9b48f; --haze-d3: #8fb0c0; --haze-d4: #e6d3b6;
   --surface-sidebar: rgb(255 255 255 / .08);
   --surface-panel: rgb(250 249 247 / .97);
@@ -251,3 +254,17 @@
   :root[data-style="haze"] .blob-page-layout { width: calc(100% - 32px); }
   :root[data-style="haze"] .haze-look-editor { grid-template-columns: 1fr; }
 }
+
+/* Owner, 28 October 2026: no flat grey blocks in Haze. Sheets, dialogs, the save bar, the first-run
+   prompt and the terminal are frosted glass over the haze, like the rest of the shell. */
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .settings-sheet,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .blob-dialog,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .bot-savebar,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .first-run-prompt,
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .terminal-dock {
+  background: var(--haze-glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.15);
+  backdrop-filter: blur(28px) saturate(1.15);
+}
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .bot-savebar { border-top-color: var(--line); }
+

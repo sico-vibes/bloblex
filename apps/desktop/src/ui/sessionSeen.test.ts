@@ -43,4 +43,19 @@ describe('session seen state', () => {
     })
     expect(unreadNeedsApproval(waiting.sessions![0]!, seen)).toBe(true)
   })
+
+  // Owner report, 28 October 2026: switching quickly left white unread dots behind.
+  it('ignores a state change with nothing new to read, but not a new reply', () => {
+    const seen = { a: '2026-01-02T10:00:00.000Z' }
+    const reply = { id: 'm1', role: 'assistant', content: 'Done.', createdAt: '2026-01-02T09:59:00.000Z' }
+    const warmed = { ...session('a', '2026-01-02T10:05:00.000Z'), messages: [reply] } as Session
+    expect(isUnread(warmed, seen)).toBe(false)
+    const answered = { ...warmed, messages: [reply, { id: 'm2', role: 'assistant', content: 'More.', createdAt: '2026-01-02T10:04:00.000Z' }] } as Session
+    expect(isUnread(answered, seen)).toBe(true)
+    const mine = { ...warmed, messages: [reply, { id: 'm3', role: 'user', content: 'Thanks', createdAt: '2026-01-02T10:04:00.000Z' }] } as Session
+    expect(isUnread(mine, seen)).toBe(false)
+    const teammate = { ...warmed, messages: [reply, { id: 'm4', role: 'user', content: '[Reply from Vex]', meta: { kind: 'blob_reply' }, createdAt: '2026-01-02T10:04:00.000Z' }] } as Session
+    expect(isUnread(teammate, seen)).toBe(true)
+    expect(isUnread({ ...warmed, state: 'waiting_permission' } as Session, seen)).toBe(true)
+  })
 })

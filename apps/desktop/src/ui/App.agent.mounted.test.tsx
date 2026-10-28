@@ -1099,7 +1099,9 @@ describe('blob roster and editor', () => {
     await view.settle()
     // A sent delegation is an assignment card; the reply is a chip.
     expect(view.host.querySelector('.delegation-group')?.getAttribute('aria-label')).toBe('Assigned to Codex')
-    expect([...view.host.querySelectorAll('.team-chip')].map((chip) => chip.getAttribute('aria-label'))).toEqual(['Message from Codex. Open the conversation'])
+    // Since 28 October 2026 the assignment is itself a "Messaged" chip; the reply chip is the other one.
+    expect(view.host.querySelector('.delegation-head')?.textContent).toContain('Messaged')
+    expect([...view.host.querySelectorAll('.team-chip:not(.delegation-head)')].map((chip) => chip.getAttribute('aria-label'))).toEqual(['Message from Codex. Open the conversation'])
     // The relayed text stays in the side conversation; the chip links to it.
     expect(view.host.querySelector('.team-reply-toggle')).toBeNull()
     expect(view.host.querySelector('.message-list')?.textContent ?? '').not.toContain('All 12 tests pass.')
@@ -1161,8 +1163,8 @@ describe('blob roster and editor', () => {
     await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })) })
     await view.settle()
     expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.queue.add' : 'session.steer', mode === 'steer' ? { clientMessageId: expect.stringMatching(/^m-/), sessionId: working.id, text: 'Other way' } : { sessionId: working.id, text: 'Other way' })
-    // The composer's Steer now / After this turn choice shows the preference.
-    expect(view.host.querySelector('.composer-status-modes [role="radio"][aria-checked="true"]')?.textContent).toBe(mode === 'steer' ? 'Steer now' : 'After this turn')
+    // The composer's Steer / Queue choice (beside the send button since 28 October 2026) shows the preference.
+    expect(view.host.querySelector('.composer-status-modes [role="radio"][aria-checked="true"]')?.textContent).toBe(mode === 'steer' ? 'Steer' : 'Queue')
   }, 15_000)
 
   it('shows live side-conversation activity and messages with Agent activity off', async () => {

@@ -87,3 +87,4 @@
 .rail-turn .rail-file { flex-wrap: wrap; }
 .rail-turn .rail-file .rail-confirm { flex: 1 0 100%; margin-bottom: 4px; }
 .rail-turn .rail-file .rail-undo { margin: 0 4px 0 auto; }
+.rail-more { margin-top: 6px; align-self: flex-start; }

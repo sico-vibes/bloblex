@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Check, ChevronDown, Flame, Gauge, LoaderCircle, RotateCw, Search, Signal, SignalHigh, SignalLow, SignalMedium, SignalZero, Zap, type LucideIcon } from 'lucide-react'
+import { Brain, Check, ChevronDown, Flame, Gauge, LoaderCircle, RotateCw, Search, Signal, SignalHigh, SignalLow, SignalMedium, SignalZero, Zap, type LucideIcon } from 'lucide-react'
 import type { Agent, ModelChangePlan, Session, SessionModelLock } from '../types'
 import { rpc } from '../tauri'
 import { parseModelCatalog, type CatalogModel, type ModelCatalog, type ServiceTierOption } from '../executionContract'
@@ -441,7 +441,8 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
     : value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
   const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} title={locked && !lockedReason ? LOCKED_CONTROL_TOOLTIP : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
-    <EffortIcon value={lockedReason === MODEL_FIRST_REASON ? null : value && efforts.includes(value) ? value : unlistedValue ?? defaultThinking ?? null} />
+    {/* Owner, 28 October 2026: the thinking level wears one static brain; the menu still shows each level's bars. */}
+    <Brain size={14} aria-hidden="true" className="effort-icon" />
     <span>{triggerLabel}</span>
     <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
   </button>
@@ -542,7 +543,7 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
   const description = locked ? LOCKED_CONTROL_TOOLTIP : busyReason ?? `${label}${effortLabel ? ` · ${effortLabel} effort` : ''}. Choose which model this conversation uses; it applies from your next message.`
   const trigger = <button ref={triggerRef} type="button" className={`composer-pill model-pill ${fastOn ? 'fast' : ''} ${waiting ? 'waiting' : ''}`} title={waiting ? undefined : description} aria-haspopup="menu" aria-expanded={open} aria-disabled={waiting ? true : undefined} aria-label={`Conversation model: ${ariaLabel}${effortLabel ? `, ${effortLabel} effort` : ''}${fastOn ? ', fast mode on' : ''}${waiting ? `. ${busyReason}` : ''}`} disabled={(disabled && !waiting) || (saving && !open)} onClick={() => { if (!waiting) setOpen((value) => !value) }}>
     {saving ? <LoaderCircle size={13} className="spinning" aria-hidden="true" /> : fastOn ? <Zap size={13} aria-hidden="true" className="model-pill-fast" /> : null}
-    <ProviderLogo provider={provider} size={14} />
+    <ProviderLogo provider={provider} size={16} />
     <i className="model-pill-divider" aria-hidden="true" />
     <span>{label}</span>
     <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />

@@ -119,10 +119,12 @@ fn human_size(bytes: u64) -> String {
 /// The hook bridge the shell stages beside the daemon. It carries a coding
 /// agent's own hooks to Bitbots; nothing here reads its contents.
 fn hook_checks() -> Vec<Value> {
-    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let found = beside.as_ref().is_some_and(|folder| folder.join("bitbots-hook.exe").is_file());
-    vec![check("hooks.bridge", "hooks", "The hook bridge is installed", if found { "ok" } else { "warn" },
-        if found { "The hook bridge is beside the daemon.".to_owned() } else { "The hook bridge was not found beside the daemon, so coding agents cannot report hook events.".to_owned() }, None)]
+    // The installed daemon runs from a private copy, so the shell names the bridge
+    // (owner report, 28 October 2026: the old check looked beside that copy).
+    let found = crate::outside::hook_bridge_path().is_some();
+    vec![check("hooks.bridge", "hooks", "Hook bridge", if found { "ok" } else { "warn" },
+        if found { "Installed. Coding agents can report hook events to Bitbots.".to_owned() }
+        else { "Missing: bitbots-hook.exe is not in Bitbots' install folder, so coding agents cannot report hook events. To fix it, install the latest Bitbots release again; your bots and conversations are kept.".to_owned() }, None)]
 }
 
 /// The Remote gateway, only when the owner has it on.

@@ -2,7 +2,7 @@
 // selected bot in its project, newest first, with bot-to-bot conversations
 // branching under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Archive, ArrowLeftRight, ChevronRight, PanelLeftClose, Pencil, Search, SquarePen, Trash2 } from 'lucide-react'
+import { Archive, ArrowLeftRight, ChevronRight, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import type { Agent, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -55,7 +55,7 @@ function filterTree(nodes: readonly ConversationNode[], words: readonly string[]
   return kept
 }
 
-export function ConversationsPanel({ agent, agents, sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, onRename, onArchive, onDelete, onClose }: {
+export function ConversationsPanel({ agent, agents, sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, onRename, onArchive, onDelete }: {
   agent: Agent
   agents: readonly Agent[]
   sessions: readonly Session[]
@@ -69,7 +69,8 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
   /** Hides the conversation from this list; it can be restored on the bot's page. */
   onArchive?: (session: Session) => void
   onDelete: (session: Session) => void
-  onClose: () => void
+  /** Kept for callers; hiding the panel now lives in the main header (28 October 2026). */
+  onClose?: () => void
 }) {
   // Conversations nothing was said in are not listed, except the open one.
   const tree = useMemo(() => conversationTree(sessions.filter((session) => session.id === selectedSessionId || !isEmptyConversation(session)), agent.id, agent.projectId ?? null), [sessions, agent.id, agent.projectId, selectedSessionId])
@@ -130,12 +131,13 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
   }
 
   return <aside className="conversations-panel" aria-label={`${agent.name}'s conversations`}>
+    {/* Owner, 28 October 2026: the title alone up top; hiding the panel lives beside the bot's name in the main
+        header, and a new conversation starts from one clear button under the title. */}
     <div className="convo-head">
       <strong>Conversations</strong>
-      <span className="convo-head-actions">
-        <button type="button" className="ghost-button small convo-new" aria-label="New conversation" title="Start a separate conversation with this bot" disabled={!canCreate} onClick={onNew}><SquarePen size={13} aria-hidden="true" />New chat</button>
-        <button type="button" className="icon-button small" aria-label="Hide conversations" title="Hide conversations" onClick={onClose}><PanelLeftClose size={14} /></button>
-      </span>
+    </div>
+    <div className="convo-new-row">
+      <button type="button" className="convo-new" aria-label="New conversation" title="Start a separate conversation with this bot" disabled={!canCreate} onClick={onNew}><Plus size={14} aria-hidden="true" />New conversation</button>
     </div>
     {total > FILTER_THRESHOLD && <label className="convo-filter"><Search size={13} aria-hidden="true" /><input type="search" value={query} placeholder="Find a conversation" aria-label="Find a conversation" spellCheck={false} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') } }} /></label>}
     <div className="convo-scroll">

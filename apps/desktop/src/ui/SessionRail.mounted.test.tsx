@@ -27,10 +27,10 @@ let replies: Record<string, unknown | Error | (() => Promise<unknown>)>
 const calls = () => h.rpc.mock.calls.map(([method, params]) => [method as string, params as Record<string, unknown>] as const)
 const repositoryCalls = () => calls().filter(([method]) => method === 'session.repository')
 
-function Harness({ initial, onCreatePr = vi.fn(), onDiff = vi.fn(), canCreatePr = true, active = true }: { initial: Session; onCreatePr?: (repo: RepositoryState) => void; onDiff?: (path: string, diff: string) => void; canCreatePr?: boolean; active?: boolean }) {
+function Harness({ initial, onCreatePr = vi.fn(), onDiff = vi.fn(), canCreatePr = true, active = true, isManager = false }: { initial: Session; isManager?: boolean; onCreatePr?: (repo: RepositoryState) => void; onDiff?: (path: string, diff: string) => void; canCreatePr?: boolean; active?: boolean }) {
   const [current, setCurrent] = useState<Session>(initial)
   ;(window as unknown as { setSession: (next: Session) => void }).setSession = setCurrent
-  return <SessionRail session={current} usage={[]} onOpenFile={vi.fn()} onRevealFile={vi.fn()} onCopyPath={vi.fn()} onDiff={onDiff} onOpenFolder={vi.fn()} botName="Coco" canCreatePr={canCreatePr} onCreatePr={onCreatePr} active={active} />
+  return <SessionRail session={current} usage={[]} onOpenFile={vi.fn()} onRevealFile={vi.fn()} onCopyPath={vi.fn()} onDiff={onDiff} onOpenFolder={vi.fn()} botName="Coco" canCreatePr={canCreatePr} onCreatePr={onCreatePr} active={active} isManager={isManager} />
 }
 const setSession = (next: Session) => act(() => (window as unknown as { setSession: (next: Session) => void }).setSession(next))
 async function mount(initial: Session, props: Omit<Parameters<typeof Harness>[0], 'initial'> = {}) {
@@ -57,6 +57,25 @@ beforeEach(() => {
 afterEach(() => { act(() => reactRoot.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('rail repository changes', () => {
+  // Owner, 28 October 2026: the Manager has no repository, which is a state to explain, not an error.
+  it('explains that the Manager has no code changes instead of showing a Git error', async () => {
+    replies['session.repository'] = repo({ gitRepo: false, repoRoot: null, branch: null, files: [], error: 'This project is not a git repository.' })
+    await mount(session(), { isManager: true })
+    expect(card('changes').textContent).toContain('The Manager works in its own folder')
+    expect(card('changes').querySelector('.rail-problem')).toBeNull()
+    expect(card('changes').textContent).not.toContain('Git could not be read')
+  })
+
+  it('lists the first eight changed files and the rest on request', async () => {
+    replies['session.repository'] = repo({ files: Array.from({ length: 12 }, (_, index) => file(`src/f${index}.ts`)) })
+    await mount(session())
+    expect(rows()).toHaveLength(8)
+    const more = card('changes').querySelector<HTMLButtonElement>('.rail-more')!
+    expect(more.textContent).toBe('Show all 12 files')
+    await act(async () => { more.click(); await settle() })
+    expect(rows()).toHaveLength(12)
+  })
+
   it('shows the real branch, every changed file, the totals and says whose changes they are', async () => {
     await mount(session())
     expect(repositoryCalls()).toEqual([['session.repository', { sessionId: 's1' }]])

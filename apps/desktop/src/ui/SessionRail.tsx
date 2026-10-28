@@ -100,6 +100,9 @@ export function diffUnavailableReason(file: RailFile): string | null {
   return file.source === 'repository' ? 'Git did not return a diff for this file. Open it to read the change.' : 'The coding agent did not report a diff for this file.'
 }
 
+/** How many changed files the Changes card lists before "Show all". */
+const CHANGE_LIMIT = 8
+
 export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote, workingBots, botName = 'The bot', canCreatePr = false, onCreatePr, active = true, agents = [], isManager = false, onOpenSessionById, onOpenSchedules }: {
   /** Every bot, so a schedule can name the bot it wakes. */
   agents?: readonly Agent[]
@@ -138,6 +141,7 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   const busy = ['working', 'starting', 'waiting_permission'].includes(session?.state ?? '')
   const repository = useSessionRepository(session, repositoryRefreshKey(session), busy, active)
   const [showAllOutputs, setShowAllOutputs] = useState(false)
+  const [showAllChanges, setShowAllChanges] = useState(false)
   if (!session) return <div className="session-rail">{workingBots}<div className="rail-empty">Open a conversation to see where it works and what it changed.</div></div>
   const projectPath = repository.data?.projectPath ?? environment?.projectPath ?? session.projectPath ?? null
   const folderName = typeof session.workspaceLabel === 'string' && session.workspaceLabel ? session.workspaceLabel : folderOf(projectPath)
@@ -152,7 +156,9 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   const branch = repo?.gitRepo && repo.branch ? repo.branch : environment?.gitRepo ? environment.branch : null
   const detached = repo?.gitRepo ? repo.detached : environment?.detached === true
   const repoName = folderOf(repo?.repoRoot ?? projectPath)
-  const readFailed = repository.failed || (!!repo && !!repo.error)
+  // A folder that is not a Git repository is a state to explain, not a failure to retry.
+  const notRepo = !!repo && repo.gitRepo === false
+  const readFailed = repository.failed || (!!repo && !!repo.error && !notRepo)
   const canPr = !!onCreatePr && canCreatePr && view.fromRepository && !!repo && repo.files.length > 0 && !repository.failed
   const prTitle = !onCreatePr || !repo ? undefined : repository.failed ? 'The repository could not be read just now, so these changes may be out of date. Try again first.' : !view.fromRepository ? 'Pull requests need a Git repository that can be read.' : repo.files.length === 0 ? 'There are no changes to put in a pull request.' : !canCreatePr ? 'Reconnect, or pick a working coding agent, to ask for a pull request.' : `Ask ${botName} to open a pull request for these changes.`
   const total = view.repository.length + view.earlier.length
@@ -231,15 +237,19 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
     <Card id="changes" title="Changes" aside={changesAside}>
       {repository.loading && !repo && <div className="rail-loading" role="status" aria-busy="true"><span className="sr-only">Reading the repository…</span><Skeleton lines={3} variant="row" /></div>}
       {view.fromRepository && repo && <p className="rail-context" title={repo.repoRoot ?? undefined}><GitBranch size={12} aria-hidden="true" /><span><b>{repo.detached ? 'Detached HEAD' : repo.branch ?? 'No branch'}</b>{repoName ? ` · ${repoName}` : ''}. Every uncommitted change in this repository, not only this conversation's.</span></p>}
-      {repo && !repo.gitRepo && !repo.error && !readFailed && <p className="rail-note">{folderName ? `${folderName} is not` : 'This folder is not'} a Git repository, so changes cannot be tracked. {view.earlier.length ? 'These are the files the coding agent reported.' : 'Files the coding agent edits appear here with their diff.'}</p>}
+      {notRepo && !readFailed && (isManager
+        ? <p className="rail-note">The Manager works in its own folder, not in a project, so it has no code changes of its own. The bots it assigns show their changes in their conversations.</p>
+        : <p className="rail-note">{folderName ? `${folderName} is not` : 'This folder is not'} a Git repository, so changes cannot be tracked. {view.earlier.length ? 'These are the files the coding agent reported.' : 'Files the coding agent edits appear here with their diff.'}</p>)}
       {readFailed && <p className="rail-note rail-problem" role="alert"><CircleAlert size={12} aria-hidden="true" /><span>{repo?.error ? `Git could not be read here: ${repo.error}` : 'The repository could not be read.'}{view.earlier.length ? ' Showing what the coding agent reported.' : ''} <button type="button" className="rail-link" onClick={repository.refresh}>Try again</button></span></p>}
       {view.fromRepository && repo && repo.files.length === 0 && <p className="rail-note">{repoName ? `No uncommitted changes in ${repoName}.` : 'No uncommitted changes.'}{view.earlier.length ? ' Earlier edits from this conversation are below.' : ''}</p>}
       {!repository.loading && !repo && !repository.failed && total === 0 && <p className="rail-note">Files the coding agent edits appear here with their diff.</p>}
-      {view.repository.length > 0 && <ul className="rail-files">{view.repository.map(changeRow)}</ul>}
+      {view.repository.length > 0 && <ul className="rail-files">{(showAllChanges ? view.repository : view.repository.slice(0, CHANGE_LIMIT)).map(changeRow)}</ul>}
+      {view.repository.length > CHANGE_LIMIT && <button type="button" className="rail-link rail-more" onClick={() => setShowAllChanges((value) => !value)}>{showAllChanges ? 'Show fewer' : `Show all ${view.repository.length} files`}</button>}
       {view.fromRepository && repo?.truncated && <p className="rail-note">The repository has more changed files than are listed here. {openFolder ?? 'Open the folder to see all of them.'}</p>}
       {view.earlier.length > 0 && <>
         {view.fromRepository && <h4 className="rail-subhead">Edited earlier in this conversation</h4>}
-        <ul className="rail-files">{view.earlier.map(changeRow)}</ul>
+        <ul className="rail-files">{(showAllChanges ? view.earlier : view.earlier.slice(0, CHANGE_LIMIT)).map(changeRow)}</ul>
+        {view.earlier.length > CHANGE_LIMIT && !view.fromRepository && <button type="button" className="rail-link rail-more" onClick={() => setShowAllChanges((value) => !value)}>{showAllChanges ? 'Show fewer' : `Show all ${view.earlier.length} files`}</button>}
       </>}
     </Card>
 

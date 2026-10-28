@@ -584,7 +584,35 @@ async fn daemon_events_start(app: AppHandle, state: State<'_, AppState>) -> Resu
 
 #[tauri::command]
 fn ensure_daemon(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    // Wave 13 (found in the live test): the window's reconnect must not start the
+    // daemon behind the supervisor's back. While it waits out a backoff, or after it
+    // gave up, only the supervisor (or the owner's Try again) starts it.
+    if let Some(reason) = state.daemon_supervisor.lock().ok().and_then(|inner| supervisor_blocks_start(&inner.payload)) {
+        return Err(reason.to_owned());
+    }
     start_daemon(&app, &state)
+}
+
+/// Why a start from the window must wait, if it must.
+fn supervisor_blocks_start(payload: &DaemonSupervisor) -> Option<&'static str> {
+    match payload.state.as_str() {
+        "gave_up" => Some("The Bitbots service keeps stopping, so it was not restarted again. Use Try again."),
+        "restarting" => Some("The Bitbots service is restarting."),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod supervisor_gate_tests {
+    use super::*;
+    // Wave 13: the window's reconnect waits for the supervisor, which a live crash test showed it did not.
+    #[test]
+    fn the_window_never_starts_the_daemon_while_the_supervisor_waits_or_gave_up() {
+        let at = |state: &str| DaemonSupervisor { state: state.into(), ..DaemonSupervisor::running() };
+        assert!(supervisor_blocks_start(&DaemonSupervisor::running()).is_none());
+        assert!(supervisor_blocks_start(&at("restarting")).is_some());
+        assert!(supervisor_blocks_start(&at("gave_up")).unwrap().contains("Try again"));
+    }
 }
 
 /// The supervisor's current reading, for a window that just opened.
@@ -727,8 +755,10 @@ fn start_daemon_watcher(app: &AppHandle) {
                     inner.payload.next_retry_ms = None;
                     true
                 } else {
-                    let attempt = inner.payload.attempt.saturating_add(1);
-                    let wait = SUPERVISOR_BACKOFF_MS[(attempt as usize - 1).min(SUPERVISOR_BACKOFF_MS.len() - 1)];
+                    // The wait grows with the crashes inside the window, not with a
+                    // counter a successful restart would reset (found in the live test).
+                    let attempt = inner.crashes.len() as u32;
+                    let wait = SUPERVISOR_BACKOFF_MS[(attempt as usize).saturating_sub(1).min(SUPERVISOR_BACKOFF_MS.len() - 1)];
                     inner.payload.state = "restarting".into();
                     inner.payload.attempt = attempt;
                     inner.payload.next_retry_ms = Some(wait);

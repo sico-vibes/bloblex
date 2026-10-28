@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "fd828a4",
-  "documentCount": 351,
+  "revision": "87e4d1d",
+  "documentCount": 352,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -3413,7 +3413,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "32cde5d769213297ccf1095b9639946d1be53d6e5ed81d1a16a9f272c9f963f4",
+      "sha256": "1e5cf8f680f4bb125106f49971b4e26a4be75c4d2c485e9278f89d20f8810960",
       "headings": [
         {
           "id": "release-command",
@@ -16176,6 +16176,36 @@
           "text": "New",
           "level": 2
         },
+        {
+          "id": "changed",
+          "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "fixed",
+          "text": "Fixed",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "installation",
+          "text": "Installation",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/releases/0.1.0-beta.40",
+      "source": "docs/releases/0.1.0-beta.40.md",
+      "title": "Bitbots 0.1.0-beta.40",
+      "section": "Release notes",
+      "status": "Release note",
+      "sha256": "d3aa8634a32f3bae74e635a9c1e4746ff1c00d166af2de5b9e4c4e0ee6548b4b",
+      "headings": [
         {
           "id": "changed",
           "text": "Changed",

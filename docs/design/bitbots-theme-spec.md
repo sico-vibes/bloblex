@@ -1,7 +1,7 @@
 # Bitbots theme spec: the pixel re-skin (CSS only)
 
 > **What this is:** The pixel re-skin theme spec for the experimental Bitbots theme (CSS only), 13 October 2026.
-> **Status:** historical; superseded in part by [themes-spec.md](../history/fix-40/themes-spec.md) (the Frost look became Bitbots)
+> **Status:** historical. The Bitbots look (Frost) was retired on 27 October 2026; only Haze and Stone ship. See `AGENTS.md`, 27 October amendment.
 > **Last updated:** 2026-10-22
 
 Update 22 October 2026: the pixel re-skin described here was retired. `apps/desktop/src/ui/bitbots.css` no longer exists, and only the Bitbots (Frost) and Blobots looks remain. The current rules are in [design-system.md](design-system.md).

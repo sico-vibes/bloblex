@@ -1202,10 +1202,6 @@ export async function readClipboardImage() {
   if (!response.ok) throw new Error('The preview image is unavailable.')
   return new Uint8Array(await response.arrayBuffer())
 }
-export async function selectWallpaperImage() { return null }
-export async function importWallpaper() {}
-export async function readWallpaper() { return new Uint8Array() }
-export async function clearWallpaper() {}
 export async function selectMarkdownExportPath() { return 'preview-markdown-token' }
 export async function writeMarkdownExport(_selectionToken: string, _text: string) {}
 export async function selectBlobExportPath(_name: string) { return 'preview-blob-export-token' }

@@ -958,7 +958,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             Ok(json!({"deleted":true,"sessionIds":deleted}))
         }
         "agent.reorder" => { let rt=p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId is required",StatusCode::BAD_REQUEST))?;let ids=p["agentIds"].as_array().filter(|a|a.iter().all(Value::is_string)).ok_or_else(||derr("invalid_argument","agentIds must be an array of strings",StatusCode::BAD_REQUEST))?.iter().map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();let (agents,events)=st.db.agent_reorder(rt,&ids).map_err(agent_error)?;st.broadcast_persisted(events);Ok(json!({"agents":agents})) }
-        "app.snapshot" => st.db.snapshot().map_err(|e| {
+        // Wave 13: `lazy: true` (the desktop window) sends older idle
+        // conversations as `partial` summaries; everything else stays full.
+        "app.snapshot" => st.db.snapshot_with((p["lazy"] == true).then_some(LAZY_SNAPSHOT_KEEP)).map_err(|e| {
             derr(
                 "internal",
                 &e.to_string(),
@@ -4216,6 +4218,22 @@ fn merge_context_measurement(
     (context_used, context_size, model.or(previous_model), context_estimated)
 }
 
+/// How many of the most recent conversations a lazy snapshot still sends in full.
+const LAZY_SNAPSHOT_KEEP: usize = 15;
+
+/// How much longer a turn may stay quiet while one of its tools is still running.
+const RUNNING_TOOL_FACTOR: u32 = 6;
+
+/// Wave 13: the reason a silent turn was stopped, naming the coding agent and the
+/// window that ran out, so the owner knows it was a timeout and not an error.
+fn silence_message(provider: &str, started: bool, limit: std::time::Duration) -> String {
+    let name = provider_display_name(provider);
+    let secs = limit.as_secs();
+    let span = if secs >= 120 { format!("{} minutes", secs / 60) } else if secs == 60 { "a minute".to_owned() } else { format!("{secs} seconds") };
+    if started { format!("{name} sent nothing for {span}, so Bitbots stopped this turn. Send a message to try again.") }
+    else { format!("{name} did not start answering within {span}, so Bitbots stopped this turn. Send a message to try again.") }
+}
+
 async fn forward_events_with_timeouts(
     st: AppState,
     sid: String,
@@ -4230,6 +4248,10 @@ async fn forward_events_with_timeouts(
     let mut last_semantic_progress = Instant::now();
     let mut saw_semantic_progress = false;
     let mut was_waiting = false;
+    // Wave 13: tools that started and have not finished. A long command (a build,
+    // an install, a test run) is quiet while it works, so the window widens to
+    // RUNNING_TOOL_FACTOR times the inactivity window until it completes.
+    let mut open_tools: HashSet<String> = HashSet::new();
     loop {
         // While the user is being asked, the provider is legitimately idle:
         // neither window applies, and leaving that state restarts the window.
@@ -4242,8 +4264,11 @@ async fn forward_events_with_timeouts(
                 watched_turn = Some(turn_id.clone());
                 last_semantic_progress = Instant::now();
                 saw_semantic_progress = false;
+                open_tools.clear();
             }
-            let limit = if saw_semantic_progress {
+            let limit = if !open_tools.is_empty() {
+                semantic_inactivity_timeout.saturating_mul(RUNNING_TOOL_FACTOR)
+            } else if saw_semantic_progress {
                 semantic_inactivity_timeout
             } else {
                 startup_no_progress_timeout
@@ -4308,9 +4333,9 @@ async fn forward_events_with_timeouts(
                     }
                     let resumed_session = st.sessions.lock().await.contains_key(&sid);
                     let detail = safe_timeout_diagnostic(&provider, provider_diagnostic);
-                    let public_message = "The provider stopped making progress before the turn completed.";
-                    let after_detail = detail.clone().or(Some(public_message.to_owned()));
-                    finish_turn_failed(&st, &sid, turn_id, "timeout", public_message, detail, if resumed_session { "idle" } else { "error" }).await;
+                    let public_message = silence_message(&provider, saw_semantic_progress, limit);
+                    let after_detail = detail.clone().or(Some(public_message.clone()));
+                    finish_turn_failed(&st, &sid, turn_id, "timeout", &public_message, detail, if resumed_session { "idle" } else { "error" }).await;
                     after_provider_failure(&st, &sid, turn_id, after_detail);
                     retry::after_failed_turn(&st, &sid, Some(turn_id)).await;
                     watched_turn = None;
@@ -4331,6 +4356,11 @@ async fn forward_events_with_timeouts(
             || !st.db.session_exists(&sid).unwrap_or(false)
             || !st.sessions.lock().await.contains_key(&sid)
         { break; }
+        match &ev {
+            AgentEvent::ToolStarted { tool_call_id, .. } => { open_tools.insert(tool_call_id.clone()); }
+            AgentEvent::ToolCompleted { tool_call_id, .. } => { open_tools.remove(tool_call_id); }
+            _ => {}
+        }
         if matches!(
             &ev,
             AgentEvent::AssistantDelta { .. }
@@ -7328,6 +7358,34 @@ mod phase2a_tests {
             assert_eq!(st.db.session_detail(sid).unwrap()["state"],"idle");
             assert!(st.sessions.lock().await.contains_key(sid));
         }
+    }
+    // Wave 13: a quiet command keeps its turn alive longer, and the stop says why.
+    #[tokio::test]
+    async fn a_running_tool_widens_the_silence_window_and_the_stop_explains_itself(){
+        let(st,mut events)=state();
+        let(sid,turn)=("tool-quiet","tool-quiet-turn");
+        st.db.create_session(sid,"rt-test","claude",".","Quiet tool").unwrap();
+        st.db.create_turn(turn,sid).unwrap();
+        st.db.update_session_state(sid,"working").unwrap();
+        st.active_turns.lock().await.insert(sid.into(),turn.into());
+        let adapter=Arc::new(LifecycleAdapter{reject_resume:false,allow_resume:true,resume_calls:Default::default(),new_calls:Default::default(),close_calls:Default::default()});
+        let handle=SessionHandle{session_id:sid.into(),provider_session_id:"native".into(),capabilities:bloblex_agent_core::AgentCapabilities::default()};
+        let runtime=RuntimeSpec{runtime_id:"rt-test".into(),provider:"claude".into(),executable:PathBuf::from("fake"),args:vec![],cwd:None};
+        st.sessions.lock().await.insert(sid.into(),ActiveSession{handle,runtime,adapter,launch_approval_mode:ApprovalMode::Ask});
+        let(tx,rx)=tokio::sync::mpsc::channel(8);
+        let started=Instant::now();
+        let task=tokio::spawn(forward_events_with_timeouts(st.clone(),sid.into(),"claude".into(),"rt-test".into(),rx,std::time::Duration::from_millis(40),std::time::Duration::from_millis(40)));
+        tx.send(AgentEvent::ToolStarted{tool_call_id:"npm-install".into(),kind:"execute".into(),title:"npm install".into(),raw:json!({})}).await.unwrap();
+        let error=loop {
+            let event=tokio::time::timeout(std::time::Duration::from_secs(2),events.recv()).await.unwrap().unwrap();
+            if event.event_type=="turn.error" { break event; }
+        };
+        assert!(started.elapsed()>=std::time::Duration::from_millis(40*RUNNING_TOOL_FACTOR as u64 - 20),"a running command is not stopped after the ordinary window");
+        assert_eq!(error.payload["failureClass"],"timeout");
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(silence_message("claude",true,std::time::Duration::from_secs(300)),"Claude Code sent nothing for 5 minutes, so Bitbots stopped this turn. Send a message to try again.");
+        assert_eq!(silence_message("codex",false,std::time::Duration::from_secs(45)),"Codex did not start answering within 45 seconds, so Bitbots stopped this turn. Send a message to try again.");
     }
     #[tokio::test]
     async fn agent_rpc_crud_reorder_archive_errors_and_persisted_event_sequence(){

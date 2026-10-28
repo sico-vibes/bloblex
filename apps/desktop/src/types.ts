@@ -322,6 +322,8 @@ export interface Session extends JsonRecord {
   contextEstimated?: boolean
   files?: JsonRecord[]
   usage?: JsonRecord[]
+  /** Wave 13: a lazy snapshot sent only the last messages; `session.get` loads the rest. */
+  partial?: boolean
 }
 
 export interface PermissionRequest extends JsonRecord {

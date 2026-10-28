@@ -73,6 +73,18 @@ The 3D robot art (`apps/desktop/src/blob/BitbotCanvas.tsx`) is drawn by [robot-h
 
 The moments the companion plays a sound for (peek, open, close, switching, sending, a new reply, pokes, and agent work, finish, error, approval and question) follow the desktop companion [Coucou](https://github.com/Louis-CFM/coucou) (reviewed at `dd344853dc36e1edbce098d28c4e63a4ed2433c1`). Coucou's sound files are not licensed for reuse and none are included: every Bitbots cue in `apps/desktop/src/blob/soundCues.ts` is an original tone synthesized with Web Audio oscillators.
 
+## Terminal
+
+The terminal dock uses [xterm.js](https://github.com/xtermjs/xterm.js) (`@xterm/xterm` and `@xterm/addon-fit`, MIT) and [portable-pty](https://github.com/wezterm/wezterm/tree/main/pty) (MIT) for Windows ConPTY.
+
+## PDF preview
+
+PDFs in chat are drawn by [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist` 4.10.38, legacy build, Apache-2.0), loaded only when a PDF is shown. Its worker is bundled with the app; no remote code or font is fetched.
+
+## T3 Code
+
+The chat work log, checkpoint, terminal and rich-content designs were informed by reading [T3 Code](https://github.com/pingdotgg/t3code) (MIT, Copyright (c) 2026 T3 Tools Inc.), pinned at commit 220eb735. No T3 source file was copied; the implementations are written for Bitbots. If code is ever copied, keep T3's copyright and permission notice with it.
+
 ## MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:

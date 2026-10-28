@@ -27,3 +27,10 @@ export function doingNowLabel(tool: ToolRecord): string {
   if (/\b(fetch|web|browse)/.test(kind) && url) return clip(`Opening ${host(url)}`)
   return clip(text(tool.title) || 'Working')
 }
+
+/** What a conversation's running tool is doing, or null when no tool is running (wave 13: assignment cards). */
+export function doingNowFor(session: { state?: unknown; tools?: readonly ToolRecord[] } | null | undefined): string | null {
+  if (!session || !['working', 'starting'].includes(String(session.state ?? ''))) return null
+  const running = [...(session.tools ?? [])].reverse().find((tool) => ['running', 'pending', 'started'].includes(String(tool.state ?? '').toLowerCase()))
+  return running ? doingNowLabel(running) : null
+}

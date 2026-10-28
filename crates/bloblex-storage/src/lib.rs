@@ -6476,6 +6476,14 @@ impl Storage {
         Ok(json!({"from":from,"to":to,"inputTokens":i,"outputTokens":o,"cacheReadTokens":cr,"cacheWriteTokens":cw,"reasoningTokens":r}))
     }
     pub fn snapshot(&self) -> Result<Value, StorageError> {
+        self.snapshot_with(None)
+    }
+    /// Wave 13 lazy loading: with `Some(keep)`, only the `keep` most recently
+    /// updated conversations, and any that is not at rest, come back in full.
+    /// Older idle ones come back as `partial: true` summaries carrying their last
+    /// three messages (enough for previews); the window loads the rest with
+    /// `session.get` when one is opened. `None` keeps the full snapshot.
+    pub fn snapshot_with(&self, keep: Option<usize>) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx=c.unchecked_transaction()?;
         let c=&tx;
@@ -6495,15 +6503,20 @@ impl Storage {
                 .collect::<Vec<_>>()
         };
         let sessions = {
-            let mut q = c.prepare("SELECT id FROM sessions WHERE archived=0 ORDER BY updated_at DESC")?;
+            let mut q = c.prepare("SELECT id,state FROM sessions WHERE archived=0 ORDER BY updated_at DESC")?;
             let collected = q
-                .query_map([], |r| r.get::<_, String>(0))?
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             collected
         };
         let mut session_values = Vec::new();
-        for id in sessions {
-            session_values.push(self.session_detail_locked(c, &id)?)
+        for (index, (id, state)) in sessions.into_iter().enumerate() {
+            let at_rest = matches!(state.as_str(), "idle" | "completed" | "error" | "failed" | "cancelled" | "interrupted" | "closed");
+            if keep.is_some_and(|keep| index >= keep && at_rest) {
+                session_values.push(self.session_partial_locked(c, &id)?)
+            } else {
+                session_values.push(self.session_detail_locked(c, &id)?)
+            }
         }
         let permissions = query_jsons(
             c,
@@ -6522,7 +6535,15 @@ impl Storage {
         let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
+    /// A conversation for a lazy snapshot: what `session_detail_locked` returns
+    /// without turns, tools and files, and with only the last three messages.
+    fn session_partial_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
+        self.session_detail_parts(c, id, false)
+    }
     fn session_detail_locked(&self, c: &Connection, id: &str) -> Result<Value, StorageError> {
+        self.session_detail_parts(c, id, true)
+    }
+    fn session_detail_parts(&self, c: &Connection, id: &str, full: bool) -> Result<Value, StorageError> {
         let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
@@ -6531,8 +6552,15 @@ impl Storage {
         v["contextSize"] = json!(context_size);
         v["contextModel"] = json!(context_model);
         v["contextEstimated"] = json!(context_estimated);
+        if !full {
+            let mut last=query_jsons(c,&SESSION_MESSAGES_SQL.replace("ORDER BY sequence","ORDER BY sequence DESC LIMIT 3"),id)?;
+            last.reverse();
+            v["messages"] = json!(last);
+            v["partial"] = json!(true);
+            return Ok(v);
+        }
         let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'delivery',json_extract(t.data,'$.delivery'),'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
-        let msgs=query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta'),'references',json_extract(data,'$.references'),'reactions',json(COALESCE((SELECT json_group_array(emoji) FROM (SELECT emoji FROM message_reactions mr WHERE mr.session_id=messages.session_id AND mr.message_id=messages.id ORDER BY CASE emoji WHEN '👍' THEN 0 WHEN '👎' THEN 1 WHEN '❤️' THEN 2 WHEN '😂' THEN 3 WHEN '🎉' THEN 4 ELSE 5 END)), '[]'))) FROM messages WHERE session_id=?1 ORDER BY sequence",id)?;
+        let msgs=query_jsons(c,SESSION_MESSAGES_SQL,id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
         v["tools"] = json!(query_jsons(c,"SELECT json_object('id',id,'sessionId',session_id,'turnId',turn_id,'kind',json_extract(data,'$.kind'),'title',json_extract(data,'$.title'),'state',state,'startedAt',json_extract(data,'$.startedAt'),'completedAt',json_extract(data,'$.completedAt'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM tool_calls WHERE session_id=?1 ORDER BY rowid",id)?);
@@ -7097,6 +7125,9 @@ fn valid_usage_tip_dismissals(value: &Value) -> bool {
             && matches!(item["threshold"].as_u64(), Some(75 | 90 | 100))
     })
 }
+
+/// One conversation's messages, oldest first, as the session DTO carries them.
+const SESSION_MESSAGES_SQL: &str = "SELECT json_object('id',id,'turnId',turn_id,'sequence',sequence,'role',role,'content',content,'createdAt',created_at,'attachments',json_extract(data,'$.attachments'),'meta',json_extract(data,'$.meta'),'references',json_extract(data,'$.references'),'reactions',json(COALESCE((SELECT json_group_array(emoji) FROM (SELECT emoji FROM message_reactions mr WHERE mr.session_id=messages.session_id AND mr.message_id=messages.id ORDER BY CASE emoji WHEN '👍' THEN 0 WHEN '👎' THEN 1 WHEN '❤️' THEN 2 WHEN '😂' THEN 3 WHEN '🎉' THEN 4 ELSE 5 END)), '[]'))) FROM messages WHERE session_id=?1 ORDER BY sequence";
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
@@ -8737,6 +8768,32 @@ mod tests {
         let detail = db.session_detail("session").unwrap();
         let turn = detail["turns"].as_array().unwrap().iter().find(|turn| turn["id"] == "turn").unwrap().clone();
         assert_eq!(turn["failureClass"], "unauthenticated");
+    }
+
+    // Wave 13 lazy loading: recent and busy conversations stay full, older idle ones are partial.
+    #[test]
+    fn lazy_snapshot_sends_older_idle_conversations_as_partial_summaries() {
+        let db = Storage::open_in_memory().unwrap();
+        for (id, state) in [("old-idle", "idle"), ("old-busy", "working"), ("newest", "idle")] {
+            db.create_session(id, "runtime", "codex", ".", id).unwrap();
+            db.update_session_state(id, state).unwrap();
+            for n in 0..5 { db.append_message(id, "turn", if n % 2 == 0 { "user" } else { "assistant" }, &format!("{id} message {n}")).unwrap(); }
+            db.create_turn(&format!("{id}-turn"), id).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let full = db.snapshot().unwrap();
+        assert!(full["sessions"].as_array().unwrap().iter().all(|session| session["partial"].is_null() && session["messages"].as_array().unwrap().len() == 5), "the default snapshot is unchanged");
+        let lazy = db.snapshot_with(Some(1)).unwrap();
+        let find = |id: &str| lazy["sessions"].as_array().unwrap().iter().find(|session| session["id"] == id).unwrap().clone();
+        assert!(find("newest")["partial"].is_null(), "the most recent conversation is full");
+        assert!(find("old-busy")["partial"].is_null(), "a working conversation is full whatever its age");
+        assert_eq!(find("old-busy")["messages"].as_array().unwrap().len(), 5);
+        let partial = find("old-idle");
+        assert_eq!(partial["partial"], true);
+        assert_eq!(partial["messages"].as_array().unwrap().iter().map(|m| m["content"].as_str().unwrap().to_owned()).collect::<Vec<_>>(), vec!["old-idle message 2", "old-idle message 3", "old-idle message 4"], "the last three, oldest first");
+        assert!(partial.get("turns").is_none() && partial.get("tools").is_none() && partial.get("files").is_none());
+        assert_eq!(partial["title"], "old-idle");
+        assert!(partial.get("link").is_some() && partial.get("projectPath").is_some(), "lists keep what they need");
     }
 
     #[test]

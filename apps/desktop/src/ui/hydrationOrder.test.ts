@@ -16,4 +16,15 @@ describe('background conversation loading order', () => {
     expect(hydrationOrder(sessions, 'a').map((session) => session.id)).toEqual(['a-new', 'a-old', 'b-new'])
     expect(hydrationOrder(sessions, null).map((session) => session.id)).toEqual(['b-new', 'a-new', 'a-old'])
   })
+
+  // Wave 13: a lazy snapshot's partial conversation still loads, and an open one goes first.
+  it('loads partial conversations, the open one before everything else', () => {
+    const sessions = [
+      s('a-full', 'a', '2026-10-17T00:00:00Z', { messages: [] }),
+      s('b-partial', 'b', '2026-10-12T00:00:00Z', { messages: [], partial: true }),
+      s('a-partial', 'a', '2026-10-11T00:00:00Z', { messages: [], partial: true }),
+    ]
+    expect(hydrationOrder(sessions, 'a').map((session) => session.id)).toEqual(['a-partial', 'b-partial'])
+    expect(hydrationOrder(sessions, 'a', ['b-partial']).map((session) => session.id)).toEqual(['b-partial', 'a-partial'])
+  })
 })

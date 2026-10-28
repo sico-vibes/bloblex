@@ -221,11 +221,6 @@ export async function listenForOpenSettings(handler: (page: SettingsPageName | n
 
 export async function openProjectFolder(): Promise<string | null> { return null }
 export async function selectLocalFile(): Promise<string | null> { return null }
-/** Empty values: a remote device cannot open or store a host wallpaper file. */
-export async function selectWallpaperImage(): Promise<string | null> { return null }
-export async function importWallpaper(token: string): Promise<void> { void token }
-export async function readWallpaper(): Promise<Uint8Array> { return new Uint8Array() }
-export async function clearWallpaper(): Promise<void> { /* The host owns its wallpaper file. */ }
 export async function selectMarkdownExportPath(): Promise<string | null> { return null }
 export async function selectBlobExportPath(name: string): Promise<string | null> { void name; return null }
 export async function selectBlobImportPath(): Promise<string | null> { return null }

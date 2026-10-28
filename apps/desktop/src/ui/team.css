@@ -215,7 +215,6 @@
 
 /* The Manager: pinned above every project, set apart by a hairline. */
 .manager-group { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-:root[data-bitbots="on"] .manager-group { border-bottom: 2px dotted var(--bb-line); }
 
 /* FIX39 item 21: tags. Small, monochrome, tertiary — the routing vocabulary the
    Manager matches a job to. Shown as chips on a project row and edited in a

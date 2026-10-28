@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "985a1bc",
-  "documentCount": 320,
+  "revision": "40aee59",
+  "documentCount": 350,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -327,7 +327,7 @@
       "title": "Glossary",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "5e1468beeba7914eec899f2babe61843bf69ba2882ef1ae900422264841acb73",
+      "sha256": "4bb214d9ea281321b1fa9c247acb4bec48997a2e5e63979f883c632e00c5539b",
       "headings": []
     },
     {
@@ -586,7 +586,7 @@
       "title": "Companion and dictation",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "8a4c96cbe14ccb654ea9851ffd86b07b5868927c0d2a28df78a61d2caf57576d",
+      "sha256": "c3f37a9c3026463acecb449632ad9f454a42387ae5615b5f72dde81e6d5e617b",
       "headings": [
         {
           "id": "before-you-start",
@@ -1371,11 +1371,16 @@
       "title": "Theme system",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "3a6acc9c59a620c83364186ad1fea0536f0d8ad51afee26b1f115f40497a0098",
+      "sha256": "ba62bea2e6c1aea156ba2f24d82a6c6eca9efa9bc409fbb4d3eef8ac5587e349",
       "headings": [
         {
           "id": "supported-looks",
           "text": "Supported looks",
+          "level": 2
+        },
+        {
+          "id": "haze-native-frosted-glass-27-october-2026-not-verified-at-runtime",
+          "text": "Haze: native frosted glass (27 October 2026, not verified at runtime)",
           "level": 2
         },
         {
@@ -1776,7 +1781,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "18b73858f7550ce4a4d6a390347435cf00c48caf6a2e253b28771387a70b3cff",
+      "sha256": "66537b5216cd63caee09704ad3d308a8ae6b3c3df7f5d61236be611f5ade47aa",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1806,7 +1811,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "e2afe8799eb66a49c607972cea57a2d8efbb08617893124ac84a0a78ae200311",
+      "sha256": "e7af1998b89d527b784dddd1ee5e92fc3f7be91d1ea1ca5a51eab1b47bfd3c9c",
       "headings": [
         {
           "id": "update-commands",
@@ -1866,6 +1871,21 @@
         {
           "id": "task-board-22-october-2026",
           "text": "Task board (22 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "t3-additions-26-october-2026",
+          "text": "T3 additions (26 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "wave-12-backend-additions-28-october-2026",
+          "text": "Wave 12 backend additions (28 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "wave-13-loop-guards-sharing-phone-catch-up-and-outside-sessions",
+          "text": "Wave 13: loop guards, sharing, phone catch-up and outside sessions",
           "level": 3
         },
         {
@@ -2723,7 +2743,7 @@
       "title": "Bitbots Design System",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "37104f5db1fb7b0d1703ace20458f9fce6dafa42bf8150aa28b4e06899925bb3",
+      "sha256": "9e836399313057152a778cf49fe5fbc2704a596aadfd4627e9acb684a289f785",
       "headings": [
         {
           "id": "scene-and-register",
@@ -2776,8 +2796,8 @@
           "level": 3
         },
         {
-          "id": "frost-bitbots",
-          "text": "Frost (Bitbots)",
+          "id": "frost-retired-27-october-2026-kept-for-history",
+          "text": "Frost (retired 27 October 2026; kept for history)",
           "level": 3
         },
         {
@@ -2803,6 +2823,21 @@
         {
           "id": "companion-and-dictation-windows-fix41",
           "text": "Companion and dictation windows (FIX41)",
+          "level": 3
+        },
+        {
+          "id": "haze-frosted-glass-27-october-2026",
+          "text": "Haze: frosted glass (27 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "haze-backdrop-opacity-26-october-2026-the-fallback-when-no-native-blur-is-drawn",
+          "text": "Haze: backdrop opacity (26 October 2026; the fallback when no native blur is drawn)",
+          "level": 3
+        },
+        {
+          "id": "rich-content-terminal-and-review-cards-t3-wave-26-october-2026",
+          "text": "Rich content, terminal and review cards (T3 wave, 26 October 2026)",
           "level": 3
         }
       ]
@@ -2858,7 +2893,7 @@
       "title": "Bitbots theme spec: the pixel re-skin (CSS only)",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "f5a221e7abcf4a3029d59bd85e1a0ec4c88f8cd55dd0e9e4523f35386493dc00",
+      "sha256": "6004065d21b17d996060a3fe7dc714ad809ec243cfba570cc2d559ac683c9944",
       "headings": [
         {
           "id": "what-this-is",
@@ -3448,7 +3483,7 @@
       "title": "Third-party notices",
       "section": "Legal",
       "status": "Legal notice",
-      "sha256": "1fdd7abf31c16b921e2ae276ab8948afa51364abb5de94d6ca0f75989bfc66f9",
+      "sha256": "885f2bf6673ee3ad5d09b74df081b817bcf3eee182b9239e3d2792cb5f87f976",
       "headings": [
         {
           "id": "bundled-fonts",
@@ -3503,6 +3538,21 @@
         {
           "id": "companion-sounds",
           "text": "Companion sounds",
+          "level": 2
+        },
+        {
+          "id": "terminal",
+          "text": "Terminal",
+          "level": 2
+        },
+        {
+          "id": "pdf-preview",
+          "text": "PDF preview",
+          "level": 2
+        },
+        {
+          "id": "t3-code",
+          "text": "T3 Code",
           "level": 2
         },
         {
@@ -12236,6 +12286,106 @@
       ]
     },
     {
+      "id": "project/history/fix44/REPORT",
+      "source": "docs/history/fix44/REPORT.md",
+      "title": "FIX44 — composer and conversation fixes",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "19e382eb2494a7d496e2ca1e9d8a7b0aba8ee05bcdfe37fffe4f80d539df212f",
+      "headings": [
+        {
+          "id": "what-changed-and-where",
+          "text": "What changed, and where",
+          "level": 2
+        },
+        {
+          "id": "1-model-warning-scope",
+          "text": "1 Model warning scope",
+          "level": 3
+        },
+        {
+          "id": "2-sent-images",
+          "text": "2 Sent images",
+          "level": 3
+        },
+        {
+          "id": "3-remove-x-and-effort-picker",
+          "text": "3 Remove X and effort picker",
+          "level": 3
+        },
+        {
+          "id": "4-queue-and-status",
+          "text": "4 Queue and status",
+          "level": 3
+        },
+        {
+          "id": "5-states-and-auto-titles",
+          "text": "5 States and auto-titles",
+          "level": 3
+        },
+        {
+          "id": "6-permissions",
+          "text": "6 Permissions",
+          "level": 3
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "native-run-windows-dev-shell-private-dev-database",
+          "text": "Native run (Windows dev shell, private dev database)",
+          "level": 2
+        },
+        {
+          "id": "owner-decisions",
+          "text": "Owner decisions",
+          "level": 2
+        },
+        {
+          "id": "out-of-scope-residual-risk",
+          "text": "Out of scope / residual risk",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/fix45/REPORT",
+      "source": "docs/history/fix45/REPORT.md",
+      "title": "FIX45 — session rail, drafts, delete hold, dictation, Manager and outcome fixes",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "c125bde7a7619e5d5a1fc1fcb4e70698f5b33a32e633dcfdfed7476c2136b7a8",
+      "headings": [
+        {
+          "id": "what-changed",
+          "text": "What changed",
+          "level": 2
+        },
+        {
+          "id": "source-implementation-this-record-read-narrowly",
+          "text": "Source implementation (this record, read narrowly)",
+          "level": 2
+        },
+        {
+          "id": "verification-boundary",
+          "text": "Verification boundary",
+          "level": 2
+        },
+        {
+          "id": "remaining-risks",
+          "text": "Remaining risks",
+          "level": 2
+        },
+        {
+          "id": "skill-updates",
+          "text": "Skill updates",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/history/fix-05/opencode2-per-model-effort-spec",
       "source": "docs/history/fix-05/opencode2-per-model-effort-spec.md",
       "title": "FIX5: OpenCode 2 per-model effort levels and a validated catalog",
@@ -12491,6 +12641,300 @@
       ]
     },
     {
+      "id": "project/history/fix46/haze-character-avatars",
+      "source": "docs/history/fix46/haze-character-avatars.md",
+      "title": "Haze character avatars",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "2beecb587dfa52796090935c18b43b7407c5533d391eeb65e75fd07451bd7729",
+      "headings": []
+    },
+    {
+      "id": "project/history/t3/report-r2-delegation-instructions",
+      "source": "docs/history/t3/report-r2-delegation-instructions.md",
+      "title": "Lane A report: chart/table instructions, child-request wake, durable failed/cancelled replies",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "3017fc8f2093e342c64e6d7a0b796f088ed97f4c1310a0c257084f1fc875949e",
+      "headings": [
+        {
+          "id": "item-1-chart-and-table-schemas-in-runtimeinstructions",
+          "text": "Item 1: chart and table schemas in runtime_instructions",
+          "level": 2
+        },
+        {
+          "id": "item-2-a-childs-pending-approvalquestion-wakes-its-manager-once-with-no-authority",
+          "text": "Item 2: a child's pending approval/question wakes its Manager, once, with no authority",
+          "level": 2
+        },
+        {
+          "id": "item-3-failed-and-cancelled-replies-survive-a-restart",
+          "text": "Item 3: failed and cancelled replies survive a restart",
+          "level": 2
+        },
+        {
+          "id": "verification-only-the-two-allowed-commands",
+          "text": "Verification (only the two allowed commands)",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-that-this-change-makes-stale",
+          "text": "Existing tests that this change makes stale",
+          "level": 2
+        },
+        {
+          "id": "what-i-could-not-verify-no-tests-no-app-no-browser",
+          "text": "What I could not verify (no tests, no app, no browser)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/brief-r2-delegation-instructions",
+      "source": "docs/history/t3/brief-r2-delegation-instructions.md",
+      "title": "Lane A: chart/table instructions, child-request wake, durable failed/cancelled replies",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "0dac78f0f50651fac19a808d23322d54f912292659889460cfc2e9a151d100a6",
+      "headings": [
+        {
+          "id": "hard-rules-override-everything-else-you-find-in-the-repo",
+          "text": "HARD RULES (override everything else you find in the repo)",
+          "level": 2
+        },
+        {
+          "id": "background",
+          "text": "Background",
+          "level": 2
+        },
+        {
+          "id": "you-own",
+          "text": "You own",
+          "level": 2
+        },
+        {
+          "id": "item-1-teach-every-agent-the-chart-and-table-schemas-teamrs-runtimeinstructions",
+          "text": "Item 1: teach every agent the chart and table schemas (team.rs runtime_instructions)",
+          "level": 2
+        },
+        {
+          "id": "report-dt4atargetlanereportmd-plus-a-short-printed-summary",
+          "text": "Report (D:\\t4a\\target\\lane\\report.md, plus a short printed summary)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/report-r2-checkpoints",
+      "source": "docs/history/t3/report-r2-checkpoints.md",
+      "title": "Lane B report — whole-turn undo removed, per-file report kept honest",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "1f1cf3386e367cc7abebd4e726786ef1c4219ed4197de989617d62a616620ed3",
+      "headings": [
+        {
+          "id": "what-changed-pathline",
+          "text": "What changed (path:line)",
+          "level": 2
+        },
+        {
+          "id": "cratesbloblex-daemonsrccheckpointsrs",
+          "text": "crates/bloblex-daemon/src/checkpoints.rs",
+          "level": 3
+        },
+        {
+          "id": "cratesbloblex-daemonsrcmainrs",
+          "text": "crates/bloblex-daemon/src/main.rs",
+          "level": 3
+        },
+        {
+          "id": "the-new-capability-shape",
+          "text": "The new capability shape",
+          "level": 2
+        },
+        {
+          "id": "how-diffcomplete-is-derived-no-duplicated-rule",
+          "text": "How diffComplete is derived (no duplicated rule)",
+          "level": 3
+        },
+        {
+          "id": "what-i-verified-in-experimentsreversefile-item-3",
+          "text": "What I verified in experiments::reverse_file (item 3)",
+          "level": 2
+        },
+        {
+          "id": "cargo-check-last-15-lines-first-uncached-run",
+          "text": "Cargo check — last 15 lines (first, uncached run)",
+          "level": 2
+        },
+        {
+          "id": "stale-tests-not-edited-none-run",
+          "text": "Stale tests (not edited, none run)",
+          "level": 2
+        },
+        {
+          "id": "follow-ups-outside-this-lanes-files-not-edited-for-the-director",
+          "text": "Follow-ups outside this lane's files (NOT edited — for the Director)",
+          "level": 2
+        },
+        {
+          "id": "tests",
+          "text": "Tests",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/brief-r2-checkpoints",
+      "source": "docs/history/t3/brief-r2-checkpoints.md",
+      "title": "Lane B: remove the whole-turn undo; keep honest single-file checks",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "16dde40fc2994e3ce2d88a873383fb3f376f47ea5f9583e450a8a62b30192783",
+      "headings": [
+        {
+          "id": "hard-rules",
+          "text": "HARD RULES",
+          "level": 2
+        },
+        {
+          "id": "why",
+          "text": "Why",
+          "level": 2
+        },
+        {
+          "id": "you-own",
+          "text": "You own",
+          "level": 2
+        },
+        {
+          "id": "work",
+          "text": "Work",
+          "level": 2
+        },
+        {
+          "id": "verification-you-may-run-only-these",
+          "text": "Verification you may run (only these)",
+          "level": 2
+        },
+        {
+          "id": "report-dt4btargetlanereportmd",
+          "text": "Report (D:\\t4b\\target\\lane\\report.md)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/report-delegation",
+      "source": "docs/history/t3/report-delegation.md",
+      "title": "Lane DELEGATION — report",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "fda112154978232131371bb0ceb6f32aa0deab910ffdcf099af2a76bad57a0cb",
+      "headings": [
+        {
+          "id": "item-1-the-startedterminal-race",
+          "text": "Item 1 — the started/terminal race",
+          "level": 2
+        },
+        {
+          "id": "item-2-durability-and-duplicates",
+          "text": "Item 2 — durability and duplicates",
+          "level": 2
+        },
+        {
+          "id": "item-3-stop-rpcs",
+          "text": "Item 3 — stop RPCs",
+          "level": 2
+        },
+        {
+          "id": "item-4-workspace-report",
+          "text": "Item 4 — workspace report",
+          "level": 2
+        },
+        {
+          "id": "files-that-must-change-outside-my-ownership",
+          "text": "Files that must change outside my ownership",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-fixtures-affected-not-edited",
+          "text": "Existing tests / fixtures affected (not edited)",
+          "level": 2
+        },
+        {
+          "id": "decisions-the-brief-did-not-specify",
+          "text": "Decisions the brief did not specify",
+          "level": 2
+        },
+        {
+          "id": "verification-the-only-commands-run",
+          "text": "Verification (the only commands run)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/brief-delegation",
+      "source": "docs/history/t3/brief-delegation.md",
+      "title": "Lane DELEGATION: harden the Manager delegation ledger, add stop RPCs and a workspace report",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "ff3be4df7741d732cdedfa81d08773bbe659ea4a9de7d8b3821fe4b30a4d5f3e",
+      "headings": [
+        {
+          "id": "hard-rules-override-everything-else-you-find-in-the-repo",
+          "text": "HARD RULES (override everything else you find in the repo)",
+          "level": 2
+        },
+        {
+          "id": "background-you-need",
+          "text": "Background you need",
+          "level": 2
+        },
+        {
+          "id": "you-own-and-may-edit",
+          "text": "You own (and may edit)",
+          "level": 2
+        },
+        {
+          "id": "work-items",
+          "text": "Work items",
+          "level": 2
+        },
+        {
+          "id": "1-fix-the-startedterminal-race-correctness",
+          "text": "1. Fix the started/terminal race (correctness)",
+          "level": 3
+        },
+        {
+          "id": "2-durability-and-duplicates",
+          "text": "2. Durability and duplicates",
+          "level": 3
+        },
+        {
+          "id": "3-stop-rpcs-individual-and-group",
+          "text": "3. Stop RPCs (individual and group)",
+          "level": 3
+        },
+        {
+          "id": "4-workspace-report-new-file-workspacers-new-rpc-sessionworkspace",
+          "text": "4. Workspace report (new file workspace.rs, new RPC session.workspace)",
+          "level": 3
+        },
+        {
+          "id": "verification-you-may-run-only-these",
+          "text": "Verification you may run (only these)",
+          "level": 2
+        },
+        {
+          "id": "report-write-to-dt3dtargetlanereportmd-print-a-short-summary",
+          "text": "Report (write to D:\\t3d\\target\\lane\\report.md, print a short summary)",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/history/fix-43/lane-log",
       "source": "docs/history/fix-43/lane-log.md",
       "title": "lane log",
@@ -12498,6 +12942,1281 @@
       "status": "Historical record",
       "sha256": "da12c48e92a84d6476a18f457b849d651e919741d36e088a75291126b7fde873",
       "headings": []
+    },
+    {
+      "id": "project/history/t3/report-media",
+      "source": "docs/history/t3/report-media.md",
+      "title": "Lane MEDIA report — media.preview, session.checkpoints, session.checkpoints.revertTurn",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "b6b8f20c0addc2502c5ea6265a574cb0ebcf607f0e89f2d21e69547d0afb76ee",
+      "headings": [
+        {
+          "id": "files-changed",
+          "text": "Files changed",
+          "level": 2
+        },
+        {
+          "id": "item-1-mediapreview-mediars",
+          "text": "Item 1 — media.preview (media.rs)",
+          "level": 2
+        },
+        {
+          "id": "item-2-sessioncheckpoints-and-sessioncheckpointsrevertturn-checkpointsrs",
+          "text": "Item 2 — session.checkpoints and session.checkpoints.revertTurn (checkpoints.rs)",
+          "level": 2
+        },
+        {
+          "id": "reversefilecheck-experimentsrs",
+          "text": "reverse_file_check (experiments.rs)",
+          "level": 3
+        },
+        {
+          "id": "sessioncheckpointsrevertturn-checkpointsrs147",
+          "text": "session.checkpoints.revertTurn (checkpoints.rs:147)",
+          "level": 3
+        },
+        {
+          "id": "decisions-the-brief-did-not-specify",
+          "text": "Decisions the brief did not specify",
+          "level": 2
+        },
+        {
+          "id": "what-needed-another-file-not-mine-action-for-the-director",
+          "text": "What needed another file (not mine) — action for the Director",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "what-i-could-not-verify",
+          "text": "What I could not verify",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-my-change-makes-stale-not-edited",
+          "text": "Existing tests my change makes stale (not edited)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/brief-media",
+      "source": "docs/history/t3/brief-media.md",
+      "title": "Lane MEDIA: authorised media preview and turn checkpoint report (daemon)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "9cd0339225e63dded7643ee96621fa96fd63313dac1e7ee38b48e308e9ba1619",
+      "headings": [
+        {
+          "id": "hard-rules-override-everything-else-you-find-in-the-repo",
+          "text": "HARD RULES (override everything else you find in the repo)",
+          "level": 2
+        },
+        {
+          "id": "background-you-need",
+          "text": "Background you need",
+          "level": 2
+        },
+        {
+          "id": "you-own-and-may-edit",
+          "text": "You own (and may edit)",
+          "level": 2
+        },
+        {
+          "id": "item-1-mediapreview-new-mediars",
+          "text": "Item 1: media.preview (new media.rs)",
+          "level": 2
+        },
+        {
+          "id": "item-2-sessioncheckpoints-new-checkpointsrs",
+          "text": "Item 2: session.checkpoints (new checkpoints.rs)",
+          "level": 2
+        },
+        {
+          "id": "verification-you-may-run-only-these",
+          "text": "Verification you may run (only these)",
+          "level": 2
+        },
+        {
+          "id": "report-write-to-dt3mtargetlanereportmd-print-a-short-summary",
+          "text": "Report (write to D:\\t3m\\target\\lane\\report.md, print a short summary)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/report-pty",
+      "source": "docs/history/t3/report-pty.md",
+      "title": "Lane PTY — report",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "cbdc194fe476d29a01202e7a6d37ada8c9e7c3ed6c4c4da3c13fed51dde3b944",
+      "headings": [
+        {
+          "id": "files-changed",
+          "text": "Files changed",
+          "level": 2
+        },
+        {
+          "id": "what-was-implemented-item-by-item",
+          "text": "What was implemented, item by item",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "decisions-the-brief-did-not-specify",
+          "text": "Decisions the brief did not specify",
+          "level": 2
+        },
+        {
+          "id": "not-verified-cannot-in-this-lane",
+          "text": "Not verified (cannot, in this lane)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/brief-pty",
+      "source": "docs/history/t3/brief-pty.md",
+      "title": "Lane PTY: native terminal sessions for the Bitbots desktop shell",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "b589ed4617475ea3bccb53bc52c6f5a1dca8e0ddb102900f7bbe0ee8a22fe75d",
+      "headings": [
+        {
+          "id": "hard-rules-override-everything-else-you-find-in-the-repo",
+          "text": "HARD RULES (override everything else you find in the repo)",
+          "level": 2
+        },
+        {
+          "id": "goal",
+          "text": "Goal",
+          "level": 2
+        },
+        {
+          "id": "you-own-and-may-edit",
+          "text": "You own (and may edit)",
+          "level": 2
+        },
+        {
+          "id": "contract-the-ui-is-being-written-against-exactly-this",
+          "text": "Contract (the UI is being written against exactly this)",
+          "level": 2
+        },
+        {
+          "id": "behaviour-rules",
+          "text": "Behaviour rules",
+          "level": 3
+        },
+        {
+          "id": "verification-you-may-run-these-are-the-only-build-commands-allowed",
+          "text": "Verification you may run (these are the only build commands allowed)",
+          "level": 2
+        },
+        {
+          "id": "report-write-to-dt3ptargetlanereportmd-and-print-a-short-summary",
+          "text": "Report (write to D:\\t3p\\target\\lane\\report.md and print a short summary)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/report-r3-child-questions",
+      "source": "docs/history/t3/report-r3-child-questions.md",
+      "title": "Lane Q report — a delegated (side-conversation) bot can ask the human, end to end",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "703e6dbf5fa77f384a0af80bb4e923ff3d46fe977bb5bac26d6c790793750cd2",
+      "headings": [
+        {
+          "id": "1-gate-when-a-side-conversation-may-ask",
+          "text": "1. Gate: when a side conversation may ask",
+          "level": 2
+        },
+        {
+          "id": "2-a-pending-question-holds-the-assignment-open",
+          "text": "2. A pending question holds the assignment open",
+          "level": 2
+        },
+        {
+          "id": "3-parent-visibility-without-authority",
+          "text": "3. Parent visibility without authority",
+          "level": 2
+        },
+        {
+          "id": "4-instructions",
+          "text": "4. Instructions",
+          "level": 2
+        },
+        {
+          "id": "mainrs-one-line-unavoidable",
+          "text": "main.rs — one line, unavoidable",
+          "level": 2
+        },
+        {
+          "id": "how-a-delegated-question-flows-now",
+          "text": "How a delegated question flows now",
+          "level": 2
+        },
+        {
+          "id": "refusals-kept",
+          "text": "Refusals kept",
+          "level": 2
+        },
+        {
+          "id": "unverified-known-limits",
+          "text": "Unverified / known limits",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-this-makes-stale-not-edited",
+          "text": "Existing tests this makes stale (not edited)",
+          "level": 2
+        },
+        {
+          "id": "gate-output-last-15-lines-of-each",
+          "text": "Gate output (last 15 lines of each)",
+          "level": 2
+        },
+        {
+          "id": "proposed-bitbots-development-skill-note-not-applied-claude-is-out-of-bounds-for-this-lane",
+          "text": "Proposed bitbots-development skill note (not applied: .claude/ is out of bounds for this lane)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/brief-r3-child-questions",
+      "source": "docs/history/t3/brief-r3-child-questions.md",
+      "title": "Lane Q: let a delegated (side-conversation) bot ask the human a question, end to end",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "2ff3abd224fb40c1ea1eabf806c123b6f4ac106e679cc5830f85ed4707098b51",
+      "headings": [
+        {
+          "id": "hard-rules-override-everything-else-in-the-repo",
+          "text": "HARD RULES (override everything else in the repo)",
+          "level": 2
+        },
+        {
+          "id": "background-read-first-questionsrs-completely-then-delegationsrs-then-teamrs-mcprpc-afterturn-runtimeinstructions",
+          "text": "Background (read first: questions.rs completely, then delegations.rs, then team.rs mcp_rpc, after_turn, runtime_instructions)",
+          "level": 2
+        },
+        {
+          "id": "you-own",
+          "text": "You own",
+          "level": 2
+        },
+        {
+          "id": "work",
+          "text": "Work",
+          "level": 2
+        },
+        {
+          "id": "1-gate-when-a-side-conversation-may-ask",
+          "text": "1. Gate: when a side conversation may ask",
+          "level": 3
+        },
+        {
+          "id": "2-a-pending-question-holds-the-assignment-open",
+          "text": "2. A pending question holds the assignment open",
+          "level": 3
+        },
+        {
+          "id": "3-parent-visibility-without-authority",
+          "text": "3. Parent visibility without authority",
+          "level": 3
+        },
+        {
+          "id": "4-instructions",
+          "text": "4. Instructions",
+          "level": 3
+        },
+        {
+          "id": "verification-you-may-run-only-these",
+          "text": "Verification you may run (only these)",
+          "level": 2
+        },
+        {
+          "id": "report-dt5targetlanereportmd",
+          "text": "Report (D:\\t5\\target\\lane\\report.md)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/report-t6-question-race-reviewed",
+      "source": "docs/history/t7/report-t6-question-race-reviewed.md",
+      "title": "Lane R report — delegated questions, their answers and their turns tied to the delegation row",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "ec894cae23282a365e0f9962f2186f8f0bcf3c550894fdc45bdac4908c9334da",
+      "headings": [
+        {
+          "id": "a-the-association-is-persisted-on-the-question-from-the-daemons-own-lookup",
+          "text": "A. The association is persisted on the question, from the daemon's own lookup",
+          "level": 2
+        },
+        {
+          "id": "b-a-question-holds-its-assignment-open-until-the-answers-turn-has-started",
+          "text": "B. A question holds its assignment open until the answer's turn has started",
+          "level": 2
+        },
+        {
+          "id": "c-closing-is-per-assignment",
+          "text": "C. Closing is per assignment",
+          "level": 2
+        },
+        {
+          "id": "d-everything-that-guessed-a-row-now-uses-the-questions-row",
+          "text": "D. Everything that guessed a row now uses the question's row",
+          "level": 2
+        },
+        {
+          "id": "e-authorization-and-idempotency-verified-not-weakened",
+          "text": "E. Authorization and idempotency (verified, not weakened)",
+          "level": 2
+        },
+        {
+          "id": "gap-1-walked-through-in-the-new-code",
+          "text": "Gap 1 walked through in the new code",
+          "level": 2
+        },
+        {
+          "id": "gap-2-walked-through-in-the-new-code",
+          "text": "Gap 2 walked through in the new code",
+          "level": 2
+        },
+        {
+          "id": "cases-i-could-not-make-fully-safe-exact-remaining-gaps",
+          "text": "Cases I could not make fully safe (exact remaining gaps)",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-this-makes-stale",
+          "text": "Existing tests this makes stale",
+          "level": 2
+        },
+        {
+          "id": "checks-last-15-lines-of-each-verbatim",
+          "text": "Checks (last 15 lines of each, verbatim)",
+          "level": 2
+        },
+        {
+          "id": "what-i-did-not-need",
+          "text": "What I did not need",
+          "level": 2
+        },
+        {
+          "id": "proposed-skill-update-i-may-not-edit-claude",
+          "text": "Proposed skill update (I may not edit .claude/)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/brief-t6-question-race",
+      "source": "docs/history/t7/brief-t6-question-race.md",
+      "title": "Lane R: tie delegated questions, their answers and their turns to the delegation, not the session",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "a6d14746ee59bb3f791ceb89d4d92a17d5e4d5372321f977fb7ccf83bee7c280",
+      "headings": [
+        {
+          "id": "hard-rules-override-everything-else-in-the-repo",
+          "text": "HARD RULES (override everything else in the repo)",
+          "level": 2
+        },
+        {
+          "id": "background-read-first-questionsrs-delegationsrs-entirely-teamrsafterturn-queuers-around-line-279-sessionpromptimpl-in-mainrs",
+          "text": "Background (read first: questions.rs, delegations.rs entirely, team.rs::after_turn, queue.rs around line 279, session_prompt_impl in main.rs)",
+          "level": 2
+        },
+        {
+          "id": "design-you-must-implement-do-not-simplify-away-the-parts-about-idempotency",
+          "text": "Design you must implement (do not simplify away the parts about idempotency)",
+          "level": 2
+        },
+        {
+          "id": "you-own",
+          "text": "You own",
+          "level": 2
+        },
+        {
+          "id": "verification-you-may-run-only-these",
+          "text": "Verification you may run (only these)",
+          "level": 2
+        },
+        {
+          "id": "report-dt6targetlanereportmd",
+          "text": "Report (D:\\t6\\target\\lane\\report.md)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/brief-u1-model-and-commands",
+      "source": "docs/history/t7/brief-u1-model-and-commands.md",
+      "title": "Lane U1 brief: model switching that tells the truth, and idempotent session commands",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "2eeaca4fd1ffd5b3827ba6c3f9c9b2752d6a92ee46516629c213c712b5838b29",
+      "headings": [
+        {
+          "id": "hard-rules-owner-27-october-2026-they-override-the-repo-gates",
+          "text": "Hard rules (owner, 27 October 2026; they override the repo gates)",
+          "level": 2
+        },
+        {
+          "id": "files-you-own",
+          "text": "Files you own",
+          "level": 2
+        },
+        {
+          "id": "item-a-model-switching-must-use-what-each-provider-can-really-do",
+          "text": "Item A: model switching must use what each provider can really do",
+          "level": 2
+        },
+        {
+          "id": "evidence-read-these-first",
+          "text": "Evidence (read these first)",
+          "level": 3
+        },
+        {
+          "id": "what-to-build",
+          "text": "What to build",
+          "level": 3
+        },
+        {
+          "id": "item-b-idempotent-sessionprompt-and-sessionqueueadd",
+          "text": "Item B: idempotent session.prompt and session.queue.add",
+          "level": 2
+        },
+        {
+          "id": "evidence",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "what-to-build-1",
+          "text": "What to build",
+          "level": 3
+        },
+        {
+          "id": "acceptance-and-report",
+          "text": "Acceptance and report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/report-u1-model-and-commands",
+      "source": "docs/history/t7/report-u1-model-and-commands.md",
+      "title": "Lane U1 report: honest model switching and idempotent session commands",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "56ab5b4344a88363ca323149b4d6c09ffc70ad1752a01785bc966591c03a3b42",
+      "headings": [
+        {
+          "id": "item-a-model-switching-uses-what-each-provider-can-really-do",
+          "text": "Item A: model switching uses what each provider can really do",
+          "level": 2
+        },
+        {
+          "id": "a1-capability-on-the-adapter-trait",
+          "text": "A1. Capability on the adapter trait",
+          "level": 3
+        },
+        {
+          "id": "a2-read-only-sessionmodelplan",
+          "text": "A2. Read-only session.model.plan",
+          "level": 3
+        },
+        {
+          "id": "a3-updatesessionmodel-uses-the-capability",
+          "text": "A3. update_session_model uses the capability",
+          "level": 3
+        },
+        {
+          "id": "a4-atomic-persistence",
+          "text": "A4. Atomic persistence",
+          "level": 3
+        },
+        {
+          "id": "a5-stale-updates",
+          "text": "A5. Stale updates",
+          "level": 3
+        },
+        {
+          "id": "a6-idempotent-repeats",
+          "text": "A6. Idempotent repeats",
+          "level": 3
+        },
+        {
+          "id": "a7-pending-queued-work",
+          "text": "A7. Pending queued work",
+          "level": 3
+        },
+        {
+          "id": "item-b-idempotent-sessionprompt-and-sessionqueueadd",
+          "text": "Item B: idempotent session.prompt and session.queue.add",
+          "level": 2
+        },
+        {
+          "id": "b1-accepted-key",
+          "text": "B1. Accepted key",
+          "level": 3
+        },
+        {
+          "id": "b2-durable-storage",
+          "text": "B2. Durable storage",
+          "level": 3
+        },
+        {
+          "id": "b3-replay-rule",
+          "text": "B3. Replay rule",
+          "level": 3
+        },
+        {
+          "id": "b4-logging",
+          "text": "B4. Logging",
+          "level": 3
+        },
+        {
+          "id": "b5-sessionsteer",
+          "text": "B5. session.steer",
+          "level": 3
+        },
+        {
+          "id": "contracts",
+          "text": "Contracts",
+          "level": 2
+        },
+        {
+          "id": "sessionmodelplan-new-read-only",
+          "text": "session.model.plan (new, read-only)",
+          "level": 3
+        },
+        {
+          "id": "sessionmodelupdate-changed",
+          "text": "session.model.update (changed)",
+          "level": 3
+        },
+        {
+          "id": "sessionprompt-changed",
+          "text": "session.prompt (changed)",
+          "level": 3
+        },
+        {
+          "id": "sessionqueueadd-changed",
+          "text": "session.queue.add (changed)",
+          "level": 3
+        },
+        {
+          "id": "decisions-the-brief-did-not-specify",
+          "text": "Decisions the brief did not specify",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-that-reference-what-changed-names-only-none-were-run",
+          "text": "Existing tests that reference what changed (names only; none were run)",
+          "level": 2
+        },
+        {
+          "id": "could-not-make-safe-unverified",
+          "text": "Could not make safe / unverified",
+          "level": 2
+        },
+        {
+          "id": "gate",
+          "text": "Gate",
+          "level": 2
+        },
+        {
+          "id": "proposed-skill-update-not-edited-here-the-brief-limits-the-files-this-lane-owns",
+          "text": "Proposed skill update (not edited here: the brief limits the files this lane owns)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/brief-u2-delegation-questions",
+      "source": "docs/history/t7/brief-u2-delegation-questions.md",
+      "title": "Lane U2 brief: bot-to-bot assignments that stay attached to their own turn, and questions that cannot cross assignments",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "f72ea4501f4472ca852fd896b6943921debf7b0395fe5fc3c8b255881f37dbd4",
+      "headings": [
+        {
+          "id": "hard-rules-owner-27-october-2026-they-override-the-repo-gates",
+          "text": "Hard rules (owner, 27 October 2026; they override the repo gates)",
+          "level": 2
+        },
+        {
+          "id": "files-you-own",
+          "text": "Files you own",
+          "level": 2
+        },
+        {
+          "id": "item-1-review-the-t6-patch-independently-then-fix-what-is-wrong",
+          "text": "Item 1: review the t6 patch independently, then fix what is wrong",
+          "level": 2
+        },
+        {
+          "id": "item-2-native-provider-questions-get-the-same-assignment-link",
+          "text": "Item 2: native provider questions get the same assignment link",
+          "level": 2
+        },
+        {
+          "id": "item-3-retrydropped-and-the-assignments-turn-list",
+          "text": "Item 3: retry_dropped and the assignment's turn list",
+          "level": 2
+        },
+        {
+          "id": "item-4-manager-assignment-reliability-evidence-from-teamrs",
+          "text": "Item 4: Manager assignment reliability (evidence from team.rs)",
+          "level": 2
+        },
+        {
+          "id": "item-5-bounded-reads",
+          "text": "Item 5: bounded reads",
+          "level": 2
+        },
+        {
+          "id": "acceptance-and-report",
+          "text": "Acceptance and report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/report-u2-delegation-questions",
+      "source": "docs/history/t7/report-u2-delegation-questions.md",
+      "title": "Lane U2 report — assignments stay on their own turn, questions cannot cross assignments",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "7e957551697656a649ac56562c704db97f7dcb7037ed25ec74a14655eca7ca84",
+      "headings": [
+        {
+          "id": "reading-the-diff",
+          "text": "Reading the diff",
+          "level": 2
+        },
+        {
+          "id": "item-1-independent-review-of-the-t6-patch-then-what-i-fixed",
+          "text": "Item 1 — independent review of the t6 patch, then what I fixed",
+          "level": 2
+        },
+        {
+          "id": "11-afterturns-live-turn-guard-could-swallow-a-failure-found-fixed",
+          "text": "1.1 after_turn's live-turn guard could swallow a failure — found, fixed",
+          "level": 3
+        },
+        {
+          "id": "12-answerstarted-cannot-cross-assignments-the-spawned-adopt-could-move-back-confirmed-hardened",
+          "text": "1.2 answer_started cannot cross assignments; the spawned adopt could move back — confirmed, hardened",
+          "level": 3
+        },
+        {
+          "id": "13-resolving-held-a-row-for-ever-found-fixed",
+          "text": "1.3 resolving held a row for ever — found, fixed",
+          "level": 3
+        },
+        {
+          "id": "14-two-assignments-two-pending-questions-cancel-one-and-answer-the-other-verified-no-code-change",
+          "text": "1.4 Two assignments, two pending questions, cancel one and answer the other — verified, no code change",
+          "level": 3
+        },
+        {
+          "id": "15-answer-pending-could-be-set-with-nothing-that-clears-it-found-in-two-places-both-closed",
+          "text": "1.5 \"Answer pending\" could be set with nothing that clears it — found in two places, both closed",
+          "level": 3
+        },
+        {
+          "id": "item-2-native-provider-questions-get-the-same-assignment-link",
+          "text": "Item 2 — native provider questions get the same assignment link",
+          "level": 2
+        },
+        {
+          "id": "item-3-retrydropped-and-the-assignments-turn-list",
+          "text": "Item 3 — retry_dropped and the assignment's turn list",
+          "level": 2
+        },
+        {
+          "id": "item-4-manager-assignment-reliability-teamrs",
+          "text": "Item 4 — Manager assignment reliability (team.rs)",
+          "level": 2
+        },
+        {
+          "id": "41-duplicate-tool-calls-found-fixed",
+          "text": "4.1 Duplicate tool calls — found, fixed",
+          "level": 3
+        },
+        {
+          "id": "42-target-availability-found-fixed",
+          "text": "4.2 Target availability — found, fixed",
+          "level": 3
+        },
+        {
+          "id": "43-visible-queued-state-found-fixed",
+          "text": "4.3 Visible queued state — found, fixed",
+          "level": 3
+        },
+        {
+          "id": "44-parent-wake-semantics-verified-three-gaps-found-two-fixed-one-listed",
+          "text": "4.4 Parent wake semantics — verified; three gaps found, two fixed, one listed",
+          "level": 3
+        },
+        {
+          "id": "45-scoped-stop-verified-already-scoped-one-residual-window-listed",
+          "text": "4.5 Scoped stop — verified; already scoped, one residual window listed",
+          "level": 3
+        },
+        {
+          "id": "item-5-bounded-reads",
+          "text": "Item 5 — bounded reads",
+          "level": 2
+        },
+        {
+          "id": "new-changed-contracts",
+          "text": "New / changed contracts",
+          "level": 2
+        },
+        {
+          "id": "race-analyses-interleavings",
+          "text": "Race analyses (interleavings)",
+          "level": 2
+        },
+        {
+          "id": "decisions-not-specified-in-the-brief",
+          "text": "Decisions not specified in the brief",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-that-reference-what-i-changed-names-only-none-edited-none-run",
+          "text": "Existing tests that reference what I changed (names only; none edited, none run)",
+          "level": 2
+        },
+        {
+          "id": "gaps-i-could-not-close",
+          "text": "Gaps I could not close",
+          "level": 2
+        },
+        {
+          "id": "checks-last-lines-verbatim",
+          "text": "Checks (last lines, verbatim)",
+          "level": 2
+        },
+        {
+          "id": "proposed-skill-update-i-may-not-edit-claude",
+          "text": "Proposed skill update (I may not edit .claude/)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/brief-u3-restart-and-reads",
+      "source": "docs/history/t7/brief-u3-restart-and-reads.md",
+      "title": "Lane U3 brief: restart truth, ambiguous sends, orphaned cards, bounded reads",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "1fd948e4c74a2127baffb7e3064ede62a3a9d1d8a115b6b1d881da667dc1c81a",
+      "headings": [
+        {
+          "id": "hard-rules-owner-27-october-2026-they-override-the-repo-gates",
+          "text": "Hard rules (owner, 27 October 2026; they override the repo gates)",
+          "level": 2
+        },
+        {
+          "id": "files-you-own",
+          "text": "Files you own",
+          "level": 2
+        },
+        {
+          "id": "item-1-an-ambiguous-queued-send-is-never-replayed-by-accident",
+          "text": "Item 1: an ambiguous queued send is never replayed by accident",
+          "level": 2
+        },
+        {
+          "id": "item-2-orphaned-approval-and-question-cards-after-a-restart",
+          "text": "Item 2: orphaned approval and question cards after a restart",
+          "level": 2
+        },
+        {
+          "id": "item-3-the-session-state-after-a-crash-is-true",
+          "text": "Item 3: the session state after a crash is true",
+          "level": 2
+        },
+        {
+          "id": "item-4-bounded-reads-on-hot-paths",
+          "text": "Item 4: bounded reads on hot paths",
+          "level": 2
+        },
+        {
+          "id": "acceptance-and-report",
+          "text": "Acceptance and report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/report-u3-restart-and-reads",
+      "source": "docs/history/t7/report-u3-restart-and-reads.md",
+      "title": "Lane U3 report: restart truth, ambiguous sends, orphaned cards, bounded reads",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "eb2c1f044795f4478ac03d51639ef259ec5b5fa077282bca92abbfd75e7c61a9",
+      "headings": [
+        {
+          "id": "item-1-an-ambiguous-queued-send-is-never-replayed-by-accident",
+          "text": "Item 1 — an ambiguous queued send is never replayed by accident",
+          "level": 2
+        },
+        {
+          "id": "evidence",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "verdict-change",
+          "text": "Verdict / change",
+          "level": 3
+        },
+        {
+          "id": "where-each-failure-kind-is-written",
+          "text": "Where each failure kind is written",
+          "level": 3
+        },
+        {
+          "id": "interleaving-analysis",
+          "text": "Interleaving analysis",
+          "level": 3
+        },
+        {
+          "id": "contract-changes-additive",
+          "text": "Contract changes (additive)",
+          "level": 3
+        },
+        {
+          "id": "decisions-not-specified",
+          "text": "Decisions not specified",
+          "level": 3
+        },
+        {
+          "id": "gaps-left",
+          "text": "Gaps left",
+          "level": 3
+        },
+        {
+          "id": "item-2-orphaned-approval-and-question-cards-after-a-restart",
+          "text": "Item 2 — orphaned approval and question cards after a restart",
+          "level": 2
+        },
+        {
+          "id": "evidence-what-the-boot-sequence-did-before-this-lane",
+          "text": "Evidence (what the boot sequence did before this lane)",
+          "level": 3
+        },
+        {
+          "id": "verdict-change-1",
+          "text": "Verdict / change",
+          "level": 3
+        },
+        {
+          "id": "interleaving-analysis-1",
+          "text": "Interleaving analysis",
+          "level": 3
+        },
+        {
+          "id": "contract-changes",
+          "text": "Contract changes",
+          "level": 3
+        },
+        {
+          "id": "decisions-not-specified-1",
+          "text": "Decisions not specified",
+          "level": 3
+        },
+        {
+          "id": "gaps-left-1",
+          "text": "Gaps left",
+          "level": 3
+        },
+        {
+          "id": "item-3-the-session-state-after-a-crash-is-true",
+          "text": "Item 3 — the session state after a crash is true",
+          "level": 2
+        },
+        {
+          "id": "evidence-1",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "verdict-change-2",
+          "text": "Verdict / change",
+          "level": 3
+        },
+        {
+          "id": "interleaving-analysis-2",
+          "text": "Interleaving analysis",
+          "level": 3
+        },
+        {
+          "id": "contract-changes-1",
+          "text": "Contract changes",
+          "level": 3
+        },
+        {
+          "id": "decisions-not-specified-2",
+          "text": "Decisions not specified",
+          "level": 3
+        },
+        {
+          "id": "gaps-left-2",
+          "text": "Gaps left",
+          "level": 3
+        },
+        {
+          "id": "item-4-bounded-reads-on-hot-paths",
+          "text": "Item 4 — bounded reads on hot paths",
+          "level": 2
+        },
+        {
+          "id": "what-each-path-reads-as-found-in-code",
+          "text": "What each path reads (as found in code)",
+          "level": 3
+        },
+        {
+          "id": "verdict-change-3",
+          "text": "Verdict / change",
+          "level": 3
+        },
+        {
+          "id": "contract-changes-2",
+          "text": "Contract changes",
+          "level": 3
+        },
+        {
+          "id": "decisions-not-specified-left-alone",
+          "text": "Decisions not specified / left alone",
+          "level": 3
+        },
+        {
+          "id": "existing-tests-that-reference-what-i-changed-names-only",
+          "text": "Existing tests that reference what I changed (names only)",
+          "level": 2
+        },
+        {
+          "id": "catalogued-behaviour-changes-for-the-release-notes",
+          "text": "Catalogued behaviour changes (for the release notes)",
+          "level": 2
+        },
+        {
+          "id": "gaps-worth-a-follow-up-summary",
+          "text": "Gaps worth a follow-up (summary)",
+          "level": 2
+        },
+        {
+          "id": "appendix-tails-of-each-cargo-check--p-bloblex-daemon--p-bloblex-storage",
+          "text": "Appendix — tails of each cargo check -p bloblex-daemon -p bloblex-storage",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/brief-v1-wake-cancel-pause",
+      "source": "docs/history/t7/brief-v1-wake-cancel-pause.md",
+      "title": "Lane V1 brief: durable Manager wake, turn-checked cancel, optional delegation pause",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "927dd947241a21a3ac2f27a2a7a04fb60844972660ac26c07c537a69bb6d7dbb",
+      "headings": [
+        {
+          "id": "hard-rules-owner-27-october-2026-they-override-the-repo-gates",
+          "text": "Hard rules (owner, 27 October 2026; they override the repo gates)",
+          "level": 2
+        },
+        {
+          "id": "files-you-own",
+          "text": "Files you own",
+          "level": 2
+        },
+        {
+          "id": "item-1-first-priority-the-child-question-wake-to-the-manager-survives-a-restart",
+          "text": "Item 1 (first priority): the child-question wake to the Manager survives a restart",
+          "level": 2
+        },
+        {
+          "id": "evidence",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "build",
+          "text": "Build",
+          "level": 3
+        },
+        {
+          "id": "item-2-cancel-is-checked-against-the-turn-it-means-to-stop",
+          "text": "Item 2: cancel is checked against the turn it means to stop",
+          "level": 2
+        },
+        {
+          "id": "evidence-1",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "build-1",
+          "text": "Build",
+          "level": 3
+        },
+        {
+          "id": "item-3-optional-extra-only-after-items-1-and-2-are-done-pause-new-delegation",
+          "text": "Item 3 (optional extra, only after items 1 and 2 are done): pause new delegation",
+          "level": 2
+        },
+        {
+          "id": "acceptance-and-report",
+          "text": "Acceptance and report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/report-v1-wake-cancel-pause",
+      "source": "docs/history/t7/report-v1-wake-cancel-pause.md",
+      "title": "Lane V1 report (27 October 2026): durable Manager wake, turn-checked cancel, optional delegation pause",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "dc95f628583ff4a69bdc2bc0b838b8f2754c5ae68b4bffe242ab97968d2dd5a0",
+      "headings": [
+        {
+          "id": "item-1-the-child-question-wake-survives-a-restart",
+          "text": "Item 1 — the child-question wake survives a restart",
+          "level": 2
+        },
+        {
+          "id": "evidence-read-first",
+          "text": "Evidence read first",
+          "level": 3
+        },
+        {
+          "id": "exact-new-contract",
+          "text": "Exact new contract",
+          "level": 3
+        },
+        {
+          "id": "interleaving-analysis-item-1",
+          "text": "Interleaving analysis (item 1)",
+          "level": 3
+        },
+        {
+          "id": "item-2-cancel-is-checked-against-the-turn-it-means-to-stop",
+          "text": "Item 2 — cancel is checked against the turn it means to stop",
+          "level": 2
+        },
+        {
+          "id": "evidence",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "exact-new-contract-1",
+          "text": "Exact new contract",
+          "level": 3
+        },
+        {
+          "id": "remaining-window-stated-precisely",
+          "text": "Remaining window (stated precisely)",
+          "level": 3
+        },
+        {
+          "id": "interleaving-analysis-item-2",
+          "text": "Interleaving analysis (item 2)",
+          "level": 3
+        },
+        {
+          "id": "item-3-optional-global-pause-on-new-delegation",
+          "text": "Item 3 — optional global pause on new delegation",
+          "level": 2
+        },
+        {
+          "id": "exact-contract",
+          "text": "Exact contract",
+          "level": 3
+        },
+        {
+          "id": "interleaving-analysis-item-3",
+          "text": "Interleaving analysis (item 3)",
+          "level": 3
+        },
+        {
+          "id": "decisions-the-brief-left-open-and-what-i-chose",
+          "text": "Decisions the brief left open (and what I chose)",
+          "level": 2
+        },
+        {
+          "id": "cases-left-unknown-or-unverifiable-stated-exactly",
+          "text": "Cases left unknown or unverifiable (stated exactly)",
+          "level": 2
+        },
+        {
+          "id": "existing-tests-that-reference-changed-code-names-only-not-run",
+          "text": "Existing tests that reference changed code (names only, not run)",
+          "level": 2
+        },
+        {
+          "id": "checks",
+          "text": "Checks",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/brief-v2-ambiguous-sends-limited",
+      "source": "docs/history/t7/brief-v2-ambiguous-sends-limited.md",
+      "title": "Lane V2 brief: ambiguous sends are explicit and never auto-replayed; exhausted limited sessions stop polling",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "0da5e02a96e14e4b3eec3a7ffd80f7d498058848d00f27cbceb33c90fd50fcc2",
+      "headings": [
+        {
+          "id": "hard-rules-owner-27-october-2026-they-override-the-repo-gates",
+          "text": "Hard rules (owner, 27 October 2026; they override the repo gates)",
+          "level": 2
+        },
+        {
+          "id": "files-you-own",
+          "text": "Files you own",
+          "level": 2
+        },
+        {
+          "id": "item-1-a-failure-after-the-prompt-may-have-been-written-is-explicitly-ambiguous",
+          "text": "Item 1: a failure after the prompt may have been written is explicitly ambiguous",
+          "level": 2
+        },
+        {
+          "id": "evidence",
+          "text": "Evidence",
+          "level": 3
+        },
+        {
+          "id": "build",
+          "text": "Build",
+          "level": 3
+        },
+        {
+          "id": "item-2-exhausted-limited-sessions-stop-hot-re-polling-and-say-so",
+          "text": "Item 2: exhausted limited sessions stop hot re-polling and say so",
+          "level": 2
+        },
+        {
+          "id": "evidence-t7-u3-report-item-3-gaps-left",
+          "text": "Evidence (T7 U3 report, item 3 \"Gaps left\")",
+          "level": 3
+        },
+        {
+          "id": "build-1",
+          "text": "Build",
+          "level": 3
+        },
+        {
+          "id": "acceptance-and-report",
+          "text": "Acceptance and report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/report-v2-ambiguous-sends-limited",
+      "source": "docs/history/t7/report-v2-ambiguous-sends-limited.md",
+      "title": "Lane V2 report: explicit ambiguous sends, exhausted limited sessions",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "da6693d61b5511dadfb7432370aa6bfc60f9fac29ee04d0a3dc13dd0073ebe27",
+      "headings": [
+        {
+          "id": "what-i-could-not-read-stated-not-guessed",
+          "text": "What I could not read (stated, not guessed)",
+          "level": 2
+        },
+        {
+          "id": "files-changed-only-the-ones-i-own",
+          "text": "Files changed (only the ones I own)",
+          "level": 2
+        },
+        {
+          "id": "11-evidence-where-a-delivery-failure-can-actually-be-seen",
+          "text": "1.1 Evidence: where a delivery failure can actually be seen",
+          "level": 2
+        },
+        {
+          "id": "every-return-from-the-reservation-to-the-end-of-delivery-and-its-class",
+          "text": "Every return/? from the reservation to the end of delivery, and its class",
+          "level": 3
+        },
+        {
+          "id": "12-the-contract-i-added",
+          "text": "1.2 The contract I added",
+          "level": 2
+        },
+        {
+          "id": "replay-rule-deterministic-both-replay-checks-share-it",
+          "text": "Replay rule (deterministic, both replay checks share it)",
+          "level": 3
+        },
+        {
+          "id": "queue-path-queuesendclaimed",
+          "text": "Queue path: queue::send_claimed",
+          "level": 3
+        },
+        {
+          "id": "13-auto-retry-never-continues-an-ambiguous-turn",
+          "text": "1.3 Auto-retry never continues an ambiguous turn",
+          "level": 2
+        },
+        {
+          "id": "14-what-i-left-ambiguous-item-1",
+          "text": "1.4 What I left ambiguous (item 1)",
+          "level": 2
+        },
+        {
+          "id": "21-the-sweep-no-longer-re-queries-a-session-it-can-never-enqueue",
+          "text": "2.1 The sweep no longer re-queries a session it can never enqueue",
+          "level": 2
+        },
+        {
+          "id": "22-one-settle-in-one-place-idempotent",
+          "text": "2.2 One settle, in one place, idempotent",
+          "level": 2
+        },
+        {
+          "id": "23-manual-resume-still-works",
+          "text": "2.3 Manual resume still works",
+          "level": 2
+        },
+        {
+          "id": "24-interleaving-with-a-concurrent-user-prompt",
+          "text": "2.4 Interleaving with a concurrent user prompt",
+          "level": 2
+        },
+        {
+          "id": "25-ambiguous-unverified-in-item-2",
+          "text": "2.5 Ambiguous / unverified in item 2",
+          "level": 2
+        }
+      ]
     },
     {
       "id": "project/history/improvement/phase-1a-spec",
@@ -13760,6 +15479,196 @@
         {
           "id": "not-verified",
           "text": "Not verified",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t3/REPORT",
+      "source": "docs/history/t3/REPORT.md",
+      "title": "T3 wave report (26 October 2026, rounds 1 and 2)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "7373546f0426752b7ef99a7dbe442a1c5ca64cb1426bd1010f9932fa8aa0ca6a",
+      "headings": [
+        {
+          "id": "lanes",
+          "text": "Lanes",
+          "level": 2
+        },
+        {
+          "id": "what-exists-now",
+          "text": "What exists now",
+          "level": 2
+        },
+        {
+          "id": "real-limits-and-risks",
+          "text": "Real limits and risks",
+          "level": 2
+        },
+        {
+          "id": "validation-that-actually-ran",
+          "text": "Validation that actually ran",
+          "level": 2
+        },
+        {
+          "id": "side-effects-on-the-machine",
+          "text": "Side effects on the machine",
+          "level": 2
+        },
+        {
+          "id": "dependencies-and-licences",
+          "text": "Dependencies and licences",
+          "level": 2
+        },
+        {
+          "id": "round-3-a-delegated-bot-can-ask-the-human-26-october-2026",
+          "text": "Round 3: a delegated bot can ask the human (26 October 2026)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/REPORT-round2",
+      "source": "docs/history/t7/REPORT-round2.md",
+      "title": "T7 round 2 (27 October 2026): closing the reliability gaps",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "527c550a9da37abdf25d2993503f5c024257954d4a5c9b8f1612fe0134c7c4b4",
+      "headings": [
+        {
+          "id": "direct-follow-up-27-october-2026",
+          "text": "Direct follow-up (27 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "what-is-now-implemented",
+          "text": "What is now implemented",
+          "level": 2
+        },
+        {
+          "id": "1-the-managers-wake-for-a-childs-question-survives-a-restart",
+          "text": "1. The Manager's wake for a child's question survives a restart",
+          "level": 3
+        },
+        {
+          "id": "2-cancel-is-checked-against-the-turn-it-means-to-stop",
+          "text": "2. Cancel is checked against the turn it means to stop",
+          "level": 3
+        },
+        {
+          "id": "3-a-failure-after-the-prompt-may-have-been-written-is-explicit-never-auto-replayed",
+          "text": "3. A failure after the prompt may have been written is explicit, never auto-replayed",
+          "level": 3
+        },
+        {
+          "id": "4-exhausted-limited-sessions",
+          "text": "4. Exhausted limited sessions",
+          "level": 3
+        },
+        {
+          "id": "5-optional-pause-new-hand-offs",
+          "text": "5. Optional: pause new hand-offs",
+          "level": 3
+        },
+        {
+          "id": "6-copy-that-cannot-overpromise",
+          "text": "6. Copy that cannot overpromise",
+          "level": 3
+        },
+        {
+          "id": "not-done-bounded-appsnapshot",
+          "text": "Not done: bounded app.snapshot",
+          "level": 2
+        },
+        {
+          "id": "validation-that-ran",
+          "text": "Validation that ran",
+          "level": 2
+        },
+        {
+          "id": "cases-left-unknown-or-unverified-exact",
+          "text": "Cases left unknown or unverified (exact)",
+          "level": 2
+        },
+        {
+          "id": "state",
+          "text": "State",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/t7/REPORT",
+      "source": "docs/history/t7/REPORT.md",
+      "title": "T7 wave report (27 October 2026): T3 review round 2, model switching, conversations, assignments, resilience",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "50eefc14cab4f80a4b15509e35d37994a1b53f33903fa83fb02a9586a5e84c37",
+      "headings": [
+        {
+          "id": "lanes",
+          "text": "Lanes",
+          "level": 2
+        },
+        {
+          "id": "dt6-unmerged-question-race-lane-reviewed-independently",
+          "text": "D:\\t6 (unmerged question-race lane), reviewed independently",
+          "level": 2
+        },
+        {
+          "id": "what-changed",
+          "text": "What changed",
+          "level": 2
+        },
+        {
+          "id": "model-selection-and-switching",
+          "text": "Model selection and switching",
+          "level": 3
+        },
+        {
+          "id": "conversations",
+          "text": "Conversations",
+          "level": 3
+        },
+        {
+          "id": "idempotent-sends",
+          "text": "Idempotent sends",
+          "level": 3
+        },
+        {
+          "id": "composer",
+          "text": "Composer",
+          "level": 3
+        },
+        {
+          "id": "assignments-manager-and-bot-to-bot",
+          "text": "Assignments (Manager) and bot-to-bot",
+          "level": 3
+        },
+        {
+          "id": "self-healing-and-performance",
+          "text": "Self-healing and performance",
+          "level": 3
+        },
+        {
+          "id": "validation-that-ran-production-only",
+          "text": "Validation that ran (production only)",
+          "level": 2
+        },
+        {
+          "id": "known-stale-tests-and-unverified-behaviour",
+          "text": "Known stale tests and unverified behaviour",
+          "level": 2
+        },
+        {
+          "id": "open-gaps-stated-not-closed",
+          "text": "Open gaps (stated, not closed)",
+          "level": 2
+        },
+        {
+          "id": "preview-and-merge-state",
+          "text": "Preview and merge state",
           "level": 2
         }
       ]

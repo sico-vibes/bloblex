@@ -7,4 +7,3 @@
 .manager-setup > button { justify-self: start; }
 .manager-setup-form { display: grid; gap: 8px; }
 .manager-setup-actions { display: flex; justify-content: flex-end; gap: 6px; }
-:root[data-bitbots="on"] .manager-setup { border: 2px solid var(--bb-line-strong); border-radius: 0; }

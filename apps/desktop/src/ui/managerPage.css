@@ -50,6 +50,5 @@
 .playbook-diff-line.del code { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--status-danger) 60%, transparent); }
 .playbook-diff-fold { padding: 3px 10px; color: var(--text-3); font-size: var(--fs-2xs); border-block: 1px dashed var(--line); }
 .playbook-diff-none { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
-:root[data-bitbots="on"] .manager-playbook, :root[data-bitbots="on"] .playbook-diff { border-radius: 0; border: 2px solid var(--bb-line); }
 
 @media (max-width: 640px) { .manager-fact-form-row { grid-template-columns: 1fr; } }

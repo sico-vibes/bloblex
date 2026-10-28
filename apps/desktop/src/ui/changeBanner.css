@@ -21,4 +21,3 @@
 .change-banner-tip { margin: 0; padding: 2px 6px 2px; color: var(--text-2); line-height: 1.5; }
 .change-banner-link { padding: 0; color: var(--user-accent, var(--text-1)); text-decoration: underline; text-underline-offset: 3px; }
 .change-banner button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-:root[data-bitbots="on"] .change-banner { border: 2px solid var(--bb-line-strong); border-radius: 0; background: var(--bb-raised); }

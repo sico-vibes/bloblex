@@ -8,7 +8,6 @@
 .activity-step-group:first-child > h4 { margin-top: 8px; }
 
 /* The companion renders the same groups in a small window: keep the flat list flat. */
-:root[data-bitbots="on"] .activity-steps.flat { border: 0; }
 
 /* Live command output: the end of what the agent reported so far, in a bounded box. */
 .activity-step-block pre.live { max-height: 220px; overflow: auto; }

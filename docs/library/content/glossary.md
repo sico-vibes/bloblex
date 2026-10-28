@@ -12,12 +12,12 @@
 | **task** | A record on the Tasks board: a title, a brief, a done goal and a report-back line. A task is not a conversation. See [tasks](guides/tasks.md). |
 | **draft** | A task with no bot yet. Drafts wait in the Unassigned list. |
 | **companion** | The small floating window that shows bot state, approvals, questions and a compact chat. |
-| **look** | A visual style for the whole app: Bitbots (Frost) or Blobots. Pop, Dot and Legacy were retired on 21 October 2026. |
-| **Frost** | The design of the Bitbots look: flat translucent panels over a wallpaper, hairlines and rounded rectangles. |
+| **look** | A visual style for the whole app: Haze (the primary look) or Stone (stored id `blobots`). Frost (Bitbots) was retired on 27 October 2026; Pop, Dot and Legacy on 21 October 2026. |
+| **Frost** | The retired Bitbots look (27 October 2026): flat translucent panels over a wallpaper. Saved Frost choices move to Haze. |
 | **art** | A bot's drawing style: 3D robot, 2D robot, Glossy or Hand-painted, or Automatic, which follows the look. Art is chosen per bot and is separate from the app look. |
 | **orb** | The small illustration that represents a look in Settings and onboarding. It is not a screenshot and does not animate. |
-| **wallpaper** | A Frost background: Lake, Dusk, Bloom, Sand or your own image. |
-| **glass** | A Frost translucency level: Solid, Balanced or Clear. |
+| **wallpaper** | Retired with Frost: Lake, Dusk, Bloom, Sand or your own image. |
+| **glass** | Retired with Frost: Solid, Balanced or Clear translucency. |
 | **density** | Row spacing: Compact, Default or Roomy. |
 | **coding agent** | An installed command-line tool Bitbots can drive: Claude Code, Codex or OpenCode. |
 | **runtime** | The coding agent an individual bot or conversation is set to use, as shown in the details panel. |

@@ -42,9 +42,6 @@
 .rail-file-actions button { width: 22px; height: 22px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .rail-file-actions button:hover { color: var(--text-1); background: var(--surface-selected-strong); }
 .context-pane .context-head.compact { padding: 18px 16px 10px; }
-
-:root[data-bitbots="on"] .rail-card { border: 2px solid var(--bb-line-strong); border-radius: 0; background: var(--bb-raised); }
-:root[data-bitbots="on"] .rail-meter, :root[data-bitbots="on"] .rail-meter > b { border-radius: 0; }
 @media (prefers-reduced-motion: reduce) { .rail-file-actions { transition: none; } }
 /* Remote on/off in the Environment card: a compact switch. */
 .rail-remote .toggle.small { width: 28px; height: 16px; }

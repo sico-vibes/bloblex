@@ -23,5 +23,3 @@
 .proposal-error { flex: 0 0 100%; margin: 0 0 2px; color: var(--status-danger); font-size: var(--fs-xs); text-align: left; overflow-wrap: anywhere; }
 .proposal-hint { margin-right: auto; color: var(--text-3); font-size: var(--fs-xs); }
 @media (max-width: 520px) { .proposal-row { grid-template-columns: 1fr; } }
-:root[data-bitbots="on"] .proposal-card { border: 2px solid var(--bb-line-strong); border-radius: 0; }
-:root[data-bitbots="on"] .proposal-icon, :root[data-bitbots="on"] .proposal-field input, :root[data-bitbots="on"] .proposal-field textarea { border-radius: 0; }

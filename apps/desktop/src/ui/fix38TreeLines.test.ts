@@ -68,13 +68,8 @@ describe('conversation branch lines', () => {
     for (const body of [rule(panel, GUIDE), rule(panel, ELBOW)]) {
       expect(body).toMatch(/1px var\(--convo-line-style\) var\(--convo-line\)/)
     }
-    // The Bitbots look swaps the stroke and the row edge, never the geometry.
-    const bbPanel = rule(panel, ':root[data-bitbots="on"] .conversations-panel')
-    expect(bbPanel).toMatch(/--convo-line: var\(--bb-line-strong\)/)
-    expect(bbPanel).toMatch(/--convo-line-style: dotted/)
-    expect(bbPanel).toMatch(/--convo-radius: 0px/)
-    expect(bbPanel).not.toMatch(/--convo-indent|--convo-guide-x/)
-    expect(rule(panel, ':root[data-bitbots="on"] .convo-row')).toMatch(/--convo-row-edge: 2px/)
+    // The Frost (Bitbots) look that swapped the stroke was retired by the owner on 27 October 2026.
+    expect(panel).not.toContain('data-bitbots')
   })
 
   it('no longer hides the arrow under the old 17px elbow', () => {

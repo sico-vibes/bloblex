@@ -14,6 +14,15 @@ describe('assignment rows', () => {
     expect(rows({ silent: true })[0]!.label).toBe('Done, nothing to report')
     expect(rows({})[0]!.label).toBe('Done')
   })
+
+  // Wave 13: a working assignment says what its teammate is doing right now.
+  it('shows what a working teammate is doing', () => {
+    const side = { id: 's1', runtimeId: 'rt', state: 'working', tools: [{ id: 't1', kind: 'execute', title: 'Bash', state: 'running', detail: { label: 'Ran npm test' } }] }
+    const working = buildDelegationRows([notice], new Map([['d1', record({ status: 'running' })]]), [side], [], new Set(), new Map(), Date.now())
+    expect(working[0]!.label).toBe('Running npm test')
+    const idle = buildDelegationRows([notice], new Map([['d1', record({ status: 'running' })]]), [{ ...side, tools: [] }], [], new Set(), new Map(), Date.now())
+    expect(idle[0]!.label).toBe('Working')
+  })
 })
 
 describe('daemon records', () => {

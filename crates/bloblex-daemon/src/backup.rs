@@ -42,12 +42,10 @@ const MAX_SKILL_TOTAL_BYTES: u64 = 50 * 1024 * 1024;
 
 /// The exact settings keys a backup may carry. `experimental.*` boolean flags
 /// are allowed in addition to this list (see `exportable_setting`).
-const SETTING_ALLOWLIST: [&str; 34] = [
+const SETTING_ALLOWLIST: [&str; 32] = [
     "appearance.style",
     "appearance.accent",
     "appearance.density",
-    "appearance.wallpaper",
-    "appearance.glass",
     "appearance.font",
     "appearance.monoFont",
     "appearance.theme",

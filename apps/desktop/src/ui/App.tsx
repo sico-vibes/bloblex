@@ -572,8 +572,10 @@ export function App() {
   // few at a time, so its list opens ready while the rest follow. Each finished
   // load changes the snapshot, which runs this again for the next ones.
   useEffect(() => {
-    if (!snapshot || companion || !inDesktop) return
-    const queue = hydrationOrder(sessions, selectedAgentId).filter((session) => !pendingSessionHydrations.current.has(session.id) && !failedSessionHydrations.current.has(session.id))
+    if (!snapshot || !inDesktop) return
+    const open = [selectedSessionId, sideSessionId]
+    // The companion loads only a partial conversation it is showing; the main window loads the rest in the background.
+    const queue = hydrationOrder(sessions, selectedAgentId, open).filter((session) => (!companion || (session.partial === true && open.includes(session.id))) && !pendingSessionHydrations.current.has(session.id) && !failedSessionHydrations.current.has(session.id))
     for (const session of queue.slice(0, Math.max(0, HYDRATE_AT_ONCE - pendingSessionHydrations.current.size))) {
       pendingSessionHydrations.current.add(session.id)
       void rpc<Session>('session.get', { sessionId: session.id }).then((fullSession) => {
@@ -584,7 +586,7 @@ export function App() {
         setSnapshot((current) => current ? { ...current } : current)
       }).finally(() => pendingSessionHydrations.current.delete(session.id))
     }
-  }, [snapshot, sessions, companion, selectedAgentId])
+  }, [snapshot, sessions, companion, selectedAgentId, selectedSessionId, sideSessionId])
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? null
   const activeSelectedAgent = selectedAgent && !selectedAgent.archived ? selectedAgent : null
   const selectedRuntime = activeSelectedAgent
@@ -857,7 +859,7 @@ export function App() {
     const session = (payload.session && typeof payload.session === 'object' ? payload.session : payload) as Session
     if (typeof session.id !== 'string' || session.archived === true) return
     const current = snapshotRef.current
-    if (current?.deletedSessionIds?.includes(session.id) || current?.sessions?.some((item) => item.id === session.id && (Array.isArray(item.messages) || Array.isArray(item.turns)))) return
+    if (current?.deletedSessionIds?.includes(session.id) || current?.sessions?.some((item) => item.id === session.id && item.partial !== true && (Array.isArray(item.messages) || Array.isArray(item.turns)))) return
     if (pendingSessionHydrations.current.has(session.id)) return
     pendingSessionHydrations.current.add(session.id)
     void rpc<Session>('session.get', { sessionId: session.id }).then((fullSession) => {
@@ -3157,6 +3159,8 @@ function mergeHydratedSession(snapshot: Snapshot, id: string, fullSession: Sessi
     contextSize: fullSession.contextSize === undefined ? existing.contextSize : fullSession.contextSize,
     contextModel: fullSession.contextModel === undefined ? existing.contextModel : fullSession.contextModel,
     contextEstimated: fullSession.contextEstimated === undefined ? existing.contextEstimated : fullSession.contextEstimated,
+    // A full load replaces a lazy snapshot's partial copy.
+    partial: fullSession.partial === true ? existing.partial : undefined,
   }
   return { ...snapshot, sessions: [...sessions.filter((session) => session.id !== id), merged] }
 }

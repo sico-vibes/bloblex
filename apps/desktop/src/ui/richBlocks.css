@@ -38,7 +38,7 @@
 .rich-block table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 .rich-block caption { padding: 8px 12px; color: var(--text-3); text-align: left; caption-side: bottom; }
 .safe-markdown .rich-block th, .safe-markdown .rich-block td, .rich-block th, .rich-block td { padding: 0 12px; border: 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-.rich-block thead th { height: 30px; padding: 0 4px 0 12px; color: var(--text-2); background: var(--surface-hover); font-weight: 600; }
+.rich-block thead th { height: 30px; padding: 0 4px 0 12px; color: var(--text-2); background: var(--surface-hover); font-weight: 600; white-space: nowrap; }
 .rich-block tbody tr:last-child td, .rich-block tbody tr:last-child th { border-bottom: 0; }
 .rich-block tbody tr:hover { background: var(--surface-hover); }
 .rich-block tbody td, .rich-block tbody th { height: 32px; color: var(--text-1); }
@@ -47,7 +47,7 @@
 .rich-block th.rich-num .rich-sort { margin-left: auto; }
 .rich-open-col { width: 28px; padding: 0 0 0 6px !important; }
 .rich-cell { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rich-sort { display: flex; align-items: center; gap: 5px; height: 26px; max-width: 100%; padding: 0 8px 0 0; border-radius: var(--radius-sm); font-weight: inherit; color: inherit; }
+.rich-sort { display: flex; align-items: center; gap: 5px; height: 26px; max-width: 100%; padding: 0 8px 0 0; white-space: nowrap; border-radius: var(--radius-sm); font-weight: inherit; color: inherit; }
 .rich-sort:hover { color: var(--text-1); }
 .rich-sort-spacer { width: 12px; height: 12px; }
 .rich-row-toggle { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--text-3); }

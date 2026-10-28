@@ -513,6 +513,9 @@
    the pointer; the preview card follows the hovered tick. */
 .conversation-frame { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; }
 .conversation-frame > .message-list { flex: 1; }
+/* The outline sits 14-40px from the left edge: below about 900px the centred column moves right to clear it,
+   so no message text runs under the ticks (owner report, Codex session). */
+.conversation-frame:has(> .conversation-outline) .conversation-layout { width: min(820px, calc(100% - 56px)); margin-left: max(44px, calc((100% - 820px) / 2)); margin-right: auto; }
 /* Docked at the conversation's left edge, beside the sidebar. Quiet until hovered, like Codex's outline. */
 .conversation-outline { --outline-pitch: 9px; position: absolute; z-index: 5; top: 50%; left: 14px; width: 26px; height: min(calc(var(--outline-count) * var(--outline-pitch)), 56vh); overflow: visible; opacity: .32; transform: translateY(-50%); transition: opacity 180ms ease; }
 .conversation-outline:hover, .conversation-outline:focus-within { opacity: 1; }

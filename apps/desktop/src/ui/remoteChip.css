@@ -19,5 +19,3 @@
 .remote-chip-detail { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
 @media (prefers-reduced-motion: no-preference) { .remote-chip.tone-waiting .remote-chip-light { animation: remote-chip-pulse 1.4s ease-in-out infinite; } }
 @keyframes remote-chip-pulse { 50% { opacity: .35; } }
-:root[data-bitbots="on"] .remote-chip { border: 2px solid var(--bb-line); border-radius: 0; }
-:root[data-bitbots="on"] .remote-chip-icon, :root[data-bitbots="on"] .remote-chip-title em { border-radius: 0; }

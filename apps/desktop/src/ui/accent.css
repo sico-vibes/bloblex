@@ -11,14 +11,14 @@
   --surface-primary-hover: var(--user-accent-pressed);
 }
 
-:root[data-accent="custom"]:not([data-bitbots="on"]) .primary-button { color: var(--user-accent-ink); background: var(--user-accent); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .primary-button:hover:not(:disabled) { background: var(--user-accent-pressed); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .send-button:not(:disabled):not(.cancel) { color: var(--user-accent-ink); background: var(--user-accent); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .toggle.on { background: var(--user-accent); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .toggle.on i { background: var(--user-accent-ink); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .switch.on { background: var(--user-accent); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .segmented button.on,
-:root[data-accent="custom"]:not([data-bitbots="on"]) .usage-density button.active { color: var(--user-accent-ink); background: var(--user-accent); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) .onboarding-progress span.active { background: var(--user-accent); }
-:root[data-accent="custom"]:not([data-bitbots="on"]) ::selection { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"] .primary-button { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"] .primary-button:hover:not(:disabled) { background: var(--user-accent-pressed); }
+:root[data-accent="custom"] .send-button:not(:disabled):not(.cancel) { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"] .toggle.on { background: var(--user-accent); }
+:root[data-accent="custom"] .toggle.on i { background: var(--user-accent-ink); }
+:root[data-accent="custom"] .switch.on { background: var(--user-accent); }
+:root[data-accent="custom"] .segmented button.on,
+:root[data-accent="custom"] .usage-density button.active { color: var(--user-accent-ink); background: var(--user-accent); }
+:root[data-accent="custom"] .onboarding-progress span.active { background: var(--user-accent); }
+:root[data-accent="custom"] ::selection { color: var(--user-accent-ink); background: var(--user-accent); }
 :root[data-accent="custom"] .density-control button.active { color: var(--user-accent-ink); background: var(--user-accent); }

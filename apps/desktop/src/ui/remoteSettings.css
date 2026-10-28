@@ -113,8 +113,5 @@
 .remote-step-action { align-self: center; }
 .remote-step-form { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .remote-step-form .text-input { width: 180px; font-family: var(--font-mono); }
-:root[data-bitbots="on"] .remote-step-icon { border-radius: 0; }
 .remote-port-input { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .remote-method { grid-template-columns: 1fr; } .remote-native-addresses { flex-direction: column; } }
-:root[data-bitbots="on"] .remote-method-option { border: 2px solid var(--bb-line); border-radius: 0; }
-:root[data-bitbots="on"] .remote-method-option.on { border: 2px dotted var(--bb-accent); }

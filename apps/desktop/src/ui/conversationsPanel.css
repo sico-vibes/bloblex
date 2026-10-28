@@ -60,12 +60,6 @@
 .convo-action:disabled { opacity: .4; cursor: default; }
 .convo-rename { min-width: 0; flex: 1; height: 28px; margin: 3px 4px 3px 0; padding: 0 8px; color: var(--text-1); border: 1px solid var(--line-focus); border-radius: var(--radius-sm); outline: none; background: var(--surface-input); font: inherit; font-size: var(--fs-sm); }
 .convo-open:focus-visible, .convo-twisty:focus-visible, .convo-action:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
-:root[data-bitbots="on"] .conversations-panel { --convo-line: var(--bb-line-strong); --convo-line-style: dotted; --convo-radius: 0px; }
-:root[data-bitbots="on"] .convo-row { border: 2px solid transparent; border-radius: 0; --convo-row-edge: 2px; }
-:root[data-bitbots="on"] .convo-row.active { border: 2px dotted var(--bb-accent); background: var(--bb-selected); }
-:root[data-bitbots="on"] .convo-row:hover { background: var(--bb-hover); }
-:root[data-bitbots="on"] .convo-rename { border: 2px solid var(--bb-line-strong); border-radius: 0; }
 @media (prefers-reduced-motion: reduce) { .convo-twisty svg, .convo-actions { transition: none; } }
 
 /* Finding and starting conversations (27 October 2026): a labelled New chat button, a filter once the list is long, and plain words for states that need the owner. */

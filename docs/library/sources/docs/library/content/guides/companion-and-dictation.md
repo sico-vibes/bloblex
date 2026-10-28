@@ -30,7 +30,7 @@ The companion is not a second brain. It shows the same state and sends the same 
 
 ![The companion in its expanded chat state](../../assets/screens/companion.png)
 
-*The companion with a Manager proposal. Frost uses a solid tint here because the window cannot blur what is behind it. Fixture data.*
+*The companion with a Manager proposal, shown in the retired Frost look. Fixture data.*
 
 ### Resize it
 
@@ -108,7 +108,7 @@ Bitbots identifies itself to the service and does not pretend to be another app.
 
 **The companion is not on screen.** It may be on another display. Use **Reset companion position**, or turn it off and on from the sidebar. Check that it is not hidden behind the main window.
 
-**The companion does not follow the light theme in Blobots.** Blobots keeps its dark companion by design. Frost follows the resolved theme; the dictation window picks up a theme change only when it is created.
+**The companion does not follow the light theme in Stone.** Stone (stored as `blobots`) keeps its dark companion by design. The dictation window picks up a theme change only when it is created.
 
 **The companion has no approvals.** Approvals from remote apply only to remote devices; locally, the card appears in the companion when it is open. Focus mode hides peeks, not approvals.
 

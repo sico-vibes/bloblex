@@ -312,11 +312,13 @@ export const HYDRATE_AT_ONCE = 4
  * selected bot's first, newest first within each group. Archived ones and
  * ones already loaded are left out.
  */
-export function hydrationOrder(sessions: readonly Session[], selectedAgentId: string | null): Session[] {
+export function hydrationOrder(sessions: readonly Session[], selectedAgentId: string | null, openSessionIds: readonly (string | null | undefined)[] = []): Session[] {
   const time = (session: Session) => Date.parse(session.updatedAt ?? session.createdAt ?? '') || 0
+  const open = (session: Session) => Number(openSessionIds.includes(session.id))
   return sessions
-    .filter((session) => !session.archived && !Array.isArray(session.messages) && !Array.isArray(session.turns))
-    .sort((a, b) => Number(b.agentId === selectedAgentId && !!selectedAgentId) - Number(a.agentId === selectedAgentId && !!selectedAgentId) || time(b) - time(a))
+    // Wave 13: a lazy snapshot's `partial` conversation carries only its last messages, so it still needs loading.
+    .filter((session) => !session.archived && (session.partial === true || (!Array.isArray(session.messages) && !Array.isArray(session.turns))))
+    .sort((a, b) => open(b) - open(a) || Number(b.agentId === selectedAgentId && !!selectedAgentId) - Number(a.agentId === selectedAgentId && !!selectedAgentId) || time(b) - time(a))
 }
 
 /**

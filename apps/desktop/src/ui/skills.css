@@ -50,4 +50,3 @@
 .bot-skills-list { margin: 0; padding: 0; list-style: none; }
 .bot-skills-list .settings-row .settings-row-title strong { font-family: var(--font-mono, ui-monospace, monospace); font-weight: 500; }
 .bot-skills-note { margin: 0; padding: 12px 16px; color: var(--text-3); font-size: var(--fs-sm); }
-:root[data-bitbots="on"] .skill-row, :root[data-bitbots="on"] .skills-import { border: 2px solid var(--bb-line); background: var(--bb-raised); }

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { listenForDaemonEvents, rpc } from '../tauri'
 import type { Agent, Session } from '../types'
 import { taskElapsed, taskStatus } from './WorkingBotsPanel'
+import { doingNowFor } from './doingNow'
 import type { GroupedConversationItem } from './conversation'
 
 export type DelegationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
@@ -256,7 +257,7 @@ export function buildDelegationRows(notices: readonly DelegationNotice[], record
       const bucket: DelegationBucket = approval ? 'approval' : record.status === 'running' ? 'working' : record.status === 'completed' ? 'done' : record.status
       // A teammate that asked the owner a question keeps its assignment open; say so instead of "Needs approval".
       const asking = approval && !!sideSessionId && questionSessions.has(sideSessionId)
-      return { ...base, asking, bucket, label: asking ? 'Has a question' : bucket === 'queued' ? queuedLabel(record.queueReason) : bucket === 'done' && record.silent ? 'Done, nothing to report' : BUCKET_LABEL[bucket], startedAt: parse(record.startedAt ?? record.createdAt), endedAt: parse(record.finishedAt), preview: record.briefPreview, error: record.error, workspacePath: record.workspacePath, worktree: record.worktree, recorded: true }
+      return { ...base, asking, bucket, label: asking ? 'Has a question' : bucket === 'queued' ? queuedLabel(record.queueReason) : bucket === 'done' && record.silent ? 'Done, nothing to report' : bucket === 'working' ? doingNowFor(sideSession) ?? BUCKET_LABEL.working : BUCKET_LABEL[bucket], startedAt: parse(record.startedAt ?? record.createdAt), endedAt: parse(record.finishedAt), preview: record.briefPreview, error: record.error, workspacePath: record.workspacePath, worktree: record.worktree, recorded: true }
     }
     const startedAt = parse(notice.createdAt)
     const fallback = { ...base, startedAt, endedAt: null, preview: notice.text, error: notice.failed ? notice.text : null, workspacePath: sideSession?.projectPath ?? null, worktree: null, recorded: false }

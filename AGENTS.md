@@ -2,6 +2,16 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (29 October 2026): Sonnet backend, Director frontend, through the Bitbots MCP
+
+Owner directive in the live session of 29 October 2026, for the expansion plan in `docs/plans/expansion-plan-v3.md`, until the owner says otherwise. It amends the 28 October amendment below.
+
+- **Backend** (daemon, storage, adapters, `src-tauri` native code, schema, non-visual TypeScript, backend tests) is done by Claude Sonnet 5.5 at medium effort.
+  - For Phase 0 (the Bitbots MCP) this is a subagent of the Director's Claude Code session, working in its own short-path worktree.
+  - From Phase 1, this is a Sonnet 5.5 (medium) bot in the owner's running Bitbots app, assigned through the Bitbots MCP. It works in a git worktree separate from the checkout the running app was built from. The owner confirms before this starts.
+- **Frontend** (components, styles, copy, motion, companion, settings, onboarding, UI tests) is done by the Director (Claude).
+- **Commits:** the backend lane never runs `git commit`. The Director reviews every diff, runs every gate, commits, and pushes only when asked.
+
 # Amendment (28 October 2026): the Director implements
 
 Owner directive in the live session of 28 October 2026 ("close opencode background service and do the job yourself"). From Wave 13, until the owner says otherwise, the Director (Claude) writes backend and UI code itself in the main checkout; no OpenCode lane is started. It still runs every gate before committing and does not push unless asked. All other rules stand.

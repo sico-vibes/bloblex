@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "ed6d523",
-  "documentCount": 352,
+  "revision": "b63e42a",
+  "documentCount": 354,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -3878,6 +3878,76 @@
         {
           "id": "deliverable-on-approval",
           "text": "Deliverable on approval",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/plans/expansion-plan-v3",
+      "source": "docs/plans/expansion-plan-v3.md",
+      "title": "Expansion plan v3: the connector",
+      "section": "Plans & briefs",
+      "status": "Plan",
+      "sha256": "5210ae3820d82368d9eac219e430f105f84b1704e6a2150aef2b9d18d1ab23c1",
+      "headings": [
+        {
+          "id": "lanes",
+          "text": "Lanes",
+          "level": 2
+        },
+        {
+          "id": "phase-0-the-bitbots-mcp-first-release-on-its-own",
+          "text": "Phase 0: the Bitbots MCP (first, release on its own)",
+          "level": 2
+        },
+        {
+          "id": "phase-1a-bots-across-projects-owner-decision-29-october-2026",
+          "text": "Phase 1A: bots across projects (owner decision, 29 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "phase-1b-from-theos-t3-code-video-filtered-for-bots-desktop-only",
+          "text": "Phase 1B: from Theo's T3 Code video (filtered for bots, desktop only)",
+          "level": 2
+        },
+        {
+          "id": "phase-1-approvals-and-settings",
+          "text": "Phase 1: approvals and settings",
+          "level": 2
+        },
+        {
+          "id": "phase-2-images-from-any-path",
+          "text": "Phase 2: images from any path",
+          "level": 2
+        },
+        {
+          "id": "phase-3-git-and-review",
+          "text": "Phase 3: git and review",
+          "level": 2
+        },
+        {
+          "id": "phase-4-machines-windows-only",
+          "text": "Phase 4: machines (Windows only)",
+          "level": 2
+        },
+        {
+          "id": "phase-5-providers-and-accounts",
+          "text": "Phase 5: providers and accounts",
+          "level": 2
+        },
+        {
+          "id": "phase-6-reach-and-triggers",
+          "text": "Phase 6: reach and triggers",
+          "level": 2
+        },
+        {
+          "id": "phase-7-quality-gates",
+          "text": "Phase 7: quality gates",
+          "level": 2
+        },
+        {
+          "id": "order-and-checks",
+          "text": "Order and checks",
           "level": 2
         }
       ]
@@ -15824,6 +15894,81 @@
         {
           "id": "peer-and-platform-notes",
           "text": "Peer and platform notes",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave14/mcp-brief",
+      "source": "docs/history/wave14/mcp-brief.md",
+      "title": "Wave 14 brief: the Bitbots MCP (backend)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "ce72e30fec530f119f731d2811b558b427ee9fdc78089e9f58e6b56396cc29b5",
+      "headings": [
+        {
+          "id": "goal",
+          "text": "Goal",
+          "level": 2
+        },
+        {
+          "id": "model-to-follow",
+          "text": "Model to follow",
+          "level": 2
+        },
+        {
+          "id": "contract-the-director-builds-the-ui-against-exactly-this",
+          "text": "Contract (the Director builds the UI against exactly this)",
+          "level": 2
+        },
+        {
+          "id": "settings-stored-but-not-settable-through-settingsset",
+          "text": "Settings (stored, but not settable through settings.set)",
+          "level": 3
+        },
+        {
+          "id": "capability-rpcs-ui-only-add-to-dispatch",
+          "text": "Capability RPCs (UI only; add to dispatch)",
+          "level": 3
+        },
+        {
+          "id": "tool-route-not-in-dispatch-like-outsidehook",
+          "text": "Tool route (not in dispatch, like outside.hook)",
+          "level": 3
+        },
+        {
+          "id": "tools-by-tier",
+          "text": "Tools, by tier",
+          "level": 3
+        },
+        {
+          "id": "marking-what-the-mcp-sends",
+          "text": "Marking what the MCP sends",
+          "level": 3
+        },
+        {
+          "id": "bridge-executable",
+          "text": "Bridge executable",
+          "level": 3
+        },
+        {
+          "id": "remote-and-docs",
+          "text": "Remote and docs",
+          "level": 3
+        },
+        {
+          "id": "tests-daemon-name-them-like-these",
+          "text": "Tests (daemon; name them like these)",
+          "level": 2
+        },
+        {
+          "id": "gates-you-run-before-reporting",
+          "text": "Gates you run before reporting",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
           "level": 2
         }
       ]

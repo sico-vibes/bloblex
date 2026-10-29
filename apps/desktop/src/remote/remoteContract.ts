@@ -163,7 +163,7 @@ export interface RemoteSecurityOptions {
   quietHours: { enabled: boolean; from: string; to: string }
 }
 
-export type RemoteActivityKind = 'paired' | 'revoked' | 'connected' | 'disconnected' | 'prompt' | 'approval' | 'denied'
+export type RemoteActivityKind = 'paired' | 'revoked' | 'connected' | 'disconnected' | 'prompt' | 'approval' | 'denied' | 'mcp'
 
 export interface RemoteActivityEntry {
   id: string

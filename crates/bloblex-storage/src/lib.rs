@@ -2534,6 +2534,28 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.query_row("SELECT status FROM permission_requests WHERE id=?1", [id], |r| r.get(0)).optional()?)
     }
+    /// Wave 14: the cards still waiting for the owner, oldest first, of one
+    /// conversation (or every open conversation when `session` is empty). Only
+    /// the fields the Bitbots MCP shows: id, conversation, kind, title and detail.
+    pub fn permissions_pending(&self, session: &str) -> Result<Vec<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        query_jsons(
+            &c,
+            "SELECT json_object('id',p.id,'sessionId',p.session_id,'kind',json_extract(p.data,'$.kind'),'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices')) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 AND (?1='' OR p.session_id=?1) ORDER BY p.rowid",
+            session,
+        )
+    }
+    /// Wave 14: the latest recorded token counts of a turn, each `None` when the
+    /// provider did not report it.
+    pub fn turn_usage_tokens(&self, turn_id: &str) -> Result<(Option<i64>, Option<i64>), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let row: Option<(Option<i64>, Option<i64>)> = c.query_row(
+            "SELECT input_tokens,output_tokens FROM usage_events WHERE turn_id=?1 ORDER BY rowid DESC LIMIT 1",
+            [turn_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?;
+        Ok(row.unwrap_or((None, None)))
+    }
     /// Marks a resolving question answered or dismissed. The row must be in the
     /// resolving state set by `begin_permission_reply`.
     pub fn resolve_question(&self, id: &str, status: &str) -> Result<(), StorageError> {

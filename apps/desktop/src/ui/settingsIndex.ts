@@ -2,10 +2,10 @@
 // group heading on that page, which the sheet scrolls to and flashes. Keep the
 // `group` strings equal to the `SettingsGroup title` values in SettingsSheet.
 
-export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
+export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Connections' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
 
 /** The page list, for anything that has to validate an incoming page name. */
-export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Agents', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health', 'Updates']
+export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Connections', 'Agents', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health', 'Updates']
 
 /**
  * The page out of an open-settings event payload (C13): a known page name, or
@@ -40,8 +40,6 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'General', group: 'Support', label: 'Export diagnostics', keywords: 'logs report problem support zip upload debug' },
   { page: 'Appearance', group: 'Look', label: 'Look', keywords: 'haze stone blobots theme style robots characters logos font' },
   { page: 'Appearance', group: 'Look', label: 'More looks', keywords: 'legacy pop dot alternate alternative' },
-  { page: 'Appearance', group: 'Look options', label: 'Wallpaper', keywords: 'lake dusk bloom sand custom image background' },
-  { page: 'Appearance', group: 'Look options', label: 'Glass', keywords: 'solid balanced clear transparency blur' },
   { page: 'Appearance', group: 'Colour', label: 'Accent', keywords: 'color highlight primary brand' },
   { page: 'Appearance', group: 'Display', label: 'Theme', keywords: 'dark light system mode' },
   { page: 'Appearance', group: 'Text', label: 'Interface font', keywords: 'font typeface sans pixel display' },
@@ -53,6 +51,9 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Remote', group: 'Devices', label: 'Devices', keywords: 'paired phones tablets browsers list remove revoke tier' },
   { page: 'Remote', group: 'Safety', label: 'Approve requests from remote devices', keywords: 'permission approval remote security' },
   { page: 'Remote', group: 'Recent activity', label: 'Recent activity', keywords: 'log connections pairings approvals denied history' },
+  { page: 'Connections', group: 'Bitbots MCP', label: 'Let outside sessions use Bitbots', keywords: 'mcp claude code connect terminal outside session external tools delegate' },
+  { page: 'Connections', group: 'Bitbots MCP', label: 'Connect Claude Code', keywords: 'mcp command claude mcp add copy' },
+  { page: 'Connections', group: 'Bitbots MCP', label: 'Reset access', keywords: 'mcp key token rotate revoke' },
   { page: 'General', group: 'Editor', label: 'Editor executable', keywords: 'open files vscode notepad' },
   { page: 'Experimental', group: 'Experimental', label: 'Claude dynamic workflows and Ultracode', keywords: 'effort claude workflow ultracode' },
   { page: 'Experimental', group: 'Experimental', label: 'Usage tips', keywords: 'quota limit notice' },

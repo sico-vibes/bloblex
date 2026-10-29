@@ -167,6 +167,13 @@ pub(crate) fn inspect(worktree: &Path, base_commit: &str) -> Result<Summary, Str
     Ok(Summary { files, insertions, deletions, untracked: untracked.len() as u64 })
 }
 
+/// How many commits the copy's branch has made since `base_commit` (wave 14,
+/// `worktree_status`); `None` when the base is unknown or git cannot say.
+pub(crate) fn commits_ahead(worktree: &Path, base_commit: &str) -> Option<u64> {
+    if base_commit.trim().is_empty() { return None; }
+    run(worktree, &["rev-list", "--count", &format!("{}..HEAD", base_commit.trim())]).ok()?.parse().ok()
+}
+
 /// Commit everything in the task copy under a fixed Bitbots identity, so a merge
 /// back has something to carry. A no-op when the copy is already clean.
 pub(crate) fn commit_all(worktree: &Path, message: &str) -> Result<(), String> {

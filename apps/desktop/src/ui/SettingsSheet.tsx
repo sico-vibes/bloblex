@@ -1,6 +1,6 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArchiveRestore, Bot, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Stethoscope, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
+import { ArchiveRestore, Bot, Cable, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Stethoscope, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { SettingsSkeleton } from './SettingsSkeleton'
 import { usePlatform } from '../transport/platform'
@@ -30,6 +30,7 @@ import { ConfirmDialog } from './BlobPage'
 import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
 import { OutsideWatchSetting } from './OutsideSessions'
 import { RemoteSettings } from './RemoteSettings'
+import { ConnectionsPage } from './ConnectionsPage'
 import { DiagnosticsDialog } from './DiagnosticsDialog'
 import { HarnessUpdatesNotice } from './HarnessUpdatesNotice'
 import { AppearancePage } from './AppearancePage'
@@ -42,13 +43,14 @@ import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Connections' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
   { id: 'Appearance', label: 'Appearance', icon: Palette },
   { id: 'Experimental', label: 'Experimental', icon: FlaskConical },
   { id: 'Remote', label: 'Remote', icon: Smartphone },
+  { id: 'Connections', label: 'Connections', icon: Cable },
   { id: 'Agents', label: 'Agents', icon: Bot },
   { id: 'Approvals', label: 'Approvals', icon: ShieldCheck },
   { id: 'Manager', label: 'Manager', icon: BriefcaseBusiness },
@@ -614,6 +616,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
           {!loading && page === 'Appearance' && <AppearancePage />}
 
           {!loading && page === 'Remote' && <RemoteSettings onOpenPower={() => switchPage('General')} />}
+          {!loading && page === 'Connections' && <ConnectionsPage connected={inDesktop && !!snapshot} />}
 
           {!loading && page === 'Agents' && <>
             <p className="settings-intro">Bitbots runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bitbots never handles your provider login.</p>

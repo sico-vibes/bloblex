@@ -162,6 +162,12 @@ fn validate_body(session: &Value, p: &Value) -> Result<Vec<bloblex_agent_core::P
 }
 
 pub async fn add(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    add_marked(st, p, None).await
+}
+
+/// `session.queue.add`, optionally carrying `{kind:"mcp", client}` so the message
+/// is marked as sent by the Bitbots MCP when the queue delivers it (wave 14).
+pub(crate) async fn add_marked(st: &AppState, p: Value, mcp_client: Option<&str>) -> Result<Value, DispatchError> {
     let session_id = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     let session = queue_session(st, session_id)?;
     if session["link"]["kind"] == "side" {
@@ -198,7 +204,8 @@ pub async fn add(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         if st.db.queue_count_queued(session_id).map_err(queue_error)? >= QUEUE_MAX {
             return Err(derr("conflict", "The queue is full.", StatusCode::CONFLICT));
         }
-        let params = allowlisted_params(&p, text, &attachments, client_message_id.as_deref());
+        let mut params = allowlisted_params(&p, text, &attachments, client_message_id.as_deref());
+        if let Some(client) = mcp_client { params["meta"] = json!({"kind":"mcp","client":client.chars().take(60).collect::<String>()}); }
         st.db.queue_add(session_id, &params, kind, due_at.as_deref()).map_err(queue_error)?
     };
     emit_changed(st, session_id).await;
@@ -347,12 +354,16 @@ pub(crate) async fn drain_next(st: &AppState, session_id: &str, allow_plain: boo
 async fn send_claimed(st: &AppState, session_id: &str, item: &Value, confirm: bool) -> Result<(), DispatchError> {
     let id = item["id"].as_str().unwrap_or("").to_owned();
     let request = prompt_params(session_id, item, confirm);
+    // Boxed: each branch is the whole prompt path, and four of them inline make
+    // every caller's frame large enough to overflow a debug build's worker stack.
     let result = if item["kind"] == "retry" {
-        crate::session_prompt_queued(st, request).await
+        Box::pin(crate::session_prompt_queued(st, request)).await
     } else if item["meta"]["kind"] == "question_answer" {
-        crate::session_prompt_for_question_answer(st, request).await
+        Box::pin(crate::session_prompt_for_question_answer(st, request)).await
+    } else if item["meta"]["kind"] == "mcp" {
+        Box::pin(crate::session_prompt_for_mcp(st, request)).await
     } else {
-        session_prompt(st, request).await
+        Box::pin(session_prompt(st, request)).await
     };
     match result {
         Ok(_) => {

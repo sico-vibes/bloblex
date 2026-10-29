@@ -78,6 +78,7 @@ const fixtureSkills: Array<Record<string, unknown>> = [
   { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
 ]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
+const fixtureExternal: { enabled: boolean; tier: string; lastCallAt: string | null; lastClient: string | null } = fixturePreset() === 'mcp' ? { enabled: true, tier: 'operator', lastCallAt: new Date(Date.now() - 4 * 60_000).toISOString(), lastClient: 'claude-code' } : { enabled: false, tier: 'chat', lastCallAt: null, lastClient: null }
 const fixtureOutside = {
   enabled: fixturePreset() === 'outside',
   sessions: [
@@ -134,7 +135,7 @@ let sessions: Session[] = [
   {
     id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'working', model: 'gpt-6.1-sol', updatedAt: minutesAgo(2),
     messages: [
-      { id: 'm1', role: 'user', content: 'Can you make the invoice parser tests pass?', createdAt: minutesAgo(9) },
+      { id: 'm1', role: 'user', content: 'Can you make the invoice parser tests pass?', createdAt: minutesAgo(9), ...(fixturePreset() === 'mcp' ? { meta: { origin: { kind: 'mcp', client: 'claude-code' } } } : {}) },
       { id: 'm2', role: 'assistant', content: 'Sure. I found two failing cases in **tests/invoice.test.ts**: the currency field is parsed before the locale is known, and totals use floats.\n\nI will switch totals to integer minor units and parse the locale first.', createdAt: minutesAgo(8) },
       { id: 'm3', role: 'assistant', content: fixturePreset() === 'message-links'
         ? 'Here are the projects I found:\n\n| Project | Stars | Licence | What it gives you |\n| --- | ---: | --- | --- |\n| [dicebear/dicebear](https://github.com/dicebear/dicebear) | 9.9k | MIT | 61 styles for avatars and characters |\n| [Alain00/blobatar](https://github.com/Alain00/blobatar) | 1.5k | MIT | Parametric blob illustrations |\n\nMore details: https://github.com/hardbeat920/monocode.'
@@ -753,6 +754,27 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
       return { status: status(), backupPath: 'C:/Users/you/.claude/settings.json.bitbots-backup-20261028-101500' } as T
     }
     if (method === 'outside.disable') { fixtureOutside.enabled = false; notifyFixtureDaemon('outside.sessions.changed', { sessions: [] }); return { status: status(), backupPath: null, problem: null } as T }
+  }
+  // Wave 14: the Bitbots MCP. `?preset=mcp` starts with it on and used a few minutes ago.
+  if (method.startsWith('external.')) {
+    const bridge = 'C:/Users/you/AppData/Local/com.bitbots.desktop/bitbots-mcp.exe'
+    const endpoint = 'C:/Users/you/AppData/Local/com.bitbots.desktop/external-mcp.json'
+    const status = () => ({ enabled: fixtureExternal.enabled, tier: fixtureExternal.tier, endpointPath: fixtureExternal.enabled ? endpoint : null, bridgePath: bridge, command: `claude mcp add bitbots -- "${bridge}" mcp-server --endpoint "${endpoint}"`, lastCallAt: fixtureExternal.lastCallAt, lastClient: fixtureExternal.lastClient })
+    const changed = () => { notifyFixtureDaemon('external.changed', status()); return status() as T }
+    if (method === 'external.status') return status() as T
+    if (method === 'external.enable') {
+      if (params.confirm !== true) throw rpcError('invalid_argument', 'Confirm turning on the Bitbots MCP first.')
+      fixtureExternal.enabled = true
+      if (typeof params.tier === 'string') fixtureExternal.tier = params.tier
+      return changed()
+    }
+    if (method === 'external.disable') { fixtureExternal.enabled = false; return changed() }
+    if (method === 'external.setTier') {
+      if (!fixtureExternal.enabled) throw rpcError('conflict', 'Turn on the Bitbots MCP first.')
+      if (typeof params.tier === 'string') fixtureExternal.tier = params.tier
+      return changed()
+    }
+    if (method === 'external.rotate') return changed()
   }
   if (method === 'session.handoff.draft') {
     const source = sessions.find((item) => item.id === params.fromSessionId)

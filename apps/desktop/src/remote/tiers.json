@@ -674,10 +674,52 @@
       "params": null
     },
     {
+      "method": "external.status",
+      "class": "never",
+      "minTier": null,
+      "why": "The Bitbots MCP lets a Claude Code session on the host drive the app; its status, command and file paths are the owner's at the computer.",
+      "params": null
+    },
+    {
+      "method": "external.enable",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may let an outside Claude Code session drive Bitbots.",
+      "params": null
+    },
+    {
+      "method": "external.disable",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may change who can drive Bitbots from outside.",
+      "params": null
+    },
+    {
+      "method": "external.setTier",
+      "class": "never",
+      "minTier": null,
+      "why": "The level an outside Claude Code session has is the owner's choice at the computer.",
+      "params": null
+    },
+    {
+      "method": "external.rotate",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the computer may replace the Bitbots MCP's token.",
+      "params": null
+    },
+    {
       "method": "mcp.*",
       "class": "never",
       "minTier": null,
       "why": "The MCP bridge is the local agent tool surface, not a remote device surface.",
+      "params": null
+    },
+    {
+      "method": "ext.*",
+      "class": "never",
+      "minTier": null,
+      "why": "The Bitbots MCP is a local stdio server for the owner's own Claude Code session; its token is not a remote device credential.",
       "params": null
     },
     {
@@ -1122,7 +1164,8 @@
     "task.run.changed": "drop",
     "task.run.finished": "drop",
     "delegation.updated": "allow",
-    "outside.sessions.changed": "drop"
+    "outside.sessions.changed": "drop",
+    "external.changed": "drop"
   },
   "settingsAllowlist": [
     "appearance.style",

@@ -468,3 +468,6 @@ button.compact-copy:active { transform: none; }
 .outside-pill-state { margin-left: auto; flex: none; }
 .outside-pill.working .outside-pill-state { color: var(--c-dim); }
 .outside-pill.waiting .outside-pill-state { color: var(--status-working); }
+
+/* Wave 14: a message sent through the Bitbots MCP names its sender. */
+.companion-via { display: block; margin-bottom: 2px; opacity: .7; font: 500 var(--fs-2xs) var(--c-font); }

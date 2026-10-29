@@ -431,3 +431,27 @@ The execution snapshot RPCs use `invalid_argument` for malformed IDs, cursors, o
 - `session.replaced` reports that the provider's conversation context changed. Its payload is `{"sessionId","reason","contextLost"}`, where `reason` is `compaction` or `fresh_session` and `contextLost` is true only when earlier context is gone. It is informational; the persisted `message.completed` notice carries the user-facing copy and `session.context.reset` still clears the context meter for a lost context.
 - The daemon's startup/no-progress watchdog is 45 seconds; after the first semantic activity, its semantic-inactivity watchdog is 300 seconds. These are Bitbots product choices, not provider CLI facts. Expiry fails the turn with `failureClass: timeout` and closes the adapter session, which kills its owned process tree.
 - Resume-time context overflow emits `session.context_exhausted` with the safe message and retirement offer; it does not clear the provider-session ID.
+
+## Wave 14: Bitbots MCP
+
+The Bitbots MCP lets a Claude Code session the owner started outside Bitbots see and drive the running app. It is off by default and is never a remote (paired device) surface.
+
+**Settings.** `mcp.external.enabled` (boolean, default false) and `mcp.external.tier` (`viewer`, `chat` or `operator`, default `chat`) are stored settings, but `settings.set` refuses every key under `mcp.external.` with `invalid_argument` ("use external.enable"). They move only through the `external.*` methods.
+
+**Capability RPCs (the app's Settings page; never remote).**
+
+- `external.status` returns `{enabled, tier, endpointPath, bridgePath, command, lastCallAt, lastClient}`. `command` is the `claude mcp add bitbots -- "<bridge>" mcp-server --endpoint "<endpoint file>"` line; `endpointPath`, `bridgePath` and `command` are null while the MCP is off, and `command` is null when the bridge copy does not exist. `lastClient` is the MCP client's `clientInfo.name`. The token is never in a result.
+- `external.enable {tier?, confirm: true}` refuses without `confirm` (`invalid_argument`), makes a new token, writes the endpoint file `mcp-external.json` (`{address, token}`) in the data folder, copies the daemon executable to `bitbots-mcp.exe` beside it (a locked copy is kept), stores the settings and broadcasts. `tier` defaults to `chat`.
+- `external.disable` clears the token in memory, deletes the endpoint file, stores `enabled: false` and broadcasts.
+- `external.setTier {tier}` and `external.rotate` work only while enabled (`conflict` otherwise). Rotating writes a new token and file; running servers read the file again on a 401.
+- Event `external.changed`: the status object. Calls broadcast it at most once every five seconds.
+
+**Tool route (not in `dispatch`).** `ext.hello {clientName}`, `ext.tools.list` and `ext.tools.call {name, arguments}` need `Authorization: Bearer <MCP token>` and `mcp.external.enabled == true`; otherwise `401 unauthorized`. The token is compared in constant time and is not the daemon capability. `bitbotsd mcp-server --endpoint <file>` is the stdio server a client runs: it sends `ext.hello` after `initialize`, reads the endpoint file again when a call gets 401 or cannot connect, and allows a call to run 660 seconds (`wait_for_turn` waits at most 600). Every call updates `lastCallAt` and writes a content-free activity line (kind `mcp`: the client, the tool and the bot's name, never message text).
+
+**Tools by level.** A tool above the current level is missing from `tools/list` and refused in `tools/call` (`isError`: "This tool needs the Operator level in Bitbots › Settings › Connections.").
+
+- `viewer`: `get_status`, `list_bots`, `list_runtimes`, `list_projects`, `list_conversations`, `read_conversation`, `wait_for_turn`, `turn_metrics`, `worktree_status`, `list_approvals`. Results hold allowlisted fields only: never environment values, instructions, profiles, the capability or the token. Unknown metrics are left out, never 0, and no cost is reported.
+- `chat`: `send_message` (a bot or a conversation; busy conversations queue the message; new conversations only in the bot's own folder or a registered project), `steer`, `stop_turn`.
+- `operator`: `send_message` with `worktree: true` (a new conversation in its own linked git worktree, as delegations use; refused outside a git repository) and with any `projectPath`, `create_bot` (through the same catalog validation as `agent.create`; permission mode `ask` or `auto`, never `bypass`) and `answer_approval` (`allow` or `deny`).
+
+**Origin mark.** A user message sent through `send_message`, a queued `send_message` or `steer` carries `meta.origin = {kind: "mcp", client}` (`client` is the last client name, or "MCP"). Snapshots and `session.get` carry it unchanged, so the app can show "via Claude Code"; the remote redaction passes it through (it holds no path).

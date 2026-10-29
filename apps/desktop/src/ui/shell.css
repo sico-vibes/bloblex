@@ -601,3 +601,6 @@
 .archived-bot-skeleton-name { flex: 1; min-width: 0; max-width: 55%; }
 .archived-bot-skeleton-action .skeleton-block { width: 84px; height: 28px; border-radius: var(--radius-sm); }
 .archived-bot-skeleton-icon .skeleton-block { width: 32px; height: 32px; border-radius: var(--radius-sm); }
+
+/* Wave 14: a message sent through the Bitbots MCP names its sender above the bubble. */
+.message-via { display: inline-flex; align-items: center; gap: 4px; align-self: flex-end; margin: 0 6px 3px; color: var(--text-3); font-size: var(--fs-2xs); }

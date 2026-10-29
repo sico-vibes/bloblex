@@ -2,6 +2,7 @@
 // Same projects, roles, leader and side conversations as the main window.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUpRight, Check, ClipboardList, Copy, Pin, PinOff, X, ArrowLeftRight } from 'lucide-react'
+import { outsideSender } from './messageOrigin'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -255,10 +256,11 @@ export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, on
   if (role === 'plan' || meta?.kind === 'plan') {
     return <div className="companion-plan"><ClipboardList size={12} aria-hidden="true" /><span><b>Proposed plan</b> {plain(text)}</span></div>
   }
+  const via = role === 'user' ? outsideSender(message) : null
   const quotedContext = reply && <ReplyContextStrip target={reply} compact available={reply.sourceSessionId === currentSessionId && availableMessageIds.has(reply.messageId)} onJump={jump} />
   const reactions = Array.isArray(message.reactions) ? message.reactions as string[] : []
   const actions = (copyText: string) => <MessageActions compact text={copyText} time={clockOf(message.createdAt)} reactions={reactions} onToggleReaction={onToggleReaction && messageId ? (emoji) => onToggleReaction(messageId, emoji) : undefined} onError={() => undefined} />
-  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}{actions(text)}<div className="bubble"><CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
+  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}{actions(text)}<div className="bubble">{via && <span className="companion-via">via {via}</span>}<CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
   const replyText = text.trim()
   return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble"><SafeMarkdown text={replyText} onOpenLink={(url) => void openSafeLink(url)} /><MessageReactionBadges reactions={message.reactions} /></div>{actions(replyText)}</div> : null
 }

@@ -51,6 +51,8 @@ mod quota;
 mod quota_sources;
 mod automations;
 mod outside;
+// Wave 14: the Bitbots MCP, an MCP server that lets an outside Claude Code session see and drive this app.
+mod external;
 // Durable task board (expansion-v2 slice 1A): owner dispatch, queue and runs.
 mod tasks;
 // FIX47: the durable ledger of Manager assignments into side conversations.
@@ -99,6 +101,8 @@ struct AppState {
     automations: Arc<automations::Automations>,
     /// Wave 13: Claude Code sessions started outside Bitbots, and their hook token.
     outside: Arc<outside::Outside>,
+    /// Wave 14: the Bitbots MCP's token, last client and last call.
+    external: Arc<external::External>,
     memory: Arc<memory::Memory>,
     knowledge: Arc<knowledge::Knowledge>,
     skills: Arc<skills::Skills>,
@@ -385,6 +389,21 @@ async fn main_rpc(
         }
         let result = outside::hook(&st, &req.params["event"]).await;
         return (StatusCode::OK, Json(RpcResponse { v: PROTOCOL_VERSION, id: req.id, ok: true, result: Some(result), error: None }));
+    }
+    // Wave 14: the Bitbots MCP. Its token is its own (never the capability) and
+    // it works only while the owner has switched the MCP on.
+    if req.method.starts_with("ext.") {
+        let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+        if !st.external.accepts(bearer) || !external::enabled(&st) {
+            return (StatusCode::UNAUTHORIZED, Json(error(req.id, "unauthorized", "the Bitbots MCP is off or its token is wrong")));
+        }
+        let id = req.id.clone();
+        // Boxed: the tool calls reach the whole prompt path, and an inline future
+        // that size overflows a worker thread's stack in a debug build.
+        return match Box::pin(external::route(&st, &req.method, &req.params)).await {
+            Ok(v) => (StatusCode::OK, Json(RpcResponse { v: PROTOCOL_VERSION, id, ok: true, result: Some(v), error: None })),
+            Err((status, e)) => (status, Json(RpcResponse { v: PROTOCOL_VERSION, id, ok: false, result: None, error: Some(e) })),
+        };
     }
     if req.method.starts_with("mcp.") {
         let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
@@ -846,6 +865,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "outside.status" | "outside.preview" | "outside.enable" | "outside.disable" | "outside.sessions" => outside::rpc(st, method, &p).await,
+        "external.status" | "external.enable" | "external.disable" | "external.setTier" | "external.rotate" => external::rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" | "task.image" => tasks::rpc(st, method, &p).await,
         "delegation.list" | "delegation.cancel" | "delegation.cancelGroup" => delegations::rpc(st, method, &p).await,
@@ -1401,6 +1421,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             // stale client cannot write them behind the policy.
             if k.starts_with("remote.") {
                 return Err(derr("invalid_argument", "Remote settings change only through Settings › Remote.", StatusCode::BAD_REQUEST));
+            }
+            // Wave 14: the Bitbots MCP's switch and level move only through
+            // `external.*`, which also makes the token and the endpoint file.
+            if k.starts_with("mcp.external.") {
+                return Err(derr("invalid_argument", "use external.enable", StatusCode::BAD_REQUEST));
             }
             let value = validate_setting(k, &p["value"])?;
             let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="task.concurrency.max"||k=="task.globalPaused"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce";
@@ -3302,6 +3327,9 @@ enum PromptOrigin {
     Automation,
     QuestionAnswer,
     Task,
+    /// Wave 14: the Bitbots MCP, an outside Claude Code session. It sends like a
+    /// user, and its messages are marked `meta.origin = {kind:"mcp", client}`.
+    Mcp,
 }
 
 /// An optional client-supplied key that makes a send safe to replay. Eight to
@@ -3322,6 +3350,7 @@ fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
     let kind = object.get("kind")?.as_str()?;
     match origin {
         PromptOrigin::User => None,
+        PromptOrigin::Mcp => (kind == "mcp").then(|| json!({"origin": external::origin(object.get("client").and_then(Value::as_str))})),
         PromptOrigin::Team => matches!(kind, "blob_message" | "blob_reply" | "blob_update").then(|| Value::Object(object.clone())),
         PromptOrigin::Queue => {
             if kind != "auto_retry" {
@@ -3362,6 +3391,12 @@ fn sanitize_prompt_meta(value: &Value, origin: PromptOrigin) -> Option<Value> {
 
 async fn session_prompt(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     session_prompt_impl(st, p, PromptOrigin::User).await
+}
+
+/// Entry point for a message from the Bitbots MCP. Only the allowlisted
+/// `{kind:"mcp", client}` meta survives sanitization here.
+pub(crate) async fn session_prompt_for_mcp(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    session_prompt_impl(st, p, PromptOrigin::Mcp).await
 }
 
 pub(crate) async fn session_prompt_for_team(st: &AppState, p: Value) -> Result<Value, DispatchError> {
@@ -3522,7 +3557,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         }
         if st.active_turns.lock().await.contains_key(&sid) { return Err(derr("conflict", "this session already has an active turn", StatusCode::CONFLICT)); }
         let state = row["state"].as_str().unwrap_or("idle").to_owned();
-        if state == "limited" && origin != PromptOrigin::User {
+        if state == "limited" && !matches!(origin, PromptOrigin::User | PromptOrigin::Mcp) {
             return Err(derr("conflict", "this conversation is waiting for its usage limit", StatusCode::CONFLICT));
         }
         if matches!(state.as_str(), "starting" | "working" | "cancelling" | "waiting_permission") {
@@ -3606,7 +3641,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         // Only daemon-internal callers may attach allowlisted meta; a retry turn
         // records its chain in the turn's audit data.
         let allowed_meta = sanitize_prompt_meta(&p["meta"], origin);
-        if origin == PromptOrigin::User {
+        if matches!(origin, PromptOrigin::User | PromptOrigin::Mcp) {
             let _ = st.db.watchdog_reset(&sid);
         }
         let retry_chain = allowed_meta.as_ref().filter(|meta| meta["kind"] == "auto_retry").and_then(|meta| {
@@ -3907,6 +3942,12 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
 /// text is queued instead of being dropped. Steering never changes the
 /// permission mode or cancels the turn.
 async fn session_steer(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+    session_steer_marked(st, p, None).await
+}
+
+/// `session.steer`, optionally marking the stored message as sent by the Bitbots
+/// MCP (`client` is its `clientInfo.name`).
+pub(crate) async fn session_steer_marked(st: &AppState, p: Value, mcp_client: Option<&str>) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     let text = p["text"].as_str().unwrap_or("");
     let trimmed = text.trim();
@@ -3936,8 +3977,10 @@ async fn session_steer(st: &AppState, p: Value) -> Result<Value, DispatchError> 
     let active = st.sessions.lock().await.get(sid).cloned().ok_or_else(|| derr("not_found", "active session not found", StatusCode::NOT_FOUND))?;
     match active.adapter.steer(&active.handle, SteerRequest { turn_id: turn_id.clone(), text: text.to_owned() }).await {
         Ok(SteerOutcome::Accepted) => {
+            let mut meta = json!({"kind":"steer"});
+            if let Some(client) = mcp_client { meta["origin"] = external::origin(Some(client)); }
             let user_message = st.db
-                .append_message_with_data(sid, &turn_id, "user", text, &json!({"meta":{"kind":"steer"}}))
+                .append_message_with_data(sid, &turn_id, "user", text, &json!({"meta":meta}))
                 .map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
             if !user_message.is_null() {
                 st.emit("message.completed", json!({"sessionId":sid,"turnId":turn_id,"messageId":user_message["id"],"role":"user","message":user_message})).await;
@@ -5006,6 +5049,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         team: Arc::new(team::Team::default()),
         queue: Arc::new(queue::Queue::default()),
         automations: Arc::new(automations::Automations::default()), outside: Arc::new(outside::Outside::default()),
+        external: Arc::new(external::External::default()),
         memory: Arc::new(memory::Memory::default()),
         knowledge: Arc::new(knowledge::Knowledge::default()),
         skills: Arc::new(skills::Skills::default()),
@@ -5065,6 +5109,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     *st.team.data_dir.lock().unwrap() = data_dir;
     // The outside-session hook needs this run's address and token.
     outside::startup(&st);
+    // Wave 14: a fresh token and endpoint file for the Bitbots MCP, when it is on.
+    external::startup(&st);
     // FIX47: the deliveries a restart restored have a team address now, so one
     // drain can start them (the same fast path every turn ending uses).
     let restored_queue = st.clone();
@@ -5119,10 +5165,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     st.adapters.claude.shutdown().await;
     Ok(())
 }
-#[tokio::main]
-async fn main() {
+/// Worker threads get 8 MiB of stack. The prompt path is a deep async state
+/// machine, and in a debug build (the dev app runs one) its frames outgrew the
+/// 2 MiB default: the daemon overflowed on shutdown in Wave 14. Release frames
+/// are far smaller; unused stack costs only address space.
+const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(WORKER_STACK_BYTES).build().expect("the async runtime could not start");
+    runtime.block_on(daemon_main());
+}
+
+async fn daemon_main() {
     if std::env::args().nth(1).as_deref() == Some("mcp-bridge") {
         mcp_bridge::run().await;
+        return;
+    }
+    // Wave 14: `bitbotsd mcp-server --endpoint <file>`, the stdio server an outside
+    // Claude Code session runs (from the copy Bitbots keeps in its data folder).
+    if std::env::args().nth(1).as_deref() == Some("mcp-server") {
+        let args = std::env::args().skip(2).collect::<Vec<_>>();
+        let Some(endpoint) = args.iter().position(|arg| arg == "--endpoint").and_then(|at| args.get(at + 1)) else {
+            eprintln!("usage: mcp-server --endpoint <file>");
+            std::process::exit(2);
+        };
+        mcp_bridge::run_external(std::path::PathBuf::from(endpoint)).await;
         return;
     }
     if let Err(error) = bloblex_usage::shipped_official_price_rules() {
@@ -6133,7 +6200,7 @@ mod phase2a_tests {
     /// a second state on the same file.
     pub(crate) fn state_with(db:Storage)->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(db);db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),outside:Arc::new(outside::Outside::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),outside:Arc::new(outside::Outside::default()),external:Arc::new(external::External::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn bot_purge_is_confirmed_atomic_and_removes_both_sides_only() {

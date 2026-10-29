@@ -1,7 +1,7 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "87e4d1d",
+  "revision": "ed6d523",
   "documentCount": 352,
   "assets": [
     {
@@ -1781,7 +1781,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "66537b5216cd63caee09704ad3d308a8ae6b3c3df7f5d61236be611f5ade47aa",
+      "sha256": "47f5c814e3cd4f6798bd91462811c65bd8614c9cdf725b7f0c49985af365bf88",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1811,7 +1811,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "e7af1998b89d527b784dddd1ee5e92fc3f7be91d1ea1ca5a51eab1b47bfd3c9c",
+      "sha256": "c636c2306e4c3939fdeea75586bc7313d6a8f19ee7ff114183357f5b2393cfec",
       "headings": [
         {
           "id": "update-commands",
@@ -1916,6 +1916,11 @@
         {
           "id": "runtime-hardening-additions",
           "text": "Runtime hardening additions",
+          "level": 2
+        },
+        {
+          "id": "wave-14-bitbots-mcp",
+          "text": "Wave 14: Bitbots MCP",
           "level": 2
         }
       ]

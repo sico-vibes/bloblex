@@ -1,7 +1,7 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "c5aca15",
+  "revision": "0bd33b3",
   "documentCount": 355,
   "assets": [
     {
@@ -3028,7 +3028,7 @@
       "title": "Bitbots session handoff",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "f1f908996519d700235d7a4d4e7b518b48e5fe86b0190dad492345e0ab1c9fb4",
+      "sha256": "ca8990c8296960efaf90b1450a27b280250b1c2f15f3b32dc4a1ef2af8a70fe2",
       "headings": [
         {
           "id": "22-october-2026-phase-1-on-main-after-the-owners-resume",
@@ -3418,7 +3418,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "ff4e786ec72a6f3963d01dd9dd44e14a4d0a4aeec00652171cc7186b103ce74b",
+      "sha256": "f8158cf1674a70fb7ef56de8de4f449162969fc1bfc52e9cada9be8fb295e39f",
       "headings": [
         {
           "id": "release-command",

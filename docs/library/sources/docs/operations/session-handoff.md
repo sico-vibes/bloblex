@@ -269,10 +269,10 @@ Roadmap and decisions: [docs/plans/improvement-plan.md](../plans/improvement-pla
 
 The improvement plan v2 (Phases 1-7, see the section above) shipped as manual-only [v0.1.0-beta.19](../releases/0.1.0-beta.19.md), tagged at `4a4d0f6`, with `main` and the annotated tag pushed to GitHub.
 
-- Installer built in `D:19`: 13,562,185 bytes, SHA-256 `8e2946b1d35028abdbd439433fb61649fbf1c904b9cc26665b2cf0bfb61afed4`, `NotSigned`. The installer and `SHA256SUMS.txt` are published as a prerelease (`--latest=false`); GitHub's digest matches. The rolling signed updater stays at beta.6.
+- Installer built in `D:\b19`: 13,562,185 bytes, SHA-256 `8e2946b1d35028abdbd439433fb61649fbf1c904b9cc26665b2cf0bfb61afed4`, `NotSigned`. The installer and `SHA256SUMS.txt` are published as a prerelease (`--latest=false`); GitHub's digest matches. The rolling signed updater stays at beta.6.
 - Boot smoke of the built daemon on a temporary database passed (snapshot, runtime discovery of all three CLIs, schedule and memory RPCs). No coding prompt was sent and no user database was touched.
 - Everything new was verified only with fake providers, unit tests and browser fixtures. The "Unverified" list in the release notes is the live-test backlog: live provider turns, `turn/steer`, ChatGPT transcription, real retry timing, an end-to-end scheduled run, keep-awake effect and clean-machine install.
-- Stepping-stone branches and the worktrees `../Blolblex-wt-phase1`, `../Blolblex-wt-p7` and `D:19` are cleanup candidates; nothing was removed.
+- Stepping-stone branches and the worktrees `../Blolblex-wt-phase1`, `../Blolblex-wt-p7` and `D:\b19` are cleanup candidates; nothing was removed.
 
 ## Published (12 October 2026, beta.18)
 
@@ -314,7 +314,7 @@ Claude's combined follow-up shipped as manual-only [v0.1.0-beta.16](../releases/
 
 ## Published (11 October 2026, beta.15)
 
-The section below shipped as manual-only [v0.1.0-beta.15](../releases/0.1.0-beta.15.md). Release commit `0f1a7df` is pushed to `main` and tagged `v0.1.0-beta.15`. The unsigned NSIS installer was built in `D:15`: 12,943,042 bytes, SHA-256 `ea042d9495a7c702f9507a0657ddc52e114558ac6f65adc78cdb8f70aa2e584f`, `NotSigned`. The signed updater feed remains at beta.6.
+The section below shipped as manual-only [v0.1.0-beta.15](../releases/0.1.0-beta.15.md). Release commit `0f1a7df` is pushed to `main` and tagged `v0.1.0-beta.15`. The unsigned NSIS installer was built in `D:\b15`: 12,943,042 bytes, SHA-256 `ea042d9495a7c702f9507a0657ddc52e114558ac6f65adc78cdb8f70aa2e584f`, `NotSigned`. The signed updater feed remains at beta.6.
 
 ## 1.0 polish (11 October 2026, after beta.14)
 

@@ -1076,13 +1076,20 @@ fn ensure_permission_rules_schema(c: &Connection) -> Result<(), StorageError> {
         label TEXT NOT NULL,
         created_at TEXT NOT NULL
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_permission_rules_match ON permission_rules(agent_id, kind, match_key);
     CREATE INDEX IF NOT EXISTS idx_permission_rules_agent ON permission_rules(agent_id, created_at);")?;
+    // Phase 1A: a rule is for one project, or (null) everywhere for the bot.
+    // Additive: old rows keep a null project, which is what they always meant.
+    let has_project = c.prepare("PRAGMA table_info(permission_rules)")?.query_map([], |r| r.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>()?.iter().any(|name| name == "project_id");
+    if !has_project { c.execute_batch("ALTER TABLE permission_rules ADD COLUMN project_id TEXT;")?; }
+    c.execute_batch(
+        "DROP INDEX IF EXISTS idx_permission_rules_match;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_permission_rules_scope ON permission_rules(agent_id, kind, match_key, COALESCE(project_id, ''));")?;
     Ok(())
 }
 
 /// The columns of one approval rule as JSON, so the DTO is built in one place.
-const PERMISSION_RULE_COLUMNS: &str = "'id',id,'agentId',agent_id,'kind',kind,'matchKey',match_key,'label',label,'createdAt',created_at";
+/// `projectId` is null for a rule that applies in every project.
+const PERMISSION_RULE_COLUMNS: &str = "'id',id,'agentId',agent_id,'kind',kind,'matchKey',match_key,'label',label,'createdAt',created_at,'projectId',project_id,'projectName',(SELECT p.name FROM projects p WHERE p.id=permission_rules.project_id)";
 
 /// The team delivery queue made durable (wave 12, part B): `st.team.queued` was
 /// memory only, so a restart lost the messages waiting for a busy teammate.
@@ -2272,7 +2279,7 @@ impl Storage {
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         {
-            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
+            let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'lastProjectId',(SELECT COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)) FROM sessions s WHERE ((s.agent_id=agents.id AND (json_extract(s.data,'$.link.kind') IS NULL OR json_extract(s.data,'$.link.kind') NOT IN ('automation','handoff'))) OR (json_extract(s.data,'$.link.kind')='side' AND json_extract(s.data,'$.link.peerAgentId')=agents.id)) AND s.archived=0 ORDER BY s.updated_at DESC LIMIT 1)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
             let vals=q.query_map(params![include_archived,runtime_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
         }
@@ -2339,6 +2346,8 @@ impl Storage {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if tx.execute("DELETE FROM projects WHERE id=?1", [id])? == 0 { return Err(StorageError::AgentNotFound); }
         tx.execute("UPDATE agents SET project_id=NULL WHERE project_id=?1", [id])?;
+        // A rule for a project that no longer exists could never match again.
+        tx.execute("DELETE FROM permission_rules WHERE project_id=?1", [id])?;
         let event = push_team_event(&tx, "project.changed", &json!({"action":"deleted","projectId":id}))?;
         tx.commit()?;
         Ok(vec![event])
@@ -2488,7 +2497,8 @@ impl Storage {
                 'createdAt',s.created_at,
                 'updatedAt',s.updated_at,
                 'archived',json(CASE WHEN s.archived=1 THEN 'true' ELSE 'false' END),
-                'projectId',COALESCE(json_extract(s.data,'$.projectId'),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)),
+                'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)),
+                'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=s.project_path LIMIT 1)),
                 'kind',CASE WHEN json_extract(s.data,'$.link.kind')='side' THEN 'side' ELSE 'main' END,
                 'agentId',s.agent_id,
                 'peerAgentId',json_extract(s.data,'$.link.peerAgentId'),
@@ -2505,6 +2515,46 @@ impl Storage {
         )?;
         let rows = q.query_map(params![agent_id, include_archived, project_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         rows.into_iter().map(|raw| Ok(serde_json::from_str(&raw)?)).collect()
+    }
+    /// Every project a bot has a non-archived conversation in, most recent
+    /// activity first, plus its default project. The private workspace shows as
+    /// `{id: null, name: "No project"}` when the bot has conversations there.
+    pub fn agent_projects(&self, agent_id: &str) -> Result<Vec<Value>, StorageError> {
+        let rows = self.agent_conversations(agent_id, None, false)?;
+        let default_id = self.agent_get(agent_id)?["projectId"].as_str().map(str::to_owned);
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        // (project id, conversation count, latest activity)
+        let mut groups: Vec<(Option<String>, i64, String)> = Vec::new();
+        for row in &rows {
+            let project = row["projectId"].as_str().map(str::to_owned);
+            let at = row["updatedAt"].as_str().unwrap_or("").to_owned();
+            match groups.iter_mut().find(|group| group.0 == project) {
+                Some(group) => { group.1 += 1; if at > group.2 { group.2 = at; } }
+                None => groups.push((project, 1, at)),
+            }
+        }
+        if let Some(default) = &default_id {
+            if !groups.iter().any(|group| group.0.as_ref() == Some(default)) { groups.push((Some(default.clone()), 0, String::new())); }
+        }
+        let mut out = Vec::new();
+        for (project, count, at) in groups {
+            let entry = match &project {
+                Some(id) => {
+                    let found: Option<(String, Option<String>)> = c.query_row("SELECT name,path FROM projects WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+                    let Some((name, path)) = found else { continue };
+                    let is_git = path.as_deref().is_some_and(|path| std::path::Path::new(path).join(".git").exists());
+                    json!({"id":id,"name":name,"path":path,"isDefault":default_id.as_deref()==Some(id.as_str()),"conversationCount":count,"lastActivityAt":if at.is_empty() { Value::Null } else { json!(at) },"isGitRepo":is_git})
+                }
+                None => json!({"id":Value::Null,"name":"No project","path":Value::Null,"isDefault":false,"conversationCount":count,"lastActivityAt":at,"isGitRepo":false}),
+            };
+            out.push(entry);
+        }
+        out.sort_by(|a, b| b["lastActivityAt"].as_str().unwrap_or("").cmp(a["lastActivityAt"].as_str().unwrap_or("")));
+        Ok(out)
+    }
+    /// The project of the bot's most recent non-archived conversation, or `None`.
+    pub fn agent_last_project_id(&self, agent_id: &str) -> Result<Option<String>, StorageError> {
+        Ok(self.agent_conversations(agent_id, None, false)?.first().and_then(|row| row["projectId"].as_str().map(str::to_owned)))
     }
     pub fn insert_question(&self, id: &str, session: &str, provider_id: &str, title: &str, questions: &Value, expires_at: Option<&str>) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -3345,8 +3395,8 @@ impl Storage {
     pub fn sessions(&self) -> Result<Vec<Value>, StorageError> { self.session_list(false) }
     pub fn session_list(&self, include_archived: bool) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
-        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?})))?;
+        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until,COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)) FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
+        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?,"projectId":r.get::<_,Option<String>>(16)?,"projectName":r.get::<_,Option<String>>(17)?})))?;
         iter.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
@@ -3365,7 +3415,7 @@ impl Storage {
     pub fn session_brief(&self, id: &str) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let raw: Option<String> = c.query_row(
-            "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'state',state,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+            "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'state',state,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
             [id],
             |r| r.get(0),
         ).optional()?;
@@ -6060,21 +6110,43 @@ impl Storage {
     // ── "Always allow" approval rules ──────────────────────────────────────
     /// One remembered allow: the bot, the normalized permission kind and the
     /// exact target are the key, so saving the same rule twice keeps one row.
-    pub fn permission_rule_create(&self, agent_id: &str, kind: &str, match_key: &str, label: &str) -> Result<Value, StorageError> {
+    pub fn permission_rule_create(&self, agent_id: &str, kind: &str, match_key: &str, label: &str, project_id: Option<&str>) -> Result<Value, StorageError> {
         if agent_id.is_empty() || kind.is_empty() || match_key.is_empty() || label.trim().is_empty() { return Err(StorageError::InvalidAgent); }
+        let project_id = project_id.filter(|id| !id.is_empty());
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1)", [agent_id], |r| r.get(0))?;
         if !exists { return Err(StorageError::AgentNotFound); }
         let id = Uuid::new_v4().to_string();
         tx.execute(
-            "INSERT INTO permission_rules(id,agent_id,kind,match_key,label,created_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(agent_id,kind,match_key) DO UPDATE SET label=excluded.label",
-            params![id, agent_id, kind, match_key, label, task_stamp()],
+            "INSERT INTO permission_rules(id,agent_id,kind,match_key,label,created_at,project_id) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(agent_id,kind,match_key,COALESCE(project_id,'')) DO UPDATE SET label=excluded.label",
+            params![id, agent_id, kind, match_key, label, task_stamp(), project_id],
         )?;
         let raw: String = tx.query_row(
-            &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3"),
-            params![agent_id, kind, match_key], |r| r.get(0),
+            &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3 AND COALESCE(project_id,'')=COALESCE(?4,'')"),
+            params![agent_id, kind, match_key, project_id], |r| r.get(0),
         )?;
+        tx.commit()?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+    /// Moves a rule between "everywhere" (`None`) and one project. When the bot
+    /// already has the same rule at the target scope, the two merge: the moved
+    /// row is dropped and the existing one is returned.
+    pub fn permission_rule_set_project(&self, id: &str, project_id: Option<&str>) -> Result<Value, StorageError> {
+        let project_id = project_id.filter(|id| !id.is_empty());
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (agent_id, kind, match_key): (String, String, String) = tx.query_row("SELECT agent_id,kind,match_key FROM permission_rules WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?.ok_or(StorageError::AgentNotFound)?;
+        if let Some(project) = project_id {
+            let known: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [project], |r| r.get(0))?;
+            if !known { return Err(StorageError::AgentNotFound); }
+        }
+        let twin: Option<String> = tx.query_row("SELECT id FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3 AND COALESCE(project_id,'')=COALESCE(?4,'') AND id<>?5", params![agent_id, kind, match_key, project_id, id], |r| r.get(0)).optional()?;
+        let keep = match twin {
+            Some(twin) => { tx.execute("DELETE FROM permission_rules WHERE id=?1", [id])?; twin }
+            None => { tx.execute("UPDATE permission_rules SET project_id=?2 WHERE id=?1", params![id, project_id])?; id.to_owned() }
+        };
+        let raw: String = tx.query_row(&format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE id=?1"), [&keep], |r| r.get(0))?;
         tx.commit()?;
         Ok(serde_json::from_str(&raw)?)
     }
@@ -6088,12 +6160,14 @@ impl Storage {
     }
     /// The rule one request matches, so the permission arm can answer it without
     /// the owner: the bot, the kind and the exact target must all agree.
-    pub fn permission_rule_find(&self, agent_id: &str, kind: &str, match_key: &str) -> Result<Option<Value>, StorageError> {
+    /// A rule applies when its project is null (everywhere) or the conversation's.
+    pub fn permission_rule_find(&self, agent_id: &str, kind: &str, match_key: &str, project_id: Option<&str>) -> Result<Option<Value>, StorageError> {
         if agent_id.is_empty() || kind.is_empty() || match_key.is_empty() { return Ok(None); }
+        let project_id = project_id.filter(|id| !id.is_empty());
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let raw: Option<String> = c.query_row(
-            &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3"),
-            params![agent_id, kind, match_key], |r| r.get(0),
+            &format!("SELECT json_object({PERMISSION_RULE_COLUMNS}) FROM permission_rules WHERE agent_id=?1 AND kind=?2 AND match_key=?3 AND (project_id IS NULL OR project_id=?4) ORDER BY project_id IS NULL, rowid LIMIT 1"),
+            params![agent_id, kind, match_key, project_id], |r| r.get(0),
         ).optional()?;
         Ok(match raw { Some(raw) => Some(serde_json::from_str(&raw)?), None => None })
     }
@@ -6542,7 +6616,7 @@ impl Storage {
         }
         let permissions = query_jsons(
             c,
-            "SELECT json_object('id',p.id,'sessionId',p.session_id,'runtimeId',s.runtime_id,'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices'),'kind',json_extract(p.data,'$.kind'),'questions',json_extract(p.data,'$.questions'),'proposal',json_extract(p.data,'$.proposal'),'status',p.status,'expiresAt',p.expires_at,'rememberable',json(CASE WHEN json_extract(p.data,'$.rememberable')=1 THEN 'true' ELSE 'false' END),'rememberLabel',json_extract(p.data,'$.rememberLabel')) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 ORDER BY p.rowid",
+            "SELECT json_object('id',p.id,'sessionId',p.session_id,'runtimeId',s.runtime_id,'title',json_extract(p.data,'$.title'),'detail',json_extract(p.data,'$.detail'),'choices',json_extract(p.data,'$.choices'),'kind',json_extract(p.data,'$.kind'),'questions',json_extract(p.data,'$.questions'),'proposal',json_extract(p.data,'$.proposal'),'status',p.status,'expiresAt',p.expires_at,'rememberable',json(CASE WHEN json_extract(p.data,'$.rememberable')=1 THEN 'true' ELSE 'false' END),'rememberLabel',json_extract(p.data,'$.rememberLabel'),'projectId',json_extract(p.data,'$.projectId'),'projectName',json_extract(p.data,'$.projectName')) FROM permission_requests p JOIN sessions s ON s.id=p.session_id WHERE p.status='pending' AND s.archived=0 ORDER BY p.rowid",
             "",
         )?;
         let usage = self.usage_rows_locked(c)?;
@@ -6554,7 +6628,7 @@ impl Storage {
         Ok(result)
     }
     fn agent_rows_locked(&self,c:&Connection,include_archived:bool)->Result<Vec<Value>,StorageError>{
-        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
+        let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'lastProjectId',(SELECT COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)) FROM sessions s WHERE ((s.agent_id=agents.id AND (json_extract(s.data,'$.link.kind') IS NULL OR json_extract(s.data,'$.link.kind') NOT IN ('automation','handoff'))) OR (json_extract(s.data,'$.link.kind')='side' AND json_extract(s.data,'$.link.peerAgentId')=agents.id)) AND s.archived=0 ORDER BY s.updated_at DESC LIMIT 1)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
         let mut q=c.prepare(sql)?;let vals=q.query_map([include_archived],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
     }
     /// A conversation for a lazy snapshot: what `session_detail_locked` returns
@@ -6566,7 +6640,7 @@ impl Storage {
         self.session_detail_parts(c, id, true)
     }
     fn session_detail_parts(&self, c: &Connection, id: &str, full: bool) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
         let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
@@ -7153,7 +7227,7 @@ const SESSION_MESSAGES_SQL: &str = "SELECT json_object('id',id,'turnId',turn_id,
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
-        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
         [id],
         |r| r.get(0),
     ).optional()?;
@@ -7585,7 +7659,7 @@ fn push_team_event(tx: &Transaction<'_>, event_type: &str, payload: &Value) -> R
     tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,?3,?4)", params![id, ts, event_type, payload.to_string()])?;
     Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":event_type,"payload":payload}))
 }
-fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags)) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
+fn agent_read(c:&Connection,id:&str)->Result<Value,StorageError>{let raw:Option<String>=c.query_row("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'lastProjectId',(SELECT COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)) FROM sessions s WHERE ((s.agent_id=agents.id AND (json_extract(s.data,'$.link.kind') IS NULL OR json_extract(s.data,'$.link.kind') NOT IN ('automation','handoff'))) OR (json_extract(s.data,'$.link.kind')='side' AND json_extract(s.data,'$.link.peerAgentId')=agents.id)) AND s.archived=0 ORDER BY s.updated_at DESC LIMIT 1)) FROM agents WHERE id=?1",[id],|r|r.get(0)).optional()?;Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)}
 fn insert_agent(tx:&Transaction<'_>,id:&str,v:&Value,name:&str,key:&str,pos:i64,now:&str)->Result<(),StorageError>{let color=v["color"].as_str().unwrap_or("mint");let color=if color.starts_with('#'){color.to_ascii_uppercase()}else{color.into()};tx.execute("INSERT INTO agents(id,name,name_key,description,instructions,color,outfit,runtime_id,model,thinking,service_tier,approval_mode,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,notification_level,role,system_role) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?18,?19,?20,?21)",params![id,name,key,v["description"].as_str().unwrap_or(""),v["instructions"].as_str().unwrap_or(""),color,v["outfit"].as_str().unwrap_or("auto"),v["runtimeId"].as_str().unwrap_or(""),nullable(&v["model"]),nullable(&v["thinking"]),nullable(&v["serviceTier"]),nullable(&v["approvalMode"]),v.get("customArgs").cloned().unwrap_or(json!([])).to_string(),v.get("customEnv").cloned().unwrap_or(json!({})).to_string(),v["maxConcurrency"].as_i64().unwrap_or(1),nullable(&v["defaultProject"]),pos,now,nullable(&v["notificationLevel"]),v["role"].as_str().unwrap_or(""),if v["systemRole"].as_str()==Some("manager"){Some("manager")}else{None}])?;tx.execute("UPDATE agents SET look=?2 WHERE id=?1",params![id,look_column(&v["look"])])?;Ok(())}
 fn push_agent_event(tx:&Transaction<'_>,action:&str,a:&Value)->Result<Value,StorageError>{let payload=json!({"action":action,"agentId":a["id"],"runtimeId":a["runtimeId"],"updatedAt":a["updatedAt"],"archived":a["archived"],"sortOrder":a["sortOrder"],"notificationLevel":a["notificationLevel"]});let id=Uuid::new_v4().to_string();let ts=Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true);tx.execute("INSERT INTO app_events(event_id,timestamp,event_type,payload) VALUES(?1,?2,'agent.changed',?3)",params![id,ts,payload.to_string()])?;Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"agent.changed","payload":payload}))}
 fn snapshot_requested(v:&Value)->Value{
@@ -10566,9 +10640,9 @@ mod task_ledger_tests {
             db.upsert_runtime(&json!({"id":"rt-upgrade","provider":"codex"})).unwrap();
             let agent = db.agent_create(&json!({"name":"Rules","runtimeId":"rt-upgrade"})).unwrap().0;
             let agent_id = agent["id"].as_str().unwrap();
-            let rule = db.permission_rule_create(agent_id, "shell", "git status", "Run git status").unwrap();
+            let rule = db.permission_rule_create(agent_id, "shell", "git status", "Run git status", None).unwrap();
             assert_eq!(db.permission_rules(Some(agent_id)).unwrap(), vec![rule.clone()], "an older database gains the table and keeps a rule");
-            assert_eq!(db.permission_rule_find(agent_id, "shell", "git status").unwrap().unwrap()["id"], rule["id"]);
+            assert_eq!(db.permission_rule_find(agent_id, "shell", "git status", None).unwrap().unwrap()["id"], rule["id"]);
             db.create_session("upgrade-session", "rt-upgrade", "codex", ".", "Upgrade").unwrap();
             let id = db.team_queue_add("upgrade-session", "Hello", &json!({"kind":"blob_message"}), 1, false).unwrap();
             assert_eq!(db.team_queue_rows(Some("upgrade-session")).unwrap().len(), 1);
@@ -10576,6 +10650,69 @@ mod task_ledger_tests {
             assert!(db.team_queue_rows(Some("upgrade-session")).unwrap().is_empty());
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn old_rules_migrate_to_everywhere() {
+        let path = std::env::temp_dir().join(format!("bloblex-rules-scope-{}.db", Uuid::new_v4()));
+        {
+            let db = Storage::open(&path).unwrap();
+            db.upsert_runtime(&json!({"id":"rt-old","provider":"codex"})).unwrap();
+            let agent = db.agent_create(&json!({"name":"Old","runtimeId":"rt-old"})).unwrap().0;
+            let agent_id = agent["id"].as_str().unwrap().to_owned();
+            // The shape wave 12 left: no project column, the old unique index.
+            let c = db.conn.lock().unwrap();
+            c.execute_batch("DROP TABLE permission_rules;
+                CREATE TABLE permission_rules(id TEXT PRIMARY KEY NOT NULL, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, kind TEXT NOT NULL, match_key TEXT NOT NULL, label TEXT NOT NULL, created_at TEXT NOT NULL);
+                CREATE UNIQUE INDEX idx_permission_rules_match ON permission_rules(agent_id, kind, match_key);").unwrap();
+            c.execute("INSERT INTO permission_rules(id,agent_id,kind,match_key,label,created_at) VALUES('r-old',?1,'shell','git status','Run git status','2026-10-01T00:00:00.000Z')", [&agent_id]).unwrap();
+        }
+        let db = Storage::open(&path).unwrap();
+        let rules = db.permission_rules(None).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].as_object().unwrap().contains_key("projectId"), "the key is always present");
+        assert!(rules[0]["projectId"].is_null(), "an old rule is for every project: {}", rules[0]);
+        assert!(rules[0]["projectName"].is_null());
+        let agent_id = rules[0]["agentId"].as_str().unwrap();
+        let project = db.project_create("Elsewhere", None).unwrap().0;
+        assert_eq!(db.permission_rule_find(agent_id, "shell", "git status", project["id"].as_str()).unwrap().unwrap()["id"], "r-old");
+        assert_eq!(db.permission_rule_find(agent_id, "shell", "git status", None).unwrap().unwrap()["id"], "r-old");
+        // The same target can now also be remembered for one project.
+        db.permission_rule_create(agent_id, "shell", "git status", "Run git status", project["id"].as_str()).unwrap();
+        assert_eq!(db.permission_rules(Some(agent_id)).unwrap().len(), 2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rules_move_between_scopes() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-move","provider":"codex"})).unwrap();
+        let agent = db.agent_create(&json!({"name":"Mover","runtimeId":"rt-move"})).unwrap().0;
+        let agent_id = agent["id"].as_str().unwrap();
+        let blolblex = db.project_create("Blolblex", None).unwrap().0;
+        let other = db.project_create("Other", None).unwrap().0;
+        let (blolblex_id, other_id) = (blolblex["id"].as_str().unwrap(), other["id"].as_str().unwrap());
+        let rule = db.permission_rule_create(agent_id, "shell", "git status", "Run git status", Some(blolblex_id)).unwrap();
+        assert_eq!((rule["projectId"].as_str(), rule["projectName"].as_str()), (Some(blolblex_id), Some("Blolblex")));
+        assert!(db.permission_rule_find(agent_id, "shell", "git status", Some(other_id)).unwrap().is_none(), "a project rule does not apply in another project");
+        assert!(db.permission_rule_find(agent_id, "shell", "git status", None).unwrap().is_none(), "nor with no project");
+        let everywhere = db.permission_rule_set_project(rule["id"].as_str().unwrap(), None).unwrap();
+        assert!(everywhere["projectId"].is_null());
+        assert!(db.permission_rule_find(agent_id, "shell", "git status", Some(other_id)).unwrap().is_some());
+        let back = db.permission_rule_set_project(rule["id"].as_str().unwrap(), Some(other_id)).unwrap();
+        assert_eq!(back["projectName"], "Other");
+        assert!(db.permission_rule_find(agent_id, "shell", "git status", Some(blolblex_id)).unwrap().is_none());
+        assert!(matches!(db.permission_rule_set_project(rule["id"].as_str().unwrap(), Some("missing")), Err(StorageError::AgentNotFound)));
+        assert!(matches!(db.permission_rule_set_project("missing", None), Err(StorageError::AgentNotFound)));
+        // Moving onto a scope that already has the rule merges the two.
+        let twin = db.permission_rule_create(agent_id, "shell", "git status", "Run git status", None).unwrap();
+        let merged = db.permission_rule_set_project(rule["id"].as_str().unwrap(), None).unwrap();
+        assert_eq!(merged["id"], twin["id"]);
+        assert_eq!(db.permission_rules(Some(agent_id)).unwrap().len(), 1);
+        // Deleting a project drops the rules that were only for it.
+        db.permission_rule_create(agent_id, "shell", "ls", "Run ls", Some(other_id)).unwrap();
+        db.project_delete(other_id).unwrap();
+        assert_eq!(db.permission_rules(Some(agent_id)).unwrap().len(), 1);
     }
 
     fn image(name: &str) -> Value {

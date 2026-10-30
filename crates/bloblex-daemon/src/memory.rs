@@ -224,8 +224,10 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
 fn session_scope(st: &AppState, session_id: &str) -> Result<(String, Option<String>), String> {
     let row = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.".to_string())?;
     let agent_id = row["agentId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| format!("Only {} conversations have memory.", crate::team::entity_noun(false)))?.to_owned();
-    let agent = st.db.agent_get(&agent_id).map_err(|error| error.to_string())?;
-    let project_id = agent["projectId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
+    st.db.agent_get(&agent_id).map_err(|error| error.to_string())?;
+    // The conversation's project, never the bot's default: a note tied to one
+    // project must not appear in a conversation in another.
+    let project_id = row["projectId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
     Ok((agent_id, project_id))
 }
 
@@ -396,8 +398,8 @@ pub fn catalog_for_prompt(st: &AppState, session_id: &str) -> Option<String> {
     if !enabled(st) { return None; }
     let row = st.db.session_detail(session_id).ok()?;
     let agent_id = row["agentId"].as_str().filter(|id| !id.is_empty())?.to_owned();
-    let agent = st.db.agent_get(&agent_id).ok()?;
-    let project_id = agent["projectId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
+    st.db.agent_get(&agent_id).ok()?;
+    let project_id = row["projectId"].as_str().filter(|id| !id.is_empty()).map(str::to_owned);
     let records = st.db.memory_visible_catalog(&agent_id, project_id.as_deref()).ok()?;
     if records.is_empty() {
         st.memory.forget_catalog(session_id);

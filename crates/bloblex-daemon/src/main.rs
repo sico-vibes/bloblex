@@ -863,7 +863,7 @@ const MANAGER_INSTRUCTIONS: &str = "You are the Manager. You work across all of 
 
 async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, DispatchError> {
     match method {
-        "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
+        "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" | "agent.projects" => team::team_rpc(st, method, &p).await,
         "outside.status" | "outside.preview" | "outside.enable" | "outside.disable" | "outside.sessions" => outside::rpc(st, method, &p).await,
         "external.status" | "external.enable" | "external.disable" | "external.setTier" | "external.setFullAccess" | "external.rotate" => external::rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
@@ -1239,6 +1239,17 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 None | Some(Value::Null) => false,
                 Some(value) => value.as_bool().ok_or_else(|| derr("invalid_argument", "remember must be true or false.", StatusCode::BAD_REQUEST))?,
             };
+            // Phase 1A: where a remembered rule applies. `bot` (the default, and
+            // what older clients get) is every project; `project` is the
+            // conversation's own project.
+            let remember_in_project = match p.get("rememberScope") {
+                None | Some(Value::Null) => false,
+                Some(value) => match value.as_str() {
+                    Some("bot") => false,
+                    Some("project") => true,
+                    _ => return Err(derr("invalid_argument", "rememberScope must be \"project\" or \"bot\".", StatusCode::BAD_REQUEST)),
+                },
+            };
             // A proposal has its own decision route; the permission card is only
             // its surface.
             if st.db.permission_kind(id).ok().flatten().as_deref() == Some("proposal") {
@@ -1319,7 +1330,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                         Some(agent) => {
                             let (kind, key) = (card["kind"].as_str().unwrap_or(""), card["matchKey"].as_str().unwrap_or(""));
                             let label = card["rememberLabel"].as_str().unwrap_or("");
-                            match st.db.permission_rule_create(&agent, kind, key, label) {
+                            let rule_project = if remember_in_project { st.db.session_brief(&session_id).ok().and_then(|row| row["projectId"].as_str().map(str::to_owned)) } else { None };
+                            match st.db.permission_rule_create(&agent, kind, key, label, rule_project.as_deref()) {
                                 Ok(rule) => { st.emit("permission.rules.changed", json!({"agentId": agent})).await; Some(rule) }
                                 Err(_) => None,
                             }
@@ -1339,7 +1351,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             crate::tasks::permission_resolved(st, &session_id).await;
             let mut result = json!({"resolved":true});
             if let Some(rule) = saved_rule {
-                result["rule"] = json!({"id":rule["id"],"agentId":rule["agentId"],"kind":rule["kind"],"label":rule["label"],"createdAt":rule["createdAt"]});
+                result["rule"] = json!({"id":rule["id"],"agentId":rule["agentId"],"kind":rule["kind"],"label":rule["label"],"createdAt":rule["createdAt"],"projectId":rule["projectId"],"projectName":rule["projectName"]});
             }
             Ok(result)
         }
@@ -1354,6 +1366,21 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             };
             let rules = st.db.permission_rules(agent_id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
             Ok(json!({"rules": rules}))
+        }
+        "permission.rules.update" => {
+            let id = p["id"].as_str().map(str::trim).filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
+            let project = match p["scope"].as_str() {
+                Some("bot") => None,
+                Some("project") => Some(p["projectId"].as_str().map(str::trim).filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "projectId is required for the project scope.", StatusCode::BAD_REQUEST))?),
+                _ => return Err(derr("invalid_argument", "scope must be \"project\" or \"bot\".", StatusCode::BAD_REQUEST)),
+            };
+            let rule = st.db.permission_rule_get(id).map_err(|_| derr("not_found", "That rule no longer exists.", StatusCode::NOT_FOUND))?;
+            let updated = st.db.permission_rule_set_project(id, project).map_err(|e| match e {
+                bloblex_storage::StorageError::AgentNotFound => derr("not_found", "That rule or project no longer exists.", StatusCode::NOT_FOUND),
+                other => derr("internal", &other.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+            })?;
+            st.emit("permission.rules.changed", json!({"agentId": rule["agentId"]})).await;
+            Ok(json!({"rule": updated}))
         }
         "permission.rules.delete" => {
             let id = p["id"].as_str().map(str::trim).filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
@@ -1627,7 +1654,8 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
         options.enable_workflows = false;
     }
     if let Some(session_id) = session["id"].as_str() {
-        team::attach(st, session_id, session["agentId"].as_str(), &session["link"], &mut options);
+        let folder = session["projectPath"].as_str().filter(|path| !path.is_empty()).map(PathBuf::from);
+        team::attach(st, session_id, session["agentId"].as_str(), &session["link"], folder.as_deref(), session["projectId"].as_str(), &mut options);
     }
     Ok(options)
 }
@@ -2197,7 +2225,31 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
     if agent_supplied==runtime_supplied{return Err(derr("invalid_argument","exactly one of agentId or runtimeId is required",StatusCode::BAD_REQUEST));}
     let agent_id=if agent_supplied{Some(p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId must be a string",StatusCode::BAD_REQUEST))?.to_owned())}else{None};
     let runtime_id = if let Some(agent_id)=agent_id.as_deref(){let agent=st.db.agent_get(agent_id).map_err(agent_error)?;if agent["archived"]==true{return Err(derr("conflict","archived agents cannot start sessions",StatusCode::CONFLICT));}agent["runtimeId"].as_str().unwrap_or("").to_owned()}else{p["runtimeId"].as_str().ok_or_else(||derr("invalid_argument","runtimeId must be a string",StatusCode::BAD_REQUEST))?.to_owned()};
-    let project = PathBuf::from(p["projectPath"].as_str().unwrap_or(""));
+    // Phase 1A: a conversation may name its project. Its folder replaces
+    // `projectPath`; a missing project or one without a folder is refused.
+    let explicit_project = match p.get("projectId") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let id = value.as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "projectId must be a string", StatusCode::BAD_REQUEST))?;
+            Some(st.db.project_get(id).map_err(|_| derr("not_found", "That project no longer exists.", StatusCode::NOT_FOUND))?)
+        }
+    };
+    // A delegation in an isolated copy of the project's repository runs in that
+    // copy (`link.worktree`), and is still stamped with the project.
+    let in_worktree = p["link"]["worktree"].is_object() && p["projectPath"].as_str().is_some_and(|path| PathBuf::from(path).is_dir());
+    let project = match &explicit_project {
+        Some(_) if in_worktree => PathBuf::from(p["projectPath"].as_str().unwrap_or("")),
+        Some(chosen) => {
+            let folder = chosen["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir());
+            folder.ok_or_else(|| derr("invalid_argument", "That project has no folder on this computer.", StatusCode::BAD_REQUEST))?
+        }
+        // Explicit null with no folder: the bot's private workspace.
+        None if matches!(p.get("projectId"), Some(Value::Null)) && p.get("projectPath").is_none_or(Value::is_null) && agent_id.is_some() => {
+            let agent = st.db.agent_get(agent_id.as_deref().unwrap_or("")).map_err(agent_error)?;
+            team::private_workspace(st, &agent)
+        }
+        None => PathBuf::from(p["projectPath"].as_str().unwrap_or("")),
+    };
     if !project.is_dir() {
         return Err(derr(
             "invalid_argument",
@@ -2239,7 +2291,19 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
         exec_options.enable_workflows = false;
     }
     let id = Uuid::new_v4().to_string();
-    team::attach(st, &id, agent_id.as_deref(), &p["link"], &mut exec_options);
+    // The conversation's project: the one it picked, else the project whose
+    // folder it works in, else the bot's default project (a default without a
+    // usable folder still labels the conversation). Absent means no project.
+    // An explicit `projectId: null` means "no project": the bot's default is
+    // never used. If the folder given is itself a registered project, the
+    // conversation is in that project anyway (the read side infers it from the
+    // folder), so the instructions use it, but nothing is stamped.
+    let explicit_none = matches!(p.get("projectId"), Some(Value::Null));
+    let folder_project = st.db.project_id_for_path(&project.to_string_lossy()).ok().flatten();
+    let project_id = explicit_project.as_ref().and_then(|chosen| chosen["id"].as_str().map(str::to_owned))
+        .or(folder_project.clone())
+        .or_else(|| if explicit_none { None } else { agent_id.as_deref().and_then(|id| st.db.agent_get(id).ok()).and_then(|agent| agent["projectId"].as_str().map(str::to_owned)) });
+    team::attach(st, &id, agent_id.as_deref(), &p["link"], Some(project.as_path()), project_id.as_deref(), &mut exec_options);
     if let Some((setting, error)) = preflight_exec_options(st,&runtime,&provider,&exec_options).await {
         st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).await;
         return Err(error);
@@ -2261,20 +2325,16 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
         )
         .map_err(agent_error)?;
     if p["link"].is_object() { st.db.set_session_link(&id, &p["link"]).map_err(agent_error)?; }
-    // Stamp the conversation's project: the bot's own project, or the project
-    // whose folder it works in. A null stamp is left absent and inferred later.
-    let project_id = agent_id.as_deref()
-        .and_then(|id| st.db.agent_get(id).ok())
-        .and_then(|agent| agent["projectId"].as_str().map(str::to_owned))
-        .or_else(|| st.db.project_id_for_path(&project.to_string_lossy()).ok().flatten());
-    st.db.merge_session_data(&id, &json!({"projectId": project_id})).map_err(agent_error)?;
+    // Stamp the conversation's project. A null stamp is left absent and inferred later.
+    // Explicit null stamps nothing (a null stamp reads back as no project).
+    st.db.merge_session_data(&id, &json!({"projectId": if explicit_none { None } else { project_id.clone() }})).map_err(agent_error)?;
     // A lazy conversation stops here: no provider is spawned. The first prompt
     // starts it, and activation takes the fresh-context branch silently.
     if p["lazy"] == true {
         st.db.update_session_state(&id, "idle").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
         st.db.merge_session_data(&id, &json!({"lazyStart": true})).map_err(agent_error)?;
         if let Ok(session_event) = st.db.session_event_summary(&id) { st.emit("session.changed", session_event).await; }
-        return Ok(json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":Value::Null,"projectPath":p["projectPath"],"title":title,"state":"idle","resumable":false,"turns":[],"messages":[],"tools":[],"files":[]}));
+        return Ok(json!({"id":id,"runtimeId":runtime_id,"agentId":agent_id,"provider":provider,"providerSessionId":Value::Null,"projectPath":if explicit_project.is_some() || p["projectPath"].is_null() { json!(project.to_string_lossy()) } else { p["projectPath"].clone() },"title":title,"state":"idle","resumable":false,"turns":[],"messages":[],"tools":[],"files":[]}));
     }
     let startup_options=exec_options.clone();
     let (tx, rx) = tokio::sync::mpsc::channel(256);
@@ -4540,7 +4600,10 @@ async fn forward_events_with_timeouts(
                 let match_key=permission_match_key(&kind,&normalized,&project);
                 let remember_label=permission_rule_label(&kind,&match_key);
                 let rememberable=agent_id.is_some()&&!is_team_tool&&!is_automation&&classified.allowed&&!match_key.is_empty();
-                let marks=json!({"kind":kind.clone(),"matchKey":match_key.clone(),"rememberable":rememberable,"rememberLabel":remember_label.clone()});
+                // The conversation's project, so the card can say "Always allow in
+                // <project>" and a rule is matched against the right project.
+                let (card_project_id,card_project_name)=if rememberable {(session["projectId"].clone(),session["projectName"].clone())} else {(Value::Null,Value::Null)};
+                let marks=json!({"kind":kind.clone(),"matchKey":match_key.clone(),"rememberable":rememberable,"rememberLabel":remember_label.clone(),"projectId":card_project_id.clone(),"projectName":card_project_name.clone()});
                 let inserted = st.db.insert_permission(
                     &id,
                     &sid,
@@ -4555,7 +4618,7 @@ async fn forward_events_with_timeouts(
                 // `ask` and `auto` alike: the owner already allowed this exact
                 // target for this bot. Never in plan mode, and never unattended.
                 let rule= match agent_id.as_deref() {
-                    Some(agent) if !is_team_tool && !is_automation && !plan_mode => st.db.permission_rule_find(agent,&kind,&match_key).ok().flatten(),
+                    Some(agent) if !is_team_tool && !is_automation && !plan_mode => st.db.permission_rule_find(agent,&kind,&match_key,session["projectId"].as_str()).ok().flatten(),
                     _ => None,
                 };
                 let rule_id=rule.as_ref().and_then(|rule|rule["id"].as_str()).map(str::to_owned);
@@ -4636,7 +4699,7 @@ async fn forward_events_with_timeouts(
                 // A board task waiting for this approval is not "running" on
                 // the board until someone answers.
                 crate::tasks::permission_pending(&st, &sid).await;
-                ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending","rememberable":rememberable,"rememberLabel":rememberable.then(||remember_label.clone())}))
+                ("permission.requested",json!({"id":id,"sessionId":sid,"runtimeId":runtime_id,"category":"other","title":title,"detail":detail,"risk":"unknown","choices":choices,"expiresAt":null,"status":"pending","rememberable":rememberable,"rememberLabel":rememberable.then(||remember_label.clone()),"projectId":card_project_id,"projectName":card_project_name}))
             }
             AgentEvent::UsageUpdated {
                 raw: _,
@@ -8186,7 +8249,7 @@ mod phase2a_tests {
         let root = rules_root("rules-scope");
         let agent = st.db.agent_create(&json!({"name":"Owner","runtimeId":"rt-test"})).unwrap().0;
         let agent_id = agent["id"].as_str().unwrap().to_owned();
-        let rule = st.db.permission_rule_create(&agent_id, "read", "README.md", "Read `README.md`").unwrap();
+        let rule = st.db.permission_rule_create(&agent_id, "read", "README.md", "Read `README.md`", None).unwrap();
         let own = permission_fixture(&mut st, "rules-own", &agent_id, &root).await;
         own.send(read_request("README.md")).await.unwrap();
         assert_eq!(next_rule_event(&mut events, "permission.auto_resolved").await["ruleId"], rule["id"]);
@@ -8250,7 +8313,7 @@ mod phase2a_tests {
         let root = rules_root("rules-delete");
         let agent = st.db.agent_create(&json!({"name":"Forgetful","runtimeId":"rt-test"})).unwrap().0;
         let agent_id = agent["id"].as_str().unwrap().to_owned();
-        let rule = st.db.permission_rule_create(&agent_id, "read", "README.md", "Read `README.md`").unwrap();
+        let rule = st.db.permission_rule_create(&agent_id, "read", "README.md", "Read `README.md`", None).unwrap();
         let tx = permission_fixture(&mut st, "rules-delete", &agent_id, &root).await;
         tx.send(read_request("README.md")).await.unwrap();
         let first = next_rule_event(&mut events, "permission.auto_resolved").await;
@@ -12204,6 +12267,9 @@ mod phase2a_tests {
         assert!(other["conversations"].as_array().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(data_dir);
     }
+
+    // Phase 1A: bots across projects.
+    include!("phase1a_tests.rs");
 
     #[tokio::test]
     async fn team_update_project_move_does_not_archive() {

@@ -883,4 +883,29 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn project_ids_and_names_cross_to_a_device_but_host_paths_do_not() {
+        let options = RedactOptions::default();
+        let snapshot = json!({
+            "sessions": [{ "id": "s_1", "projectId": "p_1", "projectName": "Blolblex", "projectPath": "C:/Users/sam/repos/bloblex" }],
+            "permissions": [{ "id": "q_1", "rememberable": true, "projectId": "p_1", "projectName": "Blolblex" }],
+            "agents": [{ "id": "a_1", "projectId": "p_1", "lastProjectId": "p_2" }],
+        });
+        let got = redact_snapshot(&snapshot, &options);
+        assert_eq!((got["sessions"][0]["projectId"].as_str(), got["sessions"][0]["projectName"].as_str()), (Some("p_1"), Some("Blolblex")));
+        assert_ne!(got["sessions"][0]["projectPath"], snapshot["sessions"][0]["projectPath"], "the host path is reduced");
+        assert_eq!(got["permissions"][0]["projectName"], "Blolblex");
+        assert_eq!((got["agents"][0]["projectId"].as_str(), got["agents"][0]["lastProjectId"].as_str()), (Some("p_1"), Some("p_2")));
+
+        let projects = json!({ "projects": [{ "id": "p_1", "name": "Blolblex", "path": "C:/Users/sam/repos/bloblex", "isDefault": true, "conversationCount": 2, "lastActivityAt": "2026-10-30T00:00:00.000Z", "isGitRepo": true }] });
+        let got = redact_result("agent.projects", &projects, &options);
+        assert_eq!((got["projects"][0]["id"].as_str(), got["projects"][0]["name"].as_str()), (Some("p_1"), Some("Blolblex")));
+        assert_ne!(got["projects"][0]["path"], projects["projects"][0]["path"], "the project folder stays tail-only");
+        assert_eq!(got["projects"][0]["conversationCount"], 2);
+
+        let conversations = json!({ "conversations": [{ "id": "s_1", "projectId": "p_1", "projectName": "Blolblex" }] });
+        let got = redact_result("agent.conversations", &conversations, &options);
+        assert_eq!((got["conversations"][0]["projectId"].as_str(), got["conversations"][0]["projectName"].as_str()), (Some("p_1"), Some("Blolblex")));
+    }
 }

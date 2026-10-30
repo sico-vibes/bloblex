@@ -285,8 +285,12 @@ pub async fn assign_task(st: &AppState, session_id: &str, args: &Value) -> Resul
     // Bind the approval to ids, so renames cannot silently retarget a task.
     if let Some(project) = payload["project"].as_str().filter(|p| !p.is_empty()) {
         payload["project"] = crate::team::project_named(st,project)?["id"].clone();
-    } else if let Some(project) = target["projectId"].as_str() {
-        payload["project"] = json!(project);
+    } else {
+        // Any bot works in any project: with none named, the task opens in the
+        // project of the conversation it is sent from, else the bot's default.
+        let has_folder = |id: &str| crate::team::project_named(st, id).is_ok_and(|project| project["path"].as_str().is_some_and(|path| Path::new(path).is_dir()));
+        let sender = st.db.session_detail(session_id).ok().and_then(|row| row["projectId"].as_str().map(str::to_owned)).filter(|id| has_folder(id));
+        if let Some(project) = sender.as_deref().or(target["projectId"].as_str()) { payload["project"] = json!(project); }
     }
     validate_task_target(st, &manager, &payload)?;
     if let Some(project) = payload["project"].as_str().filter(|p| !p.is_empty()) { payload["projectName"] = crate::team::project_named(st,project)?["name"].clone(); }
@@ -947,13 +951,12 @@ fn validate_task_target(st: &AppState, manager: &Value, payload: &Value) -> Resu
     let target = crate::team::blob_named(st,payload["bot"].as_str().unwrap_or(""))?;
     if target["id"] == manager["id"] { return Err("You cannot delegate to yourself.".into()); }
     let project = payload["project"].as_str().filter(|p| !p.is_empty()).map(|p| crate::team::project_named(st,p)).transpose()?;
-    // Project-bound bots stay in their own project; a free bot may be asked to
-    // work in a selected project, with its folder visible on the approval card.
+    // Any bot may be asked to work in any project; its folder is visible on the
+    // approval card.
     if let Some(project) = &project {
         if !project["path"].as_str().is_some_and(|path| !path.trim().is_empty() && Path::new(path).is_dir()) {
             return Err("That project has no usable folder. Ask the owner to choose its folder before assigning work.".into());
         }
-        if target["projectId"].as_str().is_some_and(|id| project["id"] != id) { return Err("That bot belongs to another project. Choose this project's bot or propose creating one.".into()); }
     }
     if let Some(conversation) = payload["conversation"].as_str().filter(|c| !c.is_empty()) {
         let id = crate::team::continuable(st,conversation,manager["id"].as_str().unwrap_or(""),target["id"].as_str().unwrap_or(""),target["name"].as_str().unwrap_or("bot"))?;

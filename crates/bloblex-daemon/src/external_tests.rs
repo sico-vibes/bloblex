@@ -716,3 +716,54 @@ fn external_a_locked_bridge_copy_is_kept() {
     assert_ne!(std::fs::read_to_string(&target).unwrap(), "old copy", "an unlocked copy is replaced");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn external_send_message_takes_a_project_and_conversations_carry_it() {
+    let c = fixture("chat", false).await;
+    let st = &c.st;
+    let alpha_dir = temp_dir("alpha");
+    let beta_dir = temp_dir("beta");
+    let alpha = st.db.project_create("Alpha", Some(&alpha_dir.to_string_lossy())).unwrap().0;
+    let beta = st.db.project_create("Beta", Some(&beta_dir.to_string_lossy())).unwrap().0;
+    let (alpha_id, beta_id) = (alpha["id"].as_str().unwrap().to_owned(), beta["id"].as_str().unwrap().to_owned());
+    let folderless = st.db.project_create("Folderless", None).unwrap().0["id"].as_str().unwrap().to_owned();
+
+    // By id: the conversation opens in that project's folder and says so.
+    let (error, sent) = tool(st, "send_message", json!({"botId": c.agent, "text": "In alpha", "newConversation": true, "projectId": alpha_id})).await;
+    assert!(!error, "{sent}");
+    let session = sent["sessionId"].as_str().unwrap().to_owned();
+    let detail = st.db.session_detail(&session).unwrap();
+    assert_eq!((detail["projectId"].as_str(), detail["projectName"].as_str()), (Some(alpha_id.as_str()), Some("Alpha")));
+    assert_eq!(crate::worktree::normalize(Path::new(detail["projectPath"].as_str().unwrap())), crate::worktree::normalize(Path::new(st.db.project_get(&alpha_id).unwrap()["path"].as_str().unwrap())));
+    tool(st, "wait_for_turn", json!({"sessionId": session, "timeoutSecs": 10})).await;
+
+    // By the folder of a registered project (Chat level may name those).
+    let beta_path = st.db.project_get(&beta_id).unwrap()["path"].as_str().unwrap().to_owned();
+    let (error, by_path) = tool(st, "send_message", json!({"botId": c.agent, "text": "In beta", "newConversation": true, "projectPath": beta_path})).await;
+    assert!(!error, "{by_path}");
+    assert_eq!(st.db.session_detail(by_path["sessionId"].as_str().unwrap()).unwrap()["projectId"], beta_id.as_str());
+
+    // Refusals: a project that does not exist, or has no folder.
+    let (error, message) = tool(st, "send_message", json!({"botId": c.agent, "text": "x", "newConversation": true, "projectId": "nope"})).await;
+    assert!(error && message.as_str().unwrap().contains("not found"), "{message}");
+    let (error, message) = tool(st, "send_message", json!({"botId": c.agent, "text": "x", "newConversation": true, "projectId": folderless})).await;
+    assert!(error && message.as_str().unwrap().contains("no folder"), "{message}");
+
+    // Without a project the new conversation follows the bot's latest one.
+    let (_, follow) = tool(st, "send_message", json!({"botId": c.agent, "text": "Again", "newConversation": true})).await;
+    assert_eq!(st.db.session_detail(follow["sessionId"].as_str().unwrap()).unwrap()["projectId"], beta_id.as_str());
+
+    // list_conversations: rows carry the project, and projectId filters.
+    let (_, all) = tool(st, "list_conversations", json!({"botId": c.agent})).await;
+    let row = all.as_array().unwrap().iter().find(|row| row["sessionId"] == session.as_str()).unwrap();
+    assert_eq!((row["projectId"].as_str(), row["projectName"].as_str()), (Some(alpha_id.as_str()), Some("Alpha")));
+    let (_, only_alpha) = tool(st, "list_conversations", json!({"projectId": alpha_id})).await;
+    assert_eq!(only_alpha.as_array().unwrap().len(), 1, "{only_alpha}");
+    assert_eq!(only_alpha[0]["sessionId"], session.as_str());
+
+    // list_projects: the bots that have conversations in each project.
+    let (_, projects) = tool(st, "list_projects", json!({})).await;
+    let alpha_row = projects.as_array().unwrap().iter().find(|row| row["projectId"] == alpha_id.as_str()).unwrap();
+    assert_eq!(alpha_row["botIds"], json!([c.agent]), "{alpha_row}");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}

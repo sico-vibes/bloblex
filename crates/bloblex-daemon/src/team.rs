@@ -260,6 +260,11 @@ pub fn workspace_for(st: &AppState, agent: &Value) -> PathBuf {
     if let Some(project) = agent["projectId"].as_str().and_then(|id| st.db.project_get(id).ok()) {
         if let Some(path) = project["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir()) { return path; }
     }
+    private_workspace(st, agent)
+}
+
+/// The bot's own scratch folder, used when a conversation is in no project.
+pub fn private_workspace(st: &AppState, agent: &Value) -> PathBuf {
     let base = st.team.data_dir.lock().unwrap().clone().unwrap_or_else(std::env::temp_dir);
     let workspaces = base.join("workspaces");
     let agent_id = agent["id"].as_str().unwrap_or("blob");
@@ -405,8 +410,44 @@ const CHART_TABLE_INSTRUCTIONS: &str = concat!(
 Showing files. To show a file from the project folder, write ![short description](relative/path.png) on its own line for an image, or [name](relative/path.pdf) as a link for a PDF, audio, video or text file. Only files that exist inside the project folder can be shown, so create or save the file first and use its real path."#,
 );
 
-/// Bitbots context appended to every blob session's system instructions.
+/// The longest `.bitbots.json` `instructions` string the project section carries.
+const PROJECT_INSTRUCTIONS_CAP: usize = 4_000;
+
+/// The `instructions` string of a repository's `.bitbots.json`, capped at 4,000
+/// characters. A missing file, invalid JSON, or a missing or non-string
+/// `instructions` gives `None`.
+pub(crate) fn project_instructions_file(folder: &std::path::Path) -> Option<String> {
+    let path = folder.join(".bitbots.json");
+    if std::fs::metadata(&path).ok()?.len() > 256 * 1024 { return None; }
+    let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let text = parsed["instructions"].as_str()?.trim();
+    if text.is_empty() { return None; }
+    Some(text.chars().take(PROJECT_INSTRUCTIONS_CAP).collect())
+}
+
+/// The project half of a conversation's context: its name, folder, description,
+/// tags and the repository's own `.bitbots.json` instructions. It always comes
+/// from the conversation's project, never from the bot's default.
+fn project_section(project: &Value, workspace: &std::path::Path) -> Vec<String> {
+    let mut lines = vec![format!("You work in the project \"{}\" at {}. Treat that folder as your workspace.", project["name"].as_str().unwrap_or("project"), workspace.display())];
+    if let Some(description) = project["description"].as_str().map(str::trim).filter(|text| !text.is_empty()) { lines.push(format!("About this project: {description}")); }
+    let tags = project["tags"].as_array().map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    if !tags.is_empty() { lines.push(format!("Project tags: {tags}.")); }
+    if let Some(rules) = project_instructions_file(workspace) { lines.push(format!("This project's own instructions (from .bitbots.json):\n{rules}")); }
+    lines
+}
+
+/// Bitbots context appended to every blob session's system instructions, with
+/// the bot's own default project as the project section. Tests only; sessions
+/// use `runtime_instructions_in` through `attach`.
+#[cfg(test)]
 pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspace: &std::path::Path) -> String {
+    let project = agent["projectId"].as_str().and_then(|id| st.db.project_get(id).ok());
+    runtime_instructions_in(st, agent, link, workspace, project.as_ref())
+}
+
+/// The same, for a conversation in `project` (`None` = the bot's private workspace).
+pub fn runtime_instructions_in(st: &AppState, agent: &Value, link: &Value, workspace: &std::path::Path, project: Option<&Value>) -> String {
     let name = agent_name(agent);
     let noun = entity_noun(false);
     let nouns = entity_noun(true);
@@ -420,14 +461,14 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
     if let Some(about) = profile_about(st) {
         lines.push(format!("About the user (from their own notes): {about}"));
     }
-    let project = agent["projectId"].as_str().and_then(|id| st.db.project_get(id).ok());
-    lines.push(match project {
-        Some(project) => format!("You work in the project \"{}\" at {}. Treat that folder as your workspace.", project["name"].as_str().unwrap_or("project"), workspace.display()),
-        None => format!("You are a casual {noun}, not tied to a project. Your scratch workspace is {}; take general requests and work wherever the user points you.", workspace.display()),
-    });
+    match project {
+        Some(project) => lines.extend(project_section(project, workspace)),
+        None => lines.push(format!("You are a casual {noun}, not tied to a project. Your scratch workspace is {}; take general requests and work wherever the user points you.", workspace.display())),
+    }
     if agent["systemRole"].as_str() == Some("manager") {
         lines.push(format!("You are {name}, the user's Manager: chat like a capable team lead. Ground yourself with list_projects and list_blobs, then route by role, description, tags and project. Resolve any project mentioned by name, tags or context before acting; when unsure, ask_user with concrete options. With no project, research goes to a free bot tagged researcher; for project P, use P's researcher. If none fits, propose_bot for that project (or propose_project when a project is needed); do small things yourself when appropriate; you ask the user before creating projects, bots or assigning tasks."));
         lines.push("Read details with your read tools, and make consequential changes an approval card: creating or updating projects and bots, assigning a task, opening a conversation and changing a permission are proposed and wait for the owner. A message to a teammate is not consequential: `message_blob` is sent at once with no approval, so use it for ordinary delegation and only use `assign_task` when the user wants the work tracked as a task. Fill the brief or message yourself, and for a task also doneGoal and reportBack; never ask the user to fill a task form. Use a new topic for parallel work or conversation to follow up. Locked bots refuse settings changes; never propose Full access. After delegating, say briefly who will do what and end your turn. Approval outcomes are recorded here; teammate replies arrive later and wake you to report back.".into());
+        lines.push(format!("Any {noun} can work in any project: each conversation is opened in one project. Pass `project` (an id or exact name from list_projects) to `message_blob` or `assign_task` to open the work in a specific project; without it, the work opens in the project of the conversation you are in."));
         lines.push("Your notes about the user and your playbook are yours across model changes: keep the profile current with `remember_about_user` (read it with `recall_about_user`), and propose playbook edits with `update_playbook`. Never store secrets in either.".to_owned());
         lines.push("A message that starts with [Update from NAME] means a teammate is waiting for the user to approve or answer something in that teammate's own conversation. Tell the user briefly which teammate and what is being asked, point them to that conversation, and do not try to answer for them, approve anything, or send the task again.".to_owned());
         // Wave 12, part D: the relay carries the assignment's own "Done when" line,
@@ -466,10 +507,14 @@ pub fn runtime_instructions(st: &AppState, agent: &Value, link: &Value, workspac
 }
 
 /// Adds team instructions and the MCP bridge to a blob session's options.
-pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Value, options: &mut ExecOptions) {
+///
+/// `folder` and `project_id` are the conversation's own; the project section of
+/// the instructions comes from them, never from the bot's default project.
+pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Value, folder: Option<&std::path::Path>, project_id: Option<&str>, options: &mut ExecOptions) {
     let Some(agent) = agent_id.and_then(|id| st.db.agent_get(id).ok()) else { return };
-    let workspace = workspace_for(st, &agent);
-    let team = runtime_instructions(st, &agent, link, &workspace);
+    let workspace = folder.map(std::path::Path::to_path_buf).unwrap_or_else(|| workspace_for(st, &agent));
+    let project = project_id.and_then(|id| st.db.project_get(id).ok());
+    let team = runtime_instructions_in(st, &agent, link, &workspace, project.as_ref());
     options.instructions = Some(match options.instructions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
         Some(own) => format!("{team}\n\n{own}"),
         None => team,
@@ -504,7 +549,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
     let mut list: Vec<Value> = vec![
         json!({"name":"list_blobs","description":"List your teammates in Bitbots: name, role, what each is for, project, whether they are busy, and which one is the Manager.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
         json!({"name":"list_conversations","description":"List your side conversations with teammates, newest first: id, topic, teammate, who started it, size and the latest reply. Use it to find a conversation to continue.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"Only conversations with this teammate (optional)."}},"additionalProperties":false}}),
-        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Use it whenever the user asks you to message, ask or hand work to a teammate: it is sent at once, with no approval card. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"doneGoal":{"type":"string","description":"What must be true for the work to count as done. It is relayed back with the reply as a 'Done when' line (optional)."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."}},"required":["blob","message"],"additionalProperties":false}}),
+        json!({"name":"message_blob","description":"Send a message to one teammate in a private side conversation. Use it whenever the user asks you to message, ask or hand work to a teammate: it is sent at once, with no approval card. Continue an earlier conversation you started by passing its id as `conversation`, or start a new one with a short `topic`. Returns at once; their reply is delivered to you later as a message starting with \"[Reply from <name>]\". After sending, tell the user who you asked and end your turn.","inputSchema":{"type":"object","properties":{"blob":{"type":"string","description":"The teammate's name, as shown by list_blobs."},"message":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."},"doneGoal":{"type":"string","description":"What must be true for the work to count as done. It is relayed back with the reply as a 'Done when' line (optional)."},"topic":{"type":"string","description":"For a new conversation: a short title of 3 to 6 words, like a chat title."},"conversation":{"type":"string","description":"The id of a conversation you started with this teammate, from list_conversations, to continue it."},"project":{"type":"string","description":"For a new conversation: the project (an id or exact name) it opens in. Defaults to the project of this conversation."}},"required":["blob","message"],"additionalProperties":false}}),
         json!({"name":"schedule_task","description":format!("Propose a scheduled task for your {noun}. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":format!("List this {noun}'s scheduled tasks, whether each is enabled, and when it next runs."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
@@ -901,9 +946,10 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
             // classifier can touch the files the task is about. Without it the
             // bot works in its own scratch workspace and every project path is
             // outside the allowed set.
-            let project_path = args["projectPath"].as_str().map(str::trim).filter(|path| !path.is_empty())
-                .map(std::path::PathBuf::from).filter(|path| path.is_dir())
-                .unwrap_or_else(|| workspace_for(st, &target));
+            // Phase 1A: any bot works in any project. The caller's `project`
+            // wins, then the approved task's folder, then the project of the
+            // sender's conversation, then the target's own default.
+            let (project_path, project_id) = delegation_project(st, args, &from_row, &target)?;
             // FIX39 P10: when another task is already working in this git repo,
             // run this one in its own worktree instead, so the two cannot clash.
             let mut run_path = project_path;
@@ -917,7 +963,9 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
                 // report shows it instead of claiming the folder is fine.
                 link["worktreeError"] = json!(short_reason(&reason));
             }
-            let created = new_session(st, json!({"agentId":target_id,"projectPath":run_path,"title":title,"link":link.clone()})).await
+            let mut params = json!({"agentId":target_id,"projectPath":run_path,"title":title,"link":link.clone()});
+            if let Some(project_id) = &project_id { params["projectId"] = json!(project_id); }
+            let created = new_session(st, params).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
             let side = created["id"].as_str().unwrap_or("").to_owned();
             if let Some(worktree) = link.get("worktree").filter(|worktree| worktree.is_object()) {
@@ -970,6 +1018,25 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
         deliver(&state, &side_for_task, message, meta, depth, false).await;
     });
     Ok(Delegation { side, title, target_name, started, queue_reason, duplicate: None })
+}
+
+/// The folder and project a new side conversation opens in (see the call site
+/// for the order). A named project with no folder is an error the sender can act on.
+fn delegation_project(st: &AppState, args: &Value, from_row: &Value, target: &Value) -> Result<(PathBuf, Option<String>), String> {
+    let folder_of = |project: &Value| project["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir());
+    if let Some(wanted) = args["project"].as_str().map(str::trim).filter(|wanted| !wanted.is_empty()) {
+        let project = project_named(st, wanted)?;
+        let path = folder_of(&project).ok_or("That project has no folder on this computer.")?;
+        return Ok((path, project["id"].as_str().map(str::to_owned)));
+    }
+    if let Some(path) = args["projectPath"].as_str().map(str::trim).filter(|path| !path.is_empty()).map(PathBuf::from).filter(|path| path.is_dir()) {
+        let id = st.db.project_id_for_path(&path.to_string_lossy()).ok().flatten();
+        return Ok((path, id));
+    }
+    if let Some(id) = from_row["projectId"].as_str() {
+        if let Some(path) = st.db.project_get(id).ok().and_then(|project| folder_of(&project)) { return Ok((path, Some(id.to_owned()))); }
+    }
+    Ok(default_conversation_project(st, target))
 }
 
 /// A conversation id the sender may continue: one they started with this teammate.
@@ -1361,9 +1428,39 @@ pub async fn agent_conversation_create(st: &AppState, p: &Value) -> Result<Value
     if agent["archived"] == true { return Err(derr("invalid_argument", &format!("archived {} have no conversation", entity_noun(true)), StatusCode::BAD_REQUEST)); }
     let title = p["title"].as_str().map(str::trim).filter(|title| !title.is_empty()).unwrap_or("New chat").to_owned();
     if title.chars().count() > 120 { return Err(derr("invalid_argument", "title must be at most 120 characters", StatusCode::BAD_REQUEST)); }
-    let created = new_session(st, json!({"agentId":agent_id,"projectPath":workspace_for(st, &agent),"title":title,"lazy":true})).await?;
+    let mut params = json!({"agentId":agent_id,"title":title,"lazy":true});
+    match p.get("projectId") {
+        // Explicit null is "No project": the private workspace, unstamped, even
+        // when the bot has a default project.
+        Some(Value::Null) => {
+            params["projectPath"] = json!(private_workspace(st, &agent));
+            params["projectId"] = Value::Null;
+        }
+        None => {
+            // Omitted: the project of the bot's latest conversation, then its
+            // default project, then its private workspace.
+            let (folder, project_id) = default_conversation_project(st, &agent);
+            params["projectPath"] = json!(folder);
+            if let Some(project_id) = project_id { params["projectId"] = json!(project_id); }
+        }
+        Some(chosen) => {
+            let chosen = chosen.as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "projectId must be a string", StatusCode::BAD_REQUEST))?;
+            params["projectId"] = json!(chosen);
+        }
+    }
+    let created = new_session(st, params).await?;
     let id = created["id"].as_str().unwrap_or("");
     Ok(json!({"session": st.db.session_detail(id).map_err(agent_error)?}))
+}
+
+/// Where a new conversation opens when the caller names no project: the project
+/// of the bot's most recent conversation, then the bot's default project, then
+/// its private workspace. A project whose folder is gone is skipped.
+pub fn default_conversation_project(st: &AppState, agent: &Value) -> (PathBuf, Option<String>) {
+    let usable = |id: &str| st.db.project_get(id).ok().and_then(|project| project["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir())).map(|path| (path, Some(id.to_owned())));
+    agent["id"].as_str().and_then(|id| st.db.agent_last_project_id(id).ok().flatten()).and_then(|id| usable(&id))
+        .or_else(|| agent["projectId"].as_str().and_then(usable))
+        .unwrap_or_else(|| (private_workspace(st, agent), None))
 }
 
 /// Every conversation a bot has in a project: its main conversations plus the
@@ -1390,7 +1487,7 @@ pub async fn agent_conversations(st: &AppState, p: &Value) -> Result<Value, Disp
         let parent_id = parent.filter(|id| ids.iter().any(|known| known == id)).map(|id| json!(id)).unwrap_or(Value::Null);
         json!({
             "id": row["id"], "title": row["title"], "state": row["state"], "createdAt": row["createdAt"], "updatedAt": row["updatedAt"],
-            "archived": row["archived"], "projectId": row["projectId"], "kind": kind, "agentId": row["agentId"], "peerAgentId": row["peerAgentId"],
+            "archived": row["archived"], "projectId": row["projectId"], "projectName": row["projectName"], "kind": kind, "agentId": row["agentId"], "peerAgentId": row["peerAgentId"],
             "topic": row["topic"], "parentId": parent_id, "role": role, "messageCount": row["messageCount"]
         })
     }).collect::<Vec<_>>();
@@ -1461,6 +1558,11 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
         "agent.conversation" => agent_conversation(st, p).await,
         "agent.conversation.create" => agent_conversation_create(st, p).await,
         "agent.conversations" => agent_conversations(st, p).await,
+        "agent.projects" => {
+            let agent_id = p["agentId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
+            st.db.agent_get(agent_id).map_err(agent_error)?;
+            Ok(json!({"projects": st.db.agent_projects(agent_id).map_err(agent_error)?}))
+        }
         _ => Err(derr("not_found", "unknown method", StatusCode::NOT_FOUND)),
     }
 }

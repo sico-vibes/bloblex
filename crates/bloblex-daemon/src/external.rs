@@ -390,14 +390,14 @@ fn catalog() -> Vec<(Tier, Value)> {
         entry(Viewer, "get_status", "The Bitbots version, how many bots there are, the turns running now (bot, start time, what it is doing) and how many approvals are waiting.", schema(json!({}), &[])),
         entry(Viewer, "list_bots", "The owner's bots: id, name, role, coding agent, model, effort, permission mode, project folder, whether it is busy, and whether it is the Manager.", schema(json!({}), &[])),
         entry(Viewer, "list_runtimes", "The coding agents installed on this computer, with the models and efforts each offers: enough to call create_bot.", schema(json!({}), &[])),
-        entry(Viewer, "list_projects", "The distinct project folders bots work in, which bots use each, and whether each is a git repository.", schema(json!({}), &[])),
-        entry(Viewer, "list_conversations", "Conversations, newest first: id, bot, title, state, last update and its separate git copy when it has one.", schema(json!({"botId": id("Only this bot's conversations."), "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "How many to return (default 20)."}}), &[])),
+        entry(Viewer, "list_projects", "The distinct project folders bots work in, which bots have conversations in each (or default to it), and whether each is a git repository.", schema(json!({}), &[])),
+        entry(Viewer, "list_conversations", "Conversations, newest first: id, bot, title, project, state, last update and its separate git copy when it has one.", schema(json!({"botId": id("Only this bot's conversations."), "projectId": id("Only conversations in this project (from list_projects)."), "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "How many to return (default 20)."}}), &[])),
         entry(Viewer, "read_conversation", "A conversation's messages: id, role, text, time and kind. Tool steps are one line each and images are paths only. Without afterMessageId you get the latest messages; with it, the ones after that message.", schema(json!({"sessionId": id("The conversation."), "afterMessageId": id("Only messages after this one."), "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "How many to return (default 50)."}}), &["sessionId"])),
         entry(Viewer, "wait_for_turn", "Waits for the conversation's running turn to finish (up to timeoutSecs, 600 at most), then returns the reply and the turn's metrics, or the error when the turn failed. It returns early when an approval or a question is waiting.", schema(json!({"sessionId": id("The conversation."), "timeoutSecs": {"type": "integer", "minimum": 1, "maximum": 600, "description": "How long to wait (default 120)."}}), &["sessionId"])),
         entry(Viewer, "turn_metrics", "Per turn: start and end time, duration, tool calls, tokens when the coding agent reported them, the outcome, and the error (message and detail) of a failed turn. Unknown values are left out, never zero.", schema(json!({"sessionId": id("The conversation."), "last": {"type": "integer", "minimum": 1, "maximum": 50, "description": "How many turns (default 5)."}}), &["sessionId"])),
         entry(Viewer, "worktree_status", "For a conversation working in its own git copy: branch, base, files changed and commits ahead. Null when it has none.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
         entry(Viewer, "list_approvals", "Approvals waiting for the owner: id, conversation, bot, tool and a summary.", schema(json!({}), &[])),
-        entry(Chat, "send_message", "Sends a message to a bot. With sessionId it continues that conversation (queued after the running turn when it is busy); with botId it continues the bot's latest conversation, or starts a new one when newConversation is true or there is none. Returns at once; use wait_for_turn for the reply.", schema(json!({"botId": id("The bot."), "sessionId": id("An existing conversation."), "text": id("The message, up to 100,000 characters."), "newConversation": {"type": "boolean", "description": "Start a new conversation with botId."}, "projectPath": id("The folder for a new conversation (default: the bot's own).")}), &["text"])),
+        entry(Chat, "send_message", "Sends a message to a bot. With sessionId it continues that conversation (queued after the running turn when it is busy); with botId it continues the bot's latest conversation, or starts a new one when newConversation is true or there is none. Returns at once; use wait_for_turn for the reply.", schema(json!({"botId": id("The bot."), "sessionId": id("An existing conversation."), "text": id("The message, up to 100,000 characters."), "newConversation": {"type": "boolean", "description": "Start a new conversation with botId."}, "projectId": id("The project for a new conversation, from list_projects. Without it (and without projectPath) the conversation opens in the project of the bot's latest conversation, then its default project, then its own folder."), "projectPath": id("The folder for a new conversation; a registered project's folder opens in that project.")}), &["text"])),
         entry(Chat, "steer", "Sends extra guidance to the turn that is running now, without stopping it.", schema(json!({"sessionId": id("The conversation."), "text": id("The guidance.")}), &["sessionId", "text"])),
         entry(Chat, "stop_turn", "Stops the turn that is running in a conversation.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
         entry(Operator, "create_bot", "Creates a bot. Use list_runtimes for the runtime and model; the bot works in projectPath. Its permission mode is ask unless you pass auto.", schema(json!({"name": id("The bot's name, up to 60 characters."), "runtimeId": id("From list_runtimes."), "model": id("A model id from list_runtimes."), "effort": id("An effort the model offers."), "projectPath": id("The folder the bot works in."), "role": id("A short role, up to 40 characters."), "approvalMode": {"type": "string", "enum": ["ask", "auto"], "description": "How the bot asks before acting (default ask)."}}), &["name", "runtimeId", "model", "projectPath"])),
@@ -625,12 +625,14 @@ async fn list_runtimes(st: &AppState) -> ToolResult {
 async fn list_projects(st: &AppState) -> ToolResult {
     let projects = st.db.project_list().map_err(|error| fail(agent_error(error)))?;
     let agents = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?;
+    let sessions = st.db.session_list(false).map_err(|error| fail(agent_error(error)))?;
     let mut rows: Vec<(String, Value)> = Vec::new();
     for project in &projects {
         let Some(path) = project["path"].as_str().filter(|path| !path.is_empty()) else { continue };
         let key = crate::worktree::normalize(Path::new(path));
         if rows.iter().any(|(seen, _)| *seen == key) { continue; }
-        let ids: Vec<&str> = agents.iter().filter(|agent| agent["projectId"] == project["id"]).filter_map(|agent| agent["id"].as_str()).collect();
+        // The bots that have a conversation in the project, plus those that default to it.
+        let ids: Vec<&str> = agents.iter().filter(|agent| agent["projectId"] == project["id"] || sessions.iter().any(|row| row["projectId"] == project["id"] && (row["agentId"] == agent["id"] || row["link"]["peerAgentId"] == agent["id"]))).filter_map(|agent| agent["id"].as_str()).collect();
         rows.push((key, json!({"path": path, "projectId": project["id"], "name": project["name"], "botIds": ids})));
     }
     let paths: Vec<String> = rows.iter().filter_map(|(_, row)| row["path"].as_str().map(str::to_owned)).collect();
@@ -641,12 +643,14 @@ async fn list_projects(st: &AppState) -> ToolResult {
 fn list_conversations(st: &AppState, args: &Value) -> ToolResult {
     let limit = count_arg(args, "limit", 20, 100);
     let bot = text_arg(args, "botId");
+    let project = text_arg(args, "projectId");
     let rows = st.db.session_list(false).map_err(|error| fail(agent_error(error)))?;
     let items: Vec<Value> = rows.iter()
         .filter(|row| bot.is_none_or(|bot| row["agentId"].as_str() == Some(bot)))
+        .filter(|row| project.is_none_or(|project| row["projectId"].as_str() == Some(project)))
         .take(limit)
         .map(|row| {
-            let mut item = json!({"sessionId": row["id"], "botId": row["agentId"], "title": row["title"], "state": row["state"], "updatedAt": row["updatedAt"]});
+            let mut item = json!({"sessionId": row["id"], "botId": row["agentId"], "title": row["title"], "projectId": row["projectId"], "projectName": row["projectName"], "state": row["state"], "updatedAt": row["updatedAt"]});
             if let Some(worktree) = row["link"]["worktree"].as_object() {
                 item["worktree"] = json!({"path": worktree.get("path"), "branch": worktree.get("branch")});
             }
@@ -833,9 +837,11 @@ fn valid_text(args: &Value) -> Result<String, String> {
 }
 
 /// The bot's newest conversation that is its own (not a side, scheduled or task run).
-fn latest_conversation(st: &AppState, agent_id: &str) -> Option<String> {
+/// With `project`, only a conversation in that project counts.
+fn latest_conversation(st: &AppState, agent_id: &str, project: Option<&str>) -> Option<String> {
     st.db.session_list(false).ok()?.iter().find(|row| {
         row["agentId"].as_str() == Some(agent_id) && !matches!(row["link"]["kind"].as_str(), Some("side") | Some("automation") | Some("task"))
+            && project.is_none_or(|project| row["projectId"].as_str() == Some(project))
     }).and_then(|row| row["id"].as_str().map(str::to_owned))
 }
 
@@ -867,13 +873,33 @@ async fn send_message(st: &AppState, tier: Tier, args: &Value) -> ToolResult {
         (None, Some(bot)) => {
             let agent = st.db.agent_get(bot).map_err(|_| "That bot was not found.".to_owned())?;
             if agent["archived"] == true { return Err("That bot is archived.".to_owned()); }
-            let existing = if new_conversation || want_worktree { None } else { latest_conversation(st, bot) };
+            // The project the caller named: by id, or by the folder of a registered project.
+            let mut project_id: Option<String> = None;
+            let mut named_folder: Option<PathBuf> = None;
+            if let Some(wanted) = text_arg(args, "projectId") {
+                let project = st.db.project_get(wanted).map_err(|_| "That project was not found.".to_owned())?;
+                let folder = project["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir()).ok_or_else(|| "That project has no folder on this computer.".to_owned())?;
+                project_id = Some(wanted.to_owned());
+                named_folder = Some(folder);
+            } else if let Some(path) = text_arg(args, "projectPath") {
+                allowed_folder(st, tier, &agent, path)?;
+                let wanted = crate::worktree::normalize(Path::new(path));
+                project_id = st.db.project_list().unwrap_or_default().iter()
+                    .find(|row| row["path"].as_str().is_some_and(|known| crate::worktree::normalize(Path::new(known)) == wanted))
+                    .and_then(|row| row["id"].as_str().map(str::to_owned));
+                named_folder = Some(PathBuf::from(path));
+            }
+            let existing = if new_conversation || want_worktree { None } else { latest_conversation(st, bot, project_id.as_deref().filter(|_| named_folder.is_some())) };
             match existing {
                 Some(id) => id,
                 None => {
-                    let mut folder = match text_arg(args, "projectPath") {
-                        Some(path) => { allowed_folder(st, tier, &agent, path)?; PathBuf::from(path) }
-                        None => crate::team::workspace_for(st, &agent),
+                    let mut folder = match named_folder {
+                        Some(folder) => folder,
+                        None => {
+                            let (folder, default_project) = crate::team::default_conversation_project(st, &agent);
+                            project_id = default_project;
+                            folder
+                        }
                     };
                     let mut link = Value::Null;
                     if want_worktree {
@@ -888,7 +914,9 @@ async fn send_message(st: &AppState, tier: Tier, args: &Value) -> ToolResult {
                         link = json!({"kind": "main", "worktree": made.to_json()});
                         worktree = Some(made.to_json());
                     }
-                    let opened = crate::new_session(st, json!({"agentId": bot, "projectPath": folder.to_string_lossy(), "lazy": true, "link": link})).await;
+                    let mut params = json!({"agentId": bot, "projectPath": folder.to_string_lossy(), "lazy": true, "link": link});
+                    if let Some(project_id) = &project_id { params["projectId"] = json!(project_id); }
+                    let opened = crate::new_session(st, params).await;
                     match opened {
                         Ok(session) => { created = Some(session.clone()); session["id"].as_str().unwrap_or("").to_owned() }
                         Err(error) => {

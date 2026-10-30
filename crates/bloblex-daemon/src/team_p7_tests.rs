@@ -320,11 +320,13 @@ async fn p7_task_routing_refuses_wrong_project_or_missing_folder() {
     let first=st.db.project_create("First",Some(".")).unwrap().0;
     let second=st.db.project_create("Second",Some(".")).unwrap().0;
     st.db.agent_set_team(&worker,&json!({"projectId":first["id"]})).unwrap();
-    assert_eq!(call(&st,"p7-boss","assign_task",json!({"bot":worker,"project":second["id"],"brief":"Research","doneGoal":"Done","reportBack":"Evidence"})).await["isError"],true);
+    // Phase 1A: any bot works in any project, so another project is no longer refused.
+    assert_ne!(call(&st,"p7-boss","assign_task",json!({"bot":worker,"project":second["id"],"brief":"Research","doneGoal":"Done","reportBack":"Evidence"})).await["isError"],true);
+    assert_eq!(pending(&st)["payload"]["project"],second["id"]);
     let pathless=st.db.project_create("Pathless",None).unwrap().0;
     st.db.agent_set_team(&worker,&json!({"projectId":pathless["id"]})).unwrap();
-    assert_eq!(call(&st,"p7-boss","assign_task",json!({"bot":worker,"brief":"Research","doneGoal":"Done","reportBack":"Evidence"})).await["isError"],true);
-    assert!(st.db.proposals_pending().unwrap().is_empty());
+    assert_eq!(call(&st,"p7-boss","assign_task",json!({"bot":worker,"project":pathless["id"],"brief":"Research","doneGoal":"Done","reportBack":"Evidence"})).await["isError"],true);
+    assert_eq!(st.db.proposals_pending().unwrap().len(),1,"only the first task became a proposal");
 }
 
 #[tokio::test]

@@ -247,6 +247,13 @@
       "params": null
     },
     {
+      "method": "agent.projects",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Lists the projects a bot has worked in, so a device can show which project a conversation is in.",
+      "params": null
+    },
+    {
       "method": "session.prompt",
       "class": "chat",
       "minTier": "chat",
@@ -1098,6 +1105,13 @@
       "class": "never",
       "minTier": null,
       "why": "Remembered approvals name the owner's own commands and project paths, so the list stays at the computer.",
+      "params": null
+    },
+    {
+      "method": "permission.rules.update",
+      "class": "never",
+      "minTier": null,
+      "why": "Moving a remembered approval between one project and every project changes what the bot may do unattended; only the owner at the desktop may do that.",
       "params": null
     },
     {

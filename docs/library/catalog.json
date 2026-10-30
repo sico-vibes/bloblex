@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "8a84b90",
-  "documentCount": 355,
+  "revision": "5f07dec",
+  "documentCount": 358,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -4072,6 +4072,51 @@
         {
           "id": "gates-run-from-dfx70-report-the-tail-of-each",
           "text": "Gates (run from D:\\fx70, report the tail of each)",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/mcp-update-bot-brief",
+      "source": "docs/history/wave15/mcp-update-bot-brief.md",
+      "title": "Brief: the Bitbots MCP edits bots (update_bot) and may grant Full access",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "949786c190a4105c99487945ffa66cef02724bbbaa5e3ff16b88b3657b57cc03",
+      "headings": [
+        {
+          "id": "decision",
+          "text": "Decision",
+          "level": 2
+        },
+        {
+          "id": "contract",
+          "text": "Contract",
+          "level": 2
+        },
+        {
+          "id": "capability-rpc-desktop-only-never-remote-never-on-the-ext-route",
+          "text": "Capability RPC (desktop only, never remote, never on the ext.* route)",
+          "level": 3
+        },
+        {
+          "id": "tool-updatebot-operator",
+          "text": "Tool update_bot (Operator)",
+          "level": 3
+        },
+        {
+          "id": "tests-in-cratesbloblex-daemonsrcexternaltestsrs-plus-a-tiers-parity-pass",
+          "text": "Tests (in crates/bloblex-daemon/src/external_tests.rs, plus a tiers parity pass)",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
           "level": 2
         },
         {
@@ -15969,6 +16014,141 @@
         {
           "id": "report",
           "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave14/opencode-fixes-brief",
+      "source": "docs/history/wave14/opencode-fixes-brief.md",
+      "title": "Wave 14 follow-up brief: OpenCode effort race, the question tool, error text in the MCP",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "625199a6cd6d502e9bc04a871cf66269e6669d033ae79d4b4e030015c99aeb04",
+      "headings": [
+        {
+          "id": "1-opencode-rejected-the-effort-setting-a-race-inside-opencode",
+          "text": "1. \"OpenCode rejected the effort setting\" (a race inside OpenCode)",
+          "level": 2
+        },
+        {
+          "id": "what-was-seen",
+          "text": "What was seen",
+          "level": 3
+        },
+        {
+          "id": "fix-in-the-acp-adapter",
+          "text": "Fix, in the ACP adapter",
+          "level": 3
+        },
+        {
+          "id": "tests",
+          "text": "Tests",
+          "level": 3
+        },
+        {
+          "id": "live-check",
+          "text": "Live check",
+          "level": 3
+        },
+        {
+          "id": "2-opencodes-question-tool-always-fails-inside-bitbots",
+          "text": "2. OpenCode's question tool always fails inside Bitbots",
+          "level": 2
+        },
+        {
+          "id": "3-the-mcp-should-say-why-a-turn-failed",
+          "text": "3. The MCP should say why a turn failed",
+          "level": 2
+        },
+        {
+          "id": "gates-from-dwv15",
+          "text": "Gates (from D:\\wv15)",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-1a-brief",
+      "source": "docs/history/wave15/phase-1a-brief.md",
+      "title": "Wave 15 brief: Phase 1A, bots across projects (backend)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "845dfa83caefbcdcefe8a774fbc270968b69d6fea1989ffa77814a1ac74f98ba",
+      "headings": [
+        {
+          "id": "the-decision",
+          "text": "The decision",
+          "level": 2
+        },
+        {
+          "id": "what-exists-today-build-on-it",
+          "text": "What exists today (build on it)",
+          "level": 2
+        },
+        {
+          "id": "contract-the-ui-is-built-against-exactly-this",
+          "text": "Contract (the UI is built against exactly this)",
+          "level": 2
+        },
+        {
+          "id": "1-a-bots-default-project",
+          "text": "1. A bot's default project",
+          "level": 3
+        },
+        {
+          "id": "2-new-conversations-pick-a-project",
+          "text": "2. New conversations pick a project",
+          "level": 3
+        },
+        {
+          "id": "3-a-bots-projects",
+          "text": "3. A bot's projects",
+          "level": 3
+        },
+        {
+          "id": "4-context-the-bots-part-and-the-projects-part",
+          "text": "4. Context: the bot's part and the project's part",
+          "level": 3
+        },
+        {
+          "id": "5-always-allow-rules-in-this-project-or-everywhere",
+          "text": "5. Always-allow rules: in this project, or everywhere",
+          "level": 3
+        },
+        {
+          "id": "6-manager-and-team",
+          "text": "6. Manager and team",
+          "level": 3
+        },
+        {
+          "id": "7-the-bitbots-mcp-externalrs",
+          "text": "7. The Bitbots MCP (external.rs)",
+          "level": 3
+        },
+        {
+          "id": "8-remote-tiers",
+          "text": "8. Remote tiers",
+          "level": 3
+        },
+        {
+          "id": "tests-daemon-and-storage-name-them-like-these",
+          "text": "Tests (daemon and storage; name them like these)",
+          "level": 2
+        },
+        {
+          "id": "gates-you-run-before-reporting-from-your-worktree",
+          "text": "Gates you run before reporting (from your worktree)",
+          "level": 2
+        },
+        {
+          "id": "report-your-final-reply",
+          "text": "Report (your final reply)",
           "level": 2
         }
       ]

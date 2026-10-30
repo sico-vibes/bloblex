@@ -78,7 +78,7 @@ const fixtureSkills: Array<Record<string, unknown>> = [
   { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
 ]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
-const fixtureExternal: { enabled: boolean; tier: string; lastCallAt: string | null; lastClient: string | null } = fixturePreset() === 'mcp' ? { enabled: true, tier: 'operator', lastCallAt: new Date(Date.now() - 4 * 60_000).toISOString(), lastClient: 'claude-code' } : { enabled: false, tier: 'chat', lastCallAt: null, lastClient: null }
+const fixtureExternal: { enabled: boolean; tier: string; lastCallAt: string | null; lastClient: string | null; allowFullAccess: boolean } = fixturePreset() === 'mcp' ? { enabled: true, tier: 'operator', lastCallAt: new Date(Date.now() - 4 * 60_000).toISOString(), lastClient: 'claude-code', allowFullAccess: false } : { enabled: false, tier: 'chat', lastCallAt: null, lastClient: null, allowFullAccess: false }
 const fixtureOutside = {
   enabled: fixturePreset() === 'outside',
   sessions: [
@@ -759,7 +759,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method.startsWith('external.')) {
     const bridge = 'C:/Users/you/AppData/Local/com.bitbots.desktop/bitbots-mcp.exe'
     const endpoint = 'C:/Users/you/AppData/Local/com.bitbots.desktop/external-mcp.json'
-    const status = () => ({ enabled: fixtureExternal.enabled, tier: fixtureExternal.tier, endpointPath: fixtureExternal.enabled ? endpoint : null, bridgePath: bridge, command: `claude mcp add bitbots -- "${bridge}" mcp-server --endpoint "${endpoint}"`, lastCallAt: fixtureExternal.lastCallAt, lastClient: fixtureExternal.lastClient })
+    const status = () => ({ enabled: fixtureExternal.enabled, tier: fixtureExternal.tier, endpointPath: fixtureExternal.enabled ? endpoint : null, bridgePath: bridge, command: `claude mcp add bitbots -- "${bridge}" mcp-server --endpoint "${endpoint}"`, lastCallAt: fixtureExternal.lastCallAt, lastClient: fixtureExternal.lastClient, allowFullAccess: fixtureExternal.enabled && fixtureExternal.allowFullAccess })
     const changed = () => { notifyFixtureDaemon('external.changed', status()); return status() as T }
     if (method === 'external.status') return status() as T
     if (method === 'external.enable') {
@@ -768,7 +768,13 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
       if (typeof params.tier === 'string') fixtureExternal.tier = params.tier
       return changed()
     }
-    if (method === 'external.disable') { fixtureExternal.enabled = false; return changed() }
+    if (method === 'external.disable') { fixtureExternal.enabled = false; fixtureExternal.allowFullAccess = false; return changed() }
+    if (method === 'external.setFullAccess') {
+      if (!fixtureExternal.enabled) throw rpcError('conflict', 'Turn the Bitbots MCP on first.')
+      if (params.allow === true && params.confirm !== true) throw rpcError('invalid_argument', 'Confirm letting outside sessions give bots Full access first.')
+      fixtureExternal.allowFullAccess = params.allow === true
+      return changed()
+    }
     if (method === 'external.setTier') {
       if (!fixtureExternal.enabled) throw rpcError('conflict', 'Turn on the Bitbots MCP first.')
       if (typeof params.tier === 'string') fixtureExternal.tier = params.tier

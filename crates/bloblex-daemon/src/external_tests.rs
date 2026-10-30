@@ -462,6 +462,206 @@ async fn external_create_bot_goes_through_validation_and_defaults_to_ask() {
     let _ = std::fs::remove_dir_all(&c.dir);
 }
 
+async fn allow_full_access(st: &AppState) {
+    rpc(st, "external.setFullAccess", &json!({"allow": true, "confirm": true})).await.unwrap();
+}
+
+fn approval_enum(tools: &Value, name: &str) -> Vec<String> {
+    let tool = tools["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).unwrap_or_else(|| panic!("{name} is not listed"));
+    tool["inputSchema"]["properties"]["approvalMode"]["enum"].as_array().unwrap().iter().filter_map(|mode| mode.as_str().map(str::to_owned)).collect()
+}
+
+#[tokio::test]
+async fn update_bot_changes_name_model_effort_and_role() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let (error, bot) = tool(st, "update_bot", json!({"botId": c.agent, "name": "Scout Two", "model": "some-model", "effort": "high", "role": "Reviewer", "description": "Looks around", "instructions": "Be brief", "approvalMode": "auto", "tags": ["Backend", "backend", "rust"], "hidden": true})).await;
+    assert!(!error, "{bot}");
+    assert_eq!((bot["name"].as_str(), bot["model"].as_str(), bot["effort"].as_str(), bot["role"].as_str(), bot["approvalMode"].as_str()), (Some("Scout Two"), Some("some-model"), Some("high"), Some("Reviewer"), Some("auto")));
+    let stored = st.db.agent_get(&c.agent).unwrap();
+    assert_eq!((stored["description"].as_str(), stored["instructions"].as_str(), stored["hidden"].as_bool()), (Some("Looks around"), Some("Be brief"), Some(true)));
+    assert_eq!(stored["tags"], json!(["backend", "rust"]));
+    assert_eq!(stored["customEnv"]["LANG"], SECRET_ENV, "the environment is untouched");
+    assert!(!bot.to_string().contains("Be brief"), "the result never shows instructions");
+    let (error, cleared) = tool(st, "update_bot", json!({"botId": c.agent, "role": ""})).await;
+    assert!(!error && cleared["role"].is_null(), "an empty role clears it: {cleared}");
+    // Nothing changed when nothing is passed, and a missing bot is named.
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent})).await;
+    assert!(error && message.as_str().unwrap() == "Pass at least one setting to change.", "{message}");
+    let (error, message) = tool(st, "update_bot", json!({"botId": "no-such-bot", "name": "X"})).await;
+    assert!(error && message.as_str().unwrap() == "That bot was not found.", "{message}");
+    // A failing validation writes nothing, even for the fields before it.
+    let (error, _) = tool(st, "update_bot", json!({"botId": c.agent, "name": "Half", "role": "x".repeat(41)})).await;
+    assert!(error);
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["name"], "Scout Two");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn update_bot_sets_and_clears_the_default_project_by_folder() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let folder = temp_dir("update-project");
+    let (error, bot) = tool(st, "update_bot", json!({"botId": c.agent, "projectPath": folder.to_string_lossy()})).await;
+    assert!(!error, "{bot}");
+    assert_eq!(crate::worktree::normalize(Path::new(bot["projectPath"].as_str().unwrap())), crate::worktree::normalize(&folder));
+    let first_project = st.db.agent_get(&c.agent).unwrap()["projectId"].clone();
+    assert!(first_project.is_string());
+    // The same folder again finds the same project.
+    tool(st, "update_bot", json!({"botId": c.agent, "projectPath": folder.to_string_lossy()})).await;
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["projectId"], first_project);
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "projectPath": folder.join("nowhere").to_string_lossy()})).await;
+    assert!(error && message.as_str().unwrap().contains("existing folder"), "{message}");
+    let (error, cleared) = tool(st, "update_bot", json!({"botId": c.agent, "projectPath": null})).await;
+    assert!(!error, "{cleared}");
+    assert!(st.db.agent_get(&c.agent).unwrap()["projectId"].is_null());
+    assert!(cleared["projectPath"].is_null());
+    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn update_bot_refuses_bypass_until_the_owner_allows_full_access() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "approvalMode": "bypass", "name": "Reckless"})).await;
+    assert!(error && message.as_str().unwrap() == "Full access needs the owner's switch in Bitbots › Settings › Connections.", "{message}");
+    let stored = st.db.agent_get(&c.agent).unwrap();
+    assert_eq!((stored["name"].as_str(), stored["approvalMode"].as_str()), (Some("Scout"), Some("ask")), "nothing was written");
+    allow_full_access(st).await;
+    let (error, bot) = tool(st, "update_bot", json!({"botId": c.agent, "approvalMode": "bypass"})).await;
+    assert!(!error, "{bot}");
+    assert_eq!(bot["approvalMode"], "bypass");
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["approvalMode"], "bypass");
+    rpc(st, "external.setFullAccess", &json!({"allow": false})).await.unwrap();
+    assert!(tool(st, "update_bot", json!({"botId": c.agent, "approvalMode": "bypass"})).await.0, "switching it off refuses again");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn create_bot_accepts_bypass_only_while_full_access_is_allowed() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let project = temp_dir("bypass-project");
+    let args = |name: &str| json!({"name": name, "runtimeId": "ext-rt", "model": "some-model", "projectPath": project.to_string_lossy(), "approvalMode": "bypass"});
+    let (error, message) = tool(st, "create_bot", args("Closed")).await;
+    assert!(error && message.as_str().unwrap().contains("owner's switch"), "{message}");
+    assert!(st.db.agent_list(false, None).unwrap().iter().all(|agent| agent["name"] != "Closed"), "nothing was created");
+    allow_full_access(st).await;
+    let (error, bot) = tool(st, "create_bot", args("Open")).await;
+    assert!(!error, "{bot}");
+    assert_eq!(bot["approvalMode"], "bypass");
+    let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn set_full_access_needs_confirm_and_the_mcp_on() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let refused = rpc(st, "external.setFullAccess", &json!({"allow": true})).await.unwrap_err();
+    assert_eq!((refused.1.code.as_str(), refused.1.message.as_str()), ("invalid_argument", "Confirm letting outside sessions give bots Full access first."));
+    assert_eq!(status(st)["allowFullAccess"], false);
+    assert_eq!(rpc(st, "external.setFullAccess", &json!({})).await.unwrap_err().1.code, "invalid_argument");
+    let on = rpc(st, "external.setFullAccess", &json!({"allow": true, "confirm": true})).await.unwrap();
+    assert_eq!(on["allowFullAccess"], true);
+    let off = rpc(st, "external.setFullAccess", &json!({"allow": false})).await.unwrap();
+    assert_eq!(off["allowFullAccess"], false, "turning it off needs no confirmation");
+    rpc(st, "external.disable", &json!({})).await.unwrap();
+    let closed = rpc(st, "external.setFullAccess", &json!({"allow": true, "confirm": true})).await.unwrap_err();
+    assert_eq!((closed.1.code.as_str(), closed.1.message.as_str()), ("conflict", "Turn the Bitbots MCP on first."));
+    let direct = crate::dispatch(st, "settings.set", json!({"key": ALLOW_FULL_ACCESS, "value": true})).await.unwrap_err();
+    assert_eq!(direct.1.code, "invalid_argument", "the switch is not a plain setting");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn disabling_the_mcp_turns_full_access_off() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    allow_full_access(st).await;
+    assert_eq!(status(st)["allowFullAccess"], true);
+    rpc(st, "external.disable", &json!({})).await.unwrap();
+    assert_eq!(st.db.settings().unwrap()[ALLOW_FULL_ACCESS], false, "the stored switch is off");
+    let again = rpc(st, "external.enable", &json!({"tier": "operator", "confirm": true})).await.unwrap();
+    assert_eq!(again["allowFullAccess"], false, "it does not survive a reconnect");
+    let (error, _) = tool(st, "update_bot", json!({"botId": c.agent, "approvalMode": "bypass"})).await;
+    assert!(error);
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn tool_list_offers_bypass_only_while_allowed() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let closed = route(st, "ext.tools.list", &json!({})).await.unwrap();
+    for name in ["create_bot", "update_bot"] { assert_eq!(approval_enum(&closed, name), ["ask", "auto"], "{name}"); }
+    allow_full_access(st).await;
+    let open = route(st, "ext.tools.list", &json!({})).await.unwrap();
+    for name in ["create_bot", "update_bot"] {
+        assert_eq!(approval_enum(&open, name), ["ask", "auto", "bypass"], "{name}");
+        let tool = open["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).unwrap();
+        assert!(tool["inputSchema"]["properties"]["approvalMode"]["description"].as_str().unwrap().contains("bypass is Full access: the bot acts without asking."));
+    }
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn update_bot_refuses_owner_only_fields_and_a_locked_bot() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    for key in ["customArgs", "customEnv", "locked", "systemRole", "leader", "archived"] {
+        let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "name": "Sneaky", key: json!("x")})).await;
+        assert!(error && message.as_str().unwrap() == format!("update_bot can't change {key}; that stays with the owner in Bitbots."), "{key}: {message}");
+    }
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["name"], "Scout", "nothing was written");
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "customEnv": {}, "customArgs": []})).await;
+    assert!(error && message.as_str().unwrap().contains("customEnv, customArgs") || message.as_str().unwrap().contains("customArgs, customEnv"), "{message}");
+    crate::dispatch(st, "agent.lock.set", json!({"agentId": c.agent, "locked": true})).await.unwrap();
+    for change in [json!({"name": "Frozen"}), json!({"role": "CTO"}), json!({"tags": ["x"]})] {
+        let mut args = change;
+        args["botId"] = json!(c.agent);
+        let (error, message) = tool(st, "update_bot", args).await;
+        assert!(error && message.as_str().unwrap().contains("locked"), "{message}");
+    }
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["name"], "Scout");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn update_bot_needs_the_operator_level() {
+    let c = fixture("viewer", false).await;
+    let st = &c.st;
+    assert!(!tool_names(st).await.contains(&"update_bot".to_owned()));
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "name": "X"})).await;
+    assert!(error && message.as_str().unwrap().contains("needs the Operator level"), "{message}");
+    rpc(st, "external.setTier", &json!({"tier": "chat"})).await.unwrap();
+    assert!(!tool_names(st).await.contains(&"update_bot".to_owned()));
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "name": "X"})).await;
+    assert!(error && message.as_str().unwrap().contains("needs the Operator level"), "{message}");
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["name"], "Scout");
+    rpc(st, "external.setTier", &json!({"tier": "operator"})).await.unwrap();
+    assert!(tool_names(st).await.contains(&"update_bot".to_owned()));
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn status_reports_allow_full_access() {
+    let mut c = fixture("operator", false).await;
+    let st = &c.st;
+    assert_eq!(rpc(st, "external.status", &json!({})).await.unwrap()["allowFullAccess"], false);
+    allow_full_access(st).await;
+    assert_eq!(rpc(st, "external.status", &json!({})).await.unwrap()["allowFullAccess"], true);
+    let event = loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), c.events.recv()).await.unwrap().unwrap();
+        if event.event_type == "external.changed" && event.payload["allowFullAccess"] == true { break event; }
+    };
+    assert_eq!(event.payload["enabled"], true, "the change event carries the switch");
+    rpc(st, "external.disable", &json!({})).await.unwrap();
+    assert_eq!(rpc(st, "external.status", &json!({})).await.unwrap()["allowFullAccess"], false, "false while the MCP is off");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
 #[tokio::test]
 async fn external_results_never_contain_the_token_or_env_values() {
     let c = fixture("operator", false).await;

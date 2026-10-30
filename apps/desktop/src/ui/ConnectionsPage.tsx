@@ -3,7 +3,7 @@
 // page only turns it on, picks the level and shows the command that connects a client. The key never reaches
 // the UI.
 import { useEffect, useState } from 'react'
-import { Check, Copy, Eye, MessageSquare, Wrench } from 'lucide-react'
+import { Check, Copy, Eye, MessageSquare, ShieldAlert, Wrench } from 'lucide-react'
 import { listenForDaemonEvents, rpc } from '../tauri'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
@@ -19,12 +19,14 @@ export type ExternalStatus = {
   command: string | null
   lastCallAt: string | null
   lastClient: string | null
+  /** Whether update_bot and create_bot may set a bot to Full access (owner's switch, off by default). */
+  allowFullAccess: boolean
 }
 
 const TIERS: Array<{ value: ExternalTier; name: string; sentence: string; Icon: typeof Eye }> = [
   { value: 'viewer', name: 'View', sentence: 'Sees your bots, projects, conversations and how long turns take. Changes nothing.', Icon: Eye },
   { value: 'chat', name: 'Chat', sentence: 'Also messages, steers and stops bots, and starts conversations.', Icon: MessageSquare },
-  { value: 'operator', name: 'Operator', sentence: 'Also creates bots, answers approvals and starts work in a new git worktree.', Icon: Wrench },
+  { value: 'operator', name: 'Operator', sentence: 'Also creates and edits bots, answers approvals and starts work in a new git worktree.', Icon: Wrench },
 ]
 
 const text = (value: unknown) => typeof value === 'string' && value ? value : null
@@ -35,7 +37,7 @@ export function normalizeExternalStatus(raw: unknown): ExternalStatus | null {
   const item = raw as Record<string, unknown>
   if (typeof item.enabled !== 'boolean') return null
   const tier = TIERS.some((choice) => choice.value === item.tier) ? item.tier as ExternalTier : 'chat'
-  return { enabled: item.enabled, tier, endpointPath: text(item.endpointPath), bridgePath: text(item.bridgePath), command: text(item.command), lastCallAt: text(item.lastCallAt), lastClient: text(item.lastClient) }
+  return { enabled: item.enabled, tier, endpointPath: text(item.endpointPath), bridgePath: text(item.bridgePath), command: text(item.command), lastCallAt: text(item.lastCallAt), lastClient: text(item.lastClient), allowFullAccess: item.enabled && item.allowFullAccess === true }
 }
 
 /** "just now", "5 min ago", "3 h ago", or the date. */
@@ -74,6 +76,7 @@ function TierChoices({ value, disabled, onPick }: { value: ExternalTier; disable
 export function ConnectionsPage({ connected }: { connected: boolean }) {
   const [status, setStatus] = useState<ExternalStatus | null>(null)
   const [consent, setConsent] = useState<ExternalTier | null>(null)
+  const [fullConsent, setFullConsent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -108,6 +111,7 @@ export function ConnectionsPage({ connected }: { connected: boolean }) {
     } finally { setBusy(false) }
   }
   const enable = async (tier: ExternalTier) => { if (await run('external.enable', { tier, confirm: true })) setConsent(null) }
+  const allowFull = async () => { if (await run('external.setFullAccess', { allow: true, confirm: true }, 'Outside sessions can now give bots Full access.')) setFullConsent(false) }
   const copy = async () => {
     if (!status?.command) return
     try { await navigator.clipboard.writeText(status.command); setCopied(true); window.setTimeout(() => setCopied(false), 1600) } catch { setProblem('The command could not be copied. Select it and copy it yourself.') }
@@ -124,6 +128,10 @@ export function ConnectionsPage({ connected }: { connected: boolean }) {
         <SettingsRow stacked label="What they may do">
           <TierChoices value={status.tier} disabled={busy} onPick={(tier) => { if (tier !== status.tier) void run('external.setTier', { tier }) }} />
         </SettingsRow>
+        {/* 30 October 2026: an Operator session may edit bots; giving one Full access stays behind this switch. */}
+        {status.tier === 'operator' && <SettingsRow label="Let them give bots Full access" hint="A bot on Full access runs commands and edits files without asking you. Turning the MCP off turns this off too.">
+          <button type="button" className={`toggle ${status.allowFullAccess ? 'on' : ''}`} role="switch" aria-label="Let outside sessions give bots Full access" aria-checked={status.allowFullAccess} disabled={busy} onClick={() => status.allowFullAccess ? void run('external.setFullAccess', { allow: false }, 'Outside sessions can no longer give bots Full access.') : setFullConsent(true)}><i /></button>
+        </SettingsRow>}
         <SettingsRow stacked label="Connect Claude Code" detail={status.command ? 'Run this once in a terminal. Claude Code then lists Bitbots under /mcp.' : 'The connection program is still being prepared. Check again in a moment.'}>
           {status.command && <div className="connect-command">
             <code>{status.command}</code>
@@ -139,7 +147,23 @@ export function ConnectionsPage({ connected }: { connected: boolean }) {
     {notice && <p className="backup-done settings-row-note" role="status">{notice}</p>}
     {problem && <p className="memory-problem settings-row-note" role="alert">{problem}</p>}
     {consent && <ConnectConsentDialog tier={consent} busy={busy} onPick={setConsent} onCancel={() => setConsent(null)} onConfirm={() => void enable(consent)} />}
+    {fullConsent && <FullAccessConsentDialog busy={busy} onCancel={() => setFullConsent(false)} onConfirm={() => void allowFull()} />}
   </>
+}
+
+function FullAccessConsentDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const entered = useDialogEntered()
+  const { ref, close } = useDialogAccessibility(onCancel, () => !busy)
+  return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
+    <section ref={ref} className="blob-dialog connect-consent full-access-consent" role="dialog" aria-modal="true" aria-labelledby="full-access-consent-title" tabIndex={-1}>
+      <h2 id="full-access-consent-title"><ShieldAlert size={18} aria-hidden="true" />Let outside sessions give bots Full access?</h2>
+      <p>A connected session such as Claude Code could then switch any unlocked bot to Full access, and that bot would run commands and edit files without asking you. Lock a bot to keep its settings as they are. Turning the MCP off turns this off too.</p>
+      <div className="blob-dialog-actions">
+        <button type="button" className="secondary-button" data-dialog-initial-focus="" disabled={busy} onClick={close}>Cancel</button>
+        <button type="button" className="secondary-button danger-button" disabled={busy} onClick={onConfirm}>{busy ? 'Allowing…' : 'Allow Full access'}</button>
+      </div>
+    </section>
+  </div>
 }
 
 function ConnectConsentDialog({ tier, busy, onPick, onCancel, onConfirm }: { tier: ExternalTier; busy: boolean; onPick: (tier: ExternalTier) => void; onCancel: () => void; onConfirm: () => void }) {

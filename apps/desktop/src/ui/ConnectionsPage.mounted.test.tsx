@@ -100,6 +100,36 @@ describe('Bitbots MCP settings', () => {
     expect(view.querySelector('.connect-command')).toBeNull()
   })
 
+  it('offers Full access only at the Operator level, after a confirmation, and turns it off in one click', async () => {
+    const operator = { ...off, enabled: true, tier: 'operator' }
+    let current: Record<string, unknown> = { ...operator, allowFullAccess: false }
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'external.status') return current
+      if (method === 'external.setFullAccess') { current = { ...current, allowFullAccess: params.allow === true }; return current }
+      if (method === 'external.setTier') { current = { ...current, tier: params.tier }; return current }
+      throw new Error(`unexpected ${method}`)
+    })
+    const view = await mount(<ConnectionsPage connected />)
+    const full = () => view.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Let outside sessions give bots Full access"]')
+    expect(full()!.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { full()!.click() }); await settle()
+    // Nothing changes until the owner confirms.
+    expect(rpc).not.toHaveBeenCalledWith('external.setFullAccess', expect.anything())
+    const allow = [...document.querySelectorAll<HTMLButtonElement>('.full-access-consent button')].find((button) => button.textContent === 'Allow Full access')!
+    await act(async () => { allow.click() }); await settle()
+    expect(rpc).toHaveBeenCalledWith('external.setFullAccess', { allow: true, confirm: true })
+    expect(document.querySelector('.full-access-consent')).toBeNull()
+    expect(full()!.getAttribute('aria-checked')).toBe('true')
+    await act(async () => { full()!.click() }); await settle()
+    expect(rpc).toHaveBeenLastCalledWith('external.setFullAccess', { allow: false })
+    expect(full()!.getAttribute('aria-checked')).toBe('false')
+    const chat = [...view.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((choice) => choice.textContent?.includes('Chat'))!
+    await act(async () => { chat.click() }); await settle()
+    expect(full()).toBeNull()
+    // A status from a daemon that is off never reports Full access as allowed.
+    expect(normalizeExternalStatus({ ...off, allowFullAccess: true })?.allowFullAccess).toBe(false)
+  })
+
   it('shows a plain problem when the daemon refuses', async () => {
     rpc.mockImplementation(async (method: string) => {
       if (method === 'external.status') return off

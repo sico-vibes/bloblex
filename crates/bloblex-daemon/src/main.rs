@@ -865,7 +865,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
     match method {
         "project.list" | "project.create" | "project.update" | "project.delete" | "agent.team.update" | "agent.conversation" | "agent.conversation.create" | "agent.conversations" => team::team_rpc(st, method, &p).await,
         "outside.status" | "outside.preview" | "outside.enable" | "outside.disable" | "outside.sessions" => outside::rpc(st, method, &p).await,
-        "external.status" | "external.enable" | "external.disable" | "external.setTier" | "external.rotate" => external::rpc(st, method, &p).await,
+        "external.status" | "external.enable" | "external.disable" | "external.setTier" | "external.setFullAccess" | "external.rotate" => external::rpc(st, method, &p).await,
         "automation.create" | "automation.list" | "automation.get" | "automation.update" | "automation.pause" | "automation.resume" | "automation.delete" | "automation.run_now" | "automation.runs" | "automation.preview" => automations::rpc(st, method, &p).await,
         "task.create" | "task.list" | "task.get" | "task.update" | "task.dispatch" | "task.unassign" | "task.reorder" | "task.cancel" | "task.stop" | "task.review" | "task.runs" | "task.image" => tasks::rpc(st, method, &p).await,
         "delegation.list" | "delegation.cancel" | "delegation.cancelGroup" => delegations::rpc(st, method, &p).await,

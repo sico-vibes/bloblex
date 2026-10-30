@@ -33,6 +33,8 @@ use std::{
 pub const ENABLED: &str = "mcp.external.enabled";
 /// The stored level. Not settable through `settings.set`.
 pub const TIER: &str = "mcp.external.tier";
+/// The owner's switch for Full access (`bypass`) through the MCP. Not settable through `settings.set`.
+pub const ALLOW_FULL_ACCESS: &str = "mcp.external.allowFullAccess";
 /// The endpoint file's name inside the data folder.
 const ENDPOINT_FILE: &str = "mcp-external.json";
 /// The bridge copy's name inside the data folder.
@@ -119,6 +121,11 @@ impl Tier {
 /// Whether the owner has switched the Bitbots MCP on.
 pub fn enabled(st: &AppState) -> bool {
     st.db.settings().ok().is_some_and(|settings| settings[ENABLED] == true)
+}
+
+/// Whether outside sessions may give bots Full access: the owner's switch, and only while the MCP is on.
+fn full_access_allowed(st: &AppState) -> bool {
+    st.db.settings().ok().is_some_and(|settings| settings[ENABLED] == true && settings[ALLOW_FULL_ACCESS] == true)
 }
 
 fn tier_of(st: &AppState) -> Tier {
@@ -226,6 +233,7 @@ fn status(st: &AppState) -> Value {
     json!({
         "enabled": on,
         "tier": tier_of(st).as_str(),
+        "allowFullAccess": full_access_allowed(st),
         "endpointPath": endpoint.map(|path| path.display().to_string()),
         "bridgePath": bridge.map(|path| path.display().to_string()),
         "command": command,
@@ -271,7 +279,16 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
             st.external.set_token(None);
             remove_endpoint(st);
             st.external.reset_seen();
+            store(st, ALLOW_FULL_ACCESS, json!(false))?;
             store(st, ENABLED, json!(false))?;
+            announce(st).await;
+            Ok(status(st))
+        }
+        "external.setFullAccess" => {
+            let allow = p["allow"].as_bool().ok_or_else(|| derr("invalid_argument", "allow is required", StatusCode::BAD_REQUEST))?;
+            if allow && p["confirm"] != true { return Err(derr("invalid_argument", "Confirm letting outside sessions give bots Full access first.", StatusCode::BAD_REQUEST)); }
+            if !enabled(st) { return Err(derr("conflict", "Turn the Bitbots MCP on first.", StatusCode::CONFLICT)); }
+            store(st, ALLOW_FULL_ACCESS, json!(allow))?;
             announce(st).await;
             Ok(status(st))
         }
@@ -327,7 +344,7 @@ pub async fn route(st: &AppState, method: &str, p: &Value) -> Result<Value, Disp
         }
         "ext.tools.list" => {
             touch(st, false).await;
-            Ok(json!({"tools": tool_list(tier_of(st))}))
+            Ok(json!({"tools": tool_list(tier_of(st), full_access_allowed(st))}))
         }
         "ext.tools.call" => {
             touch(st, false).await;
@@ -384,13 +401,36 @@ fn catalog() -> Vec<(Tier, Value)> {
         entry(Chat, "steer", "Sends extra guidance to the turn that is running now, without stopping it.", schema(json!({"sessionId": id("The conversation."), "text": id("The guidance.")}), &["sessionId", "text"])),
         entry(Chat, "stop_turn", "Stops the turn that is running in a conversation.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
         entry(Operator, "create_bot", "Creates a bot. Use list_runtimes for the runtime and model; the bot works in projectPath. Its permission mode is ask unless you pass auto.", schema(json!({"name": id("The bot's name, up to 60 characters."), "runtimeId": id("From list_runtimes."), "model": id("A model id from list_runtimes."), "effort": id("An effort the model offers."), "projectPath": id("The folder the bot works in."), "role": id("A short role, up to 40 characters."), "approvalMode": {"type": "string", "enum": ["ask", "auto"], "description": "How the bot asks before acting (default ask)."}}), &["name", "runtimeId", "model", "projectPath"])),
+        entry(Operator, "update_bot", "Changes a bot's settings. Pass only what changes. Use list_runtimes for runtimes, models and efforts. A locked bot can't be changed.", schema(json!({
+            "botId": id("The bot, from list_bots."),
+            "name": {"type": "string", "maxLength": 60, "description": "The bot's name."},
+            "role": {"type": "string", "maxLength": 40, "description": "A short role; an empty text clears it."},
+            "description": id("What the bot is for."),
+            "instructions": {"type": "string", "maxLength": 20000, "description": "The bot's standing instructions."},
+            "color": id("The bot's colour."),
+            "runtimeId": id("From list_runtimes."),
+            "model": id("A model id from list_runtimes."),
+            "effort": id("An effort the model offers."),
+            "serviceTier": {"type": ["string", "null"], "description": "A speed tier the model offers, or null for the default."},
+            "approvalMode": {"type": "string", "enum": ["ask", "auto"], "description": "How the bot asks before acting."},
+            "projectPath": {"type": ["string", "null"], "description": "The folder the bot works in, or null for no default project."},
+            "tags": {"type": "array", "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 24}, "description": "Routing tags; they replace the current set."},
+            "hidden": {"type": "boolean", "description": "Hide the bot from the sidebar."},
+            "notificationLevel": {"type": ["string", "null"], "description": "The bot's notification level, or null for the default."},
+        }), &["botId"])),
         entry(Operator, "answer_approval", "Allows or denies one waiting approval from list_approvals.", schema(json!({"approvalId": id("From list_approvals."), "decision": {"type": "string", "enum": ["allow", "deny"]}}), &["approvalId", "decision"])),
     ]
 }
 
 /// The tools a level may see. `worktree` on `send_message` needs the Operator level, so it is not offered below it.
-fn tool_list(tier: Tier) -> Vec<Value> {
+/// `bypass` (Full access) is offered on `approvalMode` only while the owner's switch is on.
+fn tool_list(tier: Tier, full_access: bool) -> Vec<Value> {
     catalog().into_iter().filter(|(needs, _)| *needs <= tier).map(|(_, mut tool)| {
+        if full_access && matches!(tool["name"].as_str(), Some("create_bot" | "update_bot")) {
+            let mode = &mut tool["inputSchema"]["properties"]["approvalMode"];
+            mode["enum"] = json!(["ask", "auto", "bypass"]);
+            mode["description"] = json!(format!("{} bypass is Full access: the bot acts without asking.", mode["description"].as_str().unwrap_or("")));
+        }
         if tool["name"] == "send_message" && tier == Tier::Operator {
             tool["inputSchema"]["properties"]["worktree"] = json!({"type": "boolean", "description": "For a new conversation in a git project: work in a new linked git worktree and branch, so it cannot clash with the owner's working folder."});
             tool["description"] = json!(format!("{} With worktree: true the new conversation starts in its own git worktree.", tool["description"].as_str().unwrap_or("")));
@@ -443,6 +483,7 @@ async fn call_tool(st: &AppState, tier: Tier, name: &str, args: &Value) -> ToolR
         "steer" => steer(st, args).await,
         "stop_turn" => stop_turn(st, args).await,
         "create_bot" => create_bot(st, args).await,
+        "update_bot" => update_bot(st, args).await,
         "answer_approval" => answer_approval(st, args).await,
         _ => Err(format!("There is no tool called {name}.")),
     };
@@ -904,34 +945,124 @@ async fn stop_turn(st: &AppState, args: &Value) -> ToolResult {
 // ---------------------------------------------------------------------------
 // Operator tools
 
-async fn create_bot(st: &AppState, args: &Value) -> ToolResult {
-    let name = text_arg(args, "name").ok_or("name is required.")?;
-    let runtime_id = text_arg(args, "runtimeId").ok_or("runtimeId is required.")?;
-    let model = text_arg(args, "model").ok_or("model is required.")?;
-    let project = text_arg(args, "projectPath").ok_or("projectPath is required.")?;
-    let mode = text_arg(args, "approvalMode").unwrap_or("ask");
-    if !matches!(mode, "ask" | "auto") { return Err("approvalMode must be ask or auto.".to_owned()); }
-    if !Path::new(project).is_dir() { return Err("projectPath must be an existing folder.".to_owned()); }
-    let mut fields = json!({"name": name, "runtimeId": runtime_id, "model": model, "approvalMode": mode});
-    if let Some(effort) = text_arg(args, "effort") { fields["thinking"] = json!(effort); }
-    if let Some(role) = text_arg(args, "role") { fields["role"] = json!(role); }
-    // The bot's project: the registered one at that folder, or a new one named after it.
+/// An approval mode the MCP may set: `bypass` (Full access) only while the owner's switch is on.
+fn check_mode(st: &AppState, mode: &str) -> Result<(), String> {
+    match mode {
+        "ask" | "auto" => Ok(()),
+        "bypass" if full_access_allowed(st) => Ok(()),
+        "bypass" => Err("Full access needs the owner's switch in Bitbots › Settings › Connections.".to_owned()),
+        _ => Err("approvalMode must be ask or auto.".to_owned()),
+    }
+}
+
+/// The project at a folder: the registered one, or a new one named after the folder.
+async fn project_for_folder(st: &AppState, project: &str) -> Result<String, String> {
     let wanted = crate::worktree::normalize(Path::new(project));
     let known = st.db.project_list().unwrap_or_default().into_iter().find(|row| row["path"].as_str().is_some_and(|path| crate::worktree::normalize(Path::new(path)) == wanted));
-    let project_id = match known {
+    Ok(match known {
         Some(row) => row["id"].as_str().unwrap_or("").to_owned(),
         None => {
             let label = Path::new(project).file_name().and_then(|folder| folder.to_str()).filter(|folder| !folder.is_empty()).unwrap_or("Project").to_owned();
             let made = crate::team::team_rpc(st, "project.create", &json!({"name": label, "path": project})).await.map_err(fail)?;
             made["project"]["id"].as_str().unwrap_or("").to_owned()
         }
-    };
+    })
+}
+
+async fn create_bot(st: &AppState, args: &Value) -> ToolResult {
+    let name = text_arg(args, "name").ok_or("name is required.")?;
+    let runtime_id = text_arg(args, "runtimeId").ok_or("runtimeId is required.")?;
+    let model = text_arg(args, "model").ok_or("model is required.")?;
+    let project = text_arg(args, "projectPath").ok_or("projectPath is required.")?;
+    let mode = text_arg(args, "approvalMode").unwrap_or("ask");
+    check_mode(st, mode)?;
+    if !Path::new(project).is_dir() { return Err("projectPath must be an existing folder.".to_owned()); }
+    let mut fields = json!({"name": name, "runtimeId": runtime_id, "model": model, "approvalMode": mode});
+    if let Some(effort) = text_arg(args, "effort") { fields["thinking"] = json!(effort); }
+    if let Some(role) = text_arg(args, "role") { fields["role"] = json!(role); }
+    let project_id = project_for_folder(st, project).await?;
     let created = crate::agent_create_from_rpc(st, fields).await.map_err(fail)?;
     let agent_id = created["id"].as_str().unwrap_or("").to_owned();
     if !project_id.is_empty() {
         crate::team::team_rpc(st, "agent.team.update", &json!({"agentId": agent_id, "projectId": project_id})).await.map_err(fail)?;
     }
     let agent = st.db.agent_get(&agent_id).map_err(|error| fail(agent_error(error)))?;
+    let runtimes = st.runtimes.read().await.clone();
+    Ok(bot_view(st, &agent, &runtimes, &HashSet::new()))
+}
+
+/// The settings `update_bot` may change (`botId` names the bot).
+const UPDATE_KEYS: [&str; 15] = ["botId", "name", "role", "description", "instructions", "color", "runtimeId", "model", "effort", "serviceTier", "approvalMode", "projectPath", "tags", "hidden", "notificationLevel"];
+
+/// A text setting that is absent, or a string of at most `max` characters.
+fn text_field<'a>(args: &'a Value, key: &str, max: usize, allow_empty: bool) -> Result<Option<&'a str>, String> {
+    let Some(value) = args.get(key) else { return Ok(None) };
+    let text = value.as_str().map(str::trim).ok_or_else(|| format!("{key} must be text."))?;
+    if text.is_empty() && !allow_empty { return Err(format!("{key} can't be empty.")); }
+    if text.chars().count() > max { return Err(format!("{key} can be {max} characters at most.")); }
+    Ok(Some(text))
+}
+
+/// A text setting that may also be null (which clears it).
+fn text_or_null(args: &Value, key: &str) -> Result<Option<Value>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(Value::Null)),
+        Some(_) => Ok(text_field(args, key, 200, false)?.map(|text| json!(text))),
+    }
+}
+
+async fn update_bot(st: &AppState, args: &Value) -> ToolResult {
+    let unknown: Vec<&str> = args.as_object().map(|object| object.keys().map(String::as_str).filter(|key| !UPDATE_KEYS.contains(key)).collect()).unwrap_or_default();
+    if !unknown.is_empty() { return Err(format!("update_bot can't change {}; that stays with the owner in Bitbots.", unknown.join(", "))); }
+    let id = text_arg(args, "botId").ok_or("botId is required.")?;
+    let agent = st.db.agent_get(id).map_err(|_| "That bot was not found.".to_owned())?;
+    if args.as_object().is_none_or(|object| object.len() < 2) { return Err("Pass at least one setting to change.".to_owned()); }
+    if crate::bot_is_locked(&agent) { return Err(fail(crate::locked_bot_error())); }
+    // Validate every field before anything is written.
+    let mut fields = json!({"agentId": id});
+    let mut team = json!({"agentId": id});
+    if let Some(name) = text_field(args, "name", 60, false)? { fields["name"] = json!(name); }
+    if let Some(role) = text_field(args, "role", 40, true)? { team["role"] = json!(role); }
+    if let Some(description) = args.get("description") { fields["description"] = json!(description.as_str().ok_or("description must be text.")?); }
+    if let Some(instructions) = text_field(args, "instructions", 20_000, true)? { fields["instructions"] = json!(instructions); }
+    for key in ["color", "runtimeId", "model"] {
+        if let Some(text) = text_field(args, key, 200, false)? { fields[key] = json!(text); }
+    }
+    if let Some(effort) = text_field(args, "effort", 200, false)? { fields["thinking"] = json!(effort); }
+    for key in ["serviceTier", "notificationLevel"] {
+        if let Some(value) = text_or_null(args, key)? { fields[key] = value; }
+    }
+    if let Some(mode) = text_field(args, "approvalMode", 20, false)? { check_mode(st, mode)?; fields["approvalMode"] = json!(mode); }
+    if let Some(tags) = args.get("tags") {
+        let items = tags.as_array().filter(|items| items.len() <= 8).ok_or("tags must be a list of up to 8 words.")?;
+        if !items.iter().all(|tag| tag.as_str().map(str::trim).is_some_and(|tag| !tag.is_empty() && tag.chars().count() <= 24)) { return Err("Each tag must be 1 to 24 characters.".to_owned()); }
+        team["tags"] = tags.clone();
+    }
+    if let Some(hidden) = args.get("hidden") { team["hidden"] = json!(hidden.as_bool().ok_or("hidden must be true or false.")?); }
+    let folder = match args.get("projectPath") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(_) => {
+            let folder = text_field(args, "projectPath", 1000, false)?.unwrap_or("");
+            if !Path::new(folder).is_dir() { return Err("projectPath must be an existing folder.".to_owned()); }
+            Some(Some(folder))
+        }
+    };
+    if agent["systemRole"] == "manager" && matches!(folder, Some(Some(_))) { return Err("The Manager works across every project".to_owned()); }
+    // The coding-agent settings first (model and effort checks, the lock check and the change event apply); if that fails, nothing else is written.
+    if fields.as_object().is_some_and(|object| object.len() > 1) {
+        crate::dispatch(st, "agent.update", fields).await.map_err(fail)?;
+    }
+    match folder {
+        Some(Some(folder)) => { team["projectId"] = json!(project_for_folder(st, folder).await?); }
+        Some(None) => { team["projectId"] = Value::Null; }
+        None => {}
+    }
+    if team.as_object().is_some_and(|object| object.len() > 1) {
+        crate::dispatch(st, "agent.team.update", team).await.map_err(fail)?;
+    }
+    let agent = st.db.agent_get(id).map_err(|error| fail(agent_error(error)))?;
     let runtimes = st.runtimes.read().await.clone();
     Ok(bot_view(st, &agent, &runtimes, &HashSet::new()))
 }

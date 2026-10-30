@@ -702,6 +702,13 @@
       "params": null
     },
     {
+      "method": "external.setFullAccess",
+      "class": "never",
+      "minTier": null,
+      "why": "Whether an outside Claude Code session may give bots Full access is the owner's choice at the computer.",
+      "params": null
+    },
+    {
       "method": "external.rotate",
       "class": "never",
       "minTier": null,

@@ -14,6 +14,10 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 
 ## 2026-10-30 · Lanes · Working with an in-app bot through the MCP
 
+- **`.blob-dialog` wins over a new dialog's width.** `blobPage.css` loads late and sets `width: min(440px, …)`, so a one-class rule such as `.report-problem { width: … }` silently loses, and a row of buttons wraps. Write `.blob-dialog.report-problem`. Measure with `getBoundingClientRect` when a dialog looks narrow: the preview's viewport is 1280 wide even though screenshots are scaled to 800.
+- **The browser pane can show a stale frame while it is hidden.** A screenshot straight after an action may predate it, and hidden pages run on slow timers, so a click at old coordinates can miss. Check state through the DOM, or wait and take the screenshot again, before calling something a bug.
+- **A lane's stub tests can't prove a real agent reads context.** For a change to what the agent receives, run a throwaway daemon with its own `BLOBLEX_DB_PATH` and a real OpenCode free model, and plant a code word only the new path can deliver (`.bitbots.json`, a note on a reply). Remove `BITBOTS_HOOK_BRIDGE` and `BITBOTS_REMOTE_WEB_DIR` from its environment.
+- **`gh.available` only means the command runs.** Offer GitHub actions only when `login` is set too.
 - **A bot's worktree folder can stay locked after its turn.** `git worktree remove --force` emptied and unregistered Sona's worktree but reported "Permission denied" on the folder itself, and no process named it on its command line. Leave the empty folder for the owner; don't kill processes to free it.
 - **Check before deleting a lane worktree that holds uncommitted work.** A bot's changes stay uncommitted, so its branch shows nothing. Compare each `git status` file with `main` (ignore line endings), and check its branch has no commits of its own.
 - **Stopping a Claude bot:** steering is unavailable, so use `stop_turn` then `send_message`. A message sent at once can fail with "Claude process exited" while the old process shuts down; send it again.

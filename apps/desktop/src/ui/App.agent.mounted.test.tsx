@@ -939,6 +939,28 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.team-notice')).toBeNull()
   })
 
+  it('holds a message for when the usage limit resets, and sends normally once it has (Phase 1B)', async () => {
+    const limited = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'limited', limitedUntil: new Date(Date.now() + 3_600_000).toISOString(), updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Hello' }] })
+    configure(snapshot({ sessions: [limited, ...sessions.filter((item) => item.id !== 'session-claude')] }))
+    const base = h.rpc.getMockImplementation()!
+    h.rpc.mockImplementation(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === 'session.queue.list') return { items: [], paused: false }
+      if (method === 'session.queue.add') return { item: { id: 'q1', sessionId: params.sessionId, text: params.text, kind: 'send_later', dueAt: limited.limitedUntil, status: 'queued', error: null, position: 1, whenLimitResets: true } }
+      return base(method, params)
+    })
+    const view = startApp()
+    await view.settle()
+    const send = () => view.host.querySelector<HTMLButtonElement>('button.send-button:not(.cancel)')
+    await typeInto(view.host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Claude"]'), 'Carry on after the reset')
+    expect(send()?.getAttribute('aria-label')).toBe('Send when the limit resets')
+    await click(send())
+    await view.settle()
+    const queued = h.rpc.mock.calls.find(([method]) => method === 'session.queue.add')?.[1] as Record<string, unknown>
+    expect(queued).toMatchObject({ sessionId: 'session-claude', text: 'Carry on after the reset', whenLimitResets: true })
+    expect(queued.dueAt, 'the daemon owns the time').toBeUndefined()
+    expect(h.rpc.mock.calls.some(([method]) => method === 'session.prompt'), 'not sent into the limit').toBe(false)
+  })
+
   it('queues a message while the agent works, keeps Stop separate and lists the queue', async () => {
     const working = session({ id: 'session-claude', runtimeId: 'runtime-claude', agentId: 'agent-claude', title: 'Claude', state: 'working', updatedAt: '2026-10-02T03:00:00.000Z', messages: [{ id: 'u1', role: 'user', content: 'Build the page.' }] })
     configure(snapshot({ sessions: [working, ...sessions.filter((item) => item.id !== 'session-claude')] }))

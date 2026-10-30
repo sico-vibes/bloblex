@@ -65,6 +65,8 @@ export interface QueuedPrompt extends JsonRecord {
   text: string
   attachments?: Array<{ name: string; path: string }>
   kind: 'user' | 'send_later' | 'retry'
+  /** Phase 1B: goes out when the conversation's usage limit resets. */
+  whenLimitResets?: boolean
   dueAt: string | null
   status: 'queued' | 'sending' | 'failed'
   error: string | null
@@ -313,6 +315,10 @@ export interface Session extends JsonRecord {
   model?: string
   modelLock?: SessionModelLock | null
   link?: SessionLink | null
+  /** When its usage limit resets, while it is waiting for one. */
+  limitedUntil?: string | null
+  /** Phase 1B: the comparison this conversation belongs to. */
+  fanoutId?: string | null
   /** The project the conversation was started for (daemon-stamped; absent on older rows). */
   projectId?: string | null
   /** Phase 1A: the project's name, sent with the session (null for no project). */

@@ -1,0 +1,17 @@
+/* Phase 1B: the prompt stash in the composer. */
+.stash-trigger { position: relative; }
+.stash-count { position: absolute; top: -2px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px; display: grid; place-items: center; color: var(--text-1); border-radius: 7px; background: var(--surface-overlay); box-shadow: 0 0 0 1px var(--line); font-size: 9px; font-weight: 600; line-height: 1; }
+.stash-menu { width: min(340px, calc(100vw - 32px)); min-width: 280px; max-width: min(340px, calc(100vw - 32px)); left: 0; right: auto; }
+.stash-save { width: 100%; }
+.stash-empty { margin: 0; padding: 6px 10px 8px; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
+.stash-list { max-height: 260px; overflow-y: auto; display: grid; gap: 2px; }
+.stash-row { min-width: 0; display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.stash-row:hover, .stash-row:focus-within { background: var(--surface-subtle); }
+.stash-restore { min-width: 0; flex: 1; padding: 6px 8px; display: flex; align-items: flex-start; gap: 8px; color: inherit; text-align: left; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
+.stash-restore > svg { flex: none; margin-top: 2px; color: var(--text-3); }
+.stash-copy { min-width: 0; display: grid; gap: 2px; }
+.stash-text { display: -webkit-box; overflow: hidden; color: var(--text-1); font-size: var(--fs-sm); line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.stash-copy small { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--fs-2xs); }
+.stash-images { display: inline-flex; align-items: center; gap: 3px; }
+.stash-remove { flex: none; opacity: .75; }
+.stash-remove:hover, .stash-remove:focus-visible { opacity: 1; }

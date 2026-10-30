@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CircleAlert, CircleCheck, TriangleAlert } from 'lucide-react'
 import { rpc } from '../tauri'
-import { SettingsGroup } from './SettingsParts'
+import { ReportProblemDialog } from './ReportProblemDialog'
+import { SettingsGroup, SettingsRow } from './SettingsParts'
 
 export type HealthCheck = { id: string; area: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string; fix: { label: string; method: string; params?: Record<string, unknown> } | null }
 
@@ -19,6 +20,7 @@ export function HealthPage() {
   const [checks, setChecks] = useState<HealthCheck[] | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [fixing, setFixing] = useState<string | null>(null)
+  const [reporting, setReporting] = useState(false)
   const run = useCallback(() => {
     setProblem(null)
     return rpc<{ checks?: unknown[] }>('doctor.run', {})
@@ -45,5 +47,11 @@ export function HealthPage() {
         {check.fix && check.status !== 'ok' && <button type="button" className="ghost-button small" disabled={!!fixing} onClick={() => void fix(check)}>{fixing === check.id ? 'Working…' : check.fix.label}</button>}
       </li>)}</ul>
     </SettingsGroup>)}
+    <SettingsGroup title="Something still wrong?">
+      <SettingsRow label="Report a problem" hint="Drafts a GitHub issue with your versions and these results. You read and edit it first, and nothing is sent until you choose.">
+        <button type="button" className="secondary-button small" onClick={() => setReporting(true)}>Report a problem</button>
+      </SettingsRow>
+    </SettingsGroup>
+    {reporting && <ReportProblemDialog onClose={() => setReporting(false)} />}
   </div>
 }

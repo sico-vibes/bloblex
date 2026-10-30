@@ -78,6 +78,8 @@ const fixtureSkills: Array<Record<string, unknown>> = [
   { name: 'figma-to-react', description: 'Turn a Figma frame export into React components that follow DESIGN.md.', source: 'folder', sourcePath: null, contentSha256: 'c3', enabled: false, fileCount: 7, totalBytes: 64_000, importedAt: '2026-10-16T10:00:00Z', updatedAt: '2026-10-16T10:00:00Z', disabledFor: [], nativeFor: [] },
 ]
 const fixtureRuns: Record<string, Array<Record<string, unknown>>> = {}
+const fixtureFanouts: Array<{ id: string; title: string; text: string; projectId: string | null; projectName: string | null; createdAt: string; chosenSessionId: string | null; rows: Array<{ agentId: string; sessionId: string }> }> = []
+const fixtureStash: Array<{ id: string; text: string; attachments: Array<{ file: string; name: string }>; agentId: string | null; agentName: string | null; projectId: string | null; projectName: string | null; createdAt: string; updatedAt: string }> = []
 const fixtureExternal: { enabled: boolean; tier: string; lastCallAt: string | null; lastClient: string | null; allowFullAccess: boolean } = fixturePreset() === 'mcp' ? { enabled: true, tier: 'operator', lastCallAt: new Date(Date.now() - 4 * 60_000).toISOString(), lastClient: 'claude-code', allowFullAccess: false } : { enabled: false, tier: 'chat', lastCallAt: null, lastClient: null, allowFullAccess: false }
 const fixtureOutside = {
   enabled: fixturePreset() === 'outside',
@@ -754,6 +756,77 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
       return { status: status(), backupPath: 'C:/Users/you/.claude/settings.json.bitbots-backup-20261028-101500' } as T
     }
     if (method === 'outside.disable') { fixtureOutside.enabled = false; notifyFixtureDaemon('outside.sessions.changed', { sessions: [] }); return { status: status(), backupPath: null, problem: null } as T }
+  }
+  // Phase 1B: comparisons, the stash, new projects and issue reports.
+  if (method.startsWith('fanout.')) {
+    const nameOf = (id: string) => agents.find((item) => item.id === id)?.name ?? 'A removed bot'
+    const view = (record: typeof fixtureFanouts[number]) => {
+      const age = Date.now() - Date.parse(record.createdAt)
+      return { ...record, rows: record.rows.map((row, index) => {
+        const done = age > 2500 + index * 2500
+        return { agentId: row.agentId, agentName: nameOf(row.agentId), sessionId: row.sessionId, error: null, state: done ? 'idle' : 'working', reply: done ? `**${nameOf(row.agentId)}'s answer.**\n\nHere is how I would approach it:\n\n1. Read the code that's there.\n2. Change the smallest thing.\n3. Run the tests.` : null, durationMs: done ? 2500 + index * 2500 : null, tokens: done && index % 2 === 0 ? 1200 + index * 340 : null, worktree: record.projectId ? { path: `C:/work/.worktrees/${row.agentId}`, branch: `bitbots/compare-${index + 1}` } : null }
+      }) }
+    }
+    if (method === 'fanout.start') {
+      const ids = Array.isArray(params.agentIds) ? params.agentIds as string[] : []
+      if (ids.length < 2 || ids.length > 6) throw rpcError('invalid_argument', 'Choose 2 to 6 bots.')
+      const text = String(params.text ?? '')
+      const project = typeof params.projectId === 'string' ? projects.find((item) => item.id === params.projectId) : undefined
+      const record = { id: `fanout-${fixtureFanouts.length + 1}`, title: text.slice(0, 60), text, projectId: project?.id ?? null, projectName: project?.name ?? null, createdAt: new Date().toISOString(), chosenSessionId: null as string | null, rows: ids.map((agentId, index) => ({ agentId, sessionId: `session-compare-${fixtureFanouts.length + 1}-${index}` })) }
+      fixtureFanouts.unshift(record)
+      notifyFixtureDaemon('fanout.changed', { id: record.id })
+      return { fanout: view(record) } as T
+    }
+    if (method === 'fanout.list') return { fanouts: fixtureFanouts.map(view) } as T
+    const record = fixtureFanouts.find((item) => item.id === params.id)
+    if (!record) throw rpcError('not_found', 'That comparison no longer exists.')
+    if (method === 'fanout.get') return { fanout: view(record) } as T
+    if (method === 'fanout.pick') { record.chosenSessionId = typeof params.sessionId === 'string' ? params.sessionId : null; notifyFixtureDaemon('fanout.changed', { id: record.id }); return { fanout: view(record) } as T }
+    if (method === 'fanout.delete') { fixtureFanouts.splice(fixtureFanouts.indexOf(record), 1); notifyFixtureDaemon('fanout.changed', { id: record.id }); return { deleted: true } as T }
+  }
+  if (method.startsWith('stash.')) {
+    if (method === 'stash.list') return { items: fixtureStash } as T
+    if (method === 'stash.add') {
+      const text = String(params.text ?? '')
+      const parts = Array.isArray(params.attachments) ? params.attachments as Array<{ name?: string }> : []
+      if (!text && !parts.length) throw rpcError('invalid_argument', 'There is nothing to stash.')
+      const agent = agents.find((item) => item.id === params.agentId)
+      const project = projects.find((item) => item.id === params.projectId)
+      const item = { id: `stash-${Date.now()}`, text, attachments: parts.map((part, index) => ({ file: `${index}.png`, name: part.name ?? 'image.png' })), agentId: agent?.id ?? null, agentName: agent?.name ?? null, projectId: project?.id ?? null, projectName: project?.name ?? null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+      fixtureStash.unshift(item)
+      notifyFixtureDaemon('stash.changed', {})
+      return { item } as T
+    }
+    const index = fixtureStash.findIndex((item) => item.id === params.id)
+    if (index < 0) throw rpcError('not_found', 'That draft is no longer in the stash.')
+    if (method === 'stash.image') return { name: 'image.png', mediaType: 'image/png', dataUrl: '' } as T
+    const [item] = fixtureStash.splice(index, 1)
+    notifyFixtureDaemon('stash.changed', {})
+    if (method === 'stash.delete') return { deleted: true } as T
+    if (method === 'stash.restore') return { item: { text: item.text, attachments: item.attachments.map((part) => ({ path: `C:/Bitbots/stash-restored/${part.file}`, name: part.name })) } } as T
+  }
+  if (method === 'project.scaffold.status') return { git: true, gh: { available: true, login: 'preview-user' } } as T
+  if (method === 'project.scaffold') {
+    if (params.confirm !== true) throw rpcError('invalid_argument', 'Confirm creating the project first.')
+    const name = String(params.name ?? '').trim()
+    const path = `${String(params.parentPath ?? 'C:/work')}/${name}`
+    const project: Project = { id: `project-${projects.length + 1}`, name, path, sortOrder: projects.length, collapsed: false } as Project
+    projects = [...projects, project]
+    notifyFixtureDaemon('project.changed', { action: 'created', projectId: project.id })
+    const wantsGithub = !!params.github
+    return { project, githubUrl: wantsGithub ? `https://github.com/preview-user/${name}` : null, steps: [
+      { id: 'folder', status: 'done', detail: null }, { id: 'project', status: 'done', detail: null },
+      { id: 'git_init', status: params.git ? 'done' : 'skipped', detail: null }, { id: 'first_commit', status: params.git ? 'done' : 'skipped', detail: null },
+      { id: 'github', status: wantsGithub ? 'done' : 'skipped', detail: null },
+    ] } as T
+  }
+  if (method === 'diagnostics.issueDraft') {
+    const body = '## What happened\n\n\n## Version\n\nBitbots 0.1.0-beta.43 on Windows 11\n\n## Coding agents\n\n- claude 2.1\n- codex 0.9\n\n## Health check\n\nEverything passed.\n'
+    return { repo: 'sico-vibes/bloblex', title: '', body, url: 'https://github.com/sico-vibes/bloblex/issues/new', gh: { available: true, login: 'preview-user' } } as T
+  }
+  if (method === 'diagnostics.issuePost') {
+    if (params.confirm !== true) throw rpcError('invalid_argument', 'Confirm posting the issue first.')
+    return { url: 'https://github.com/sico-vibes/bloblex/issues/1' } as T
   }
   // Wave 14: the Bitbots MCP. `?preset=mcp` starts with it on and used a few minutes ago.
   if (method.startsWith('external.')) {

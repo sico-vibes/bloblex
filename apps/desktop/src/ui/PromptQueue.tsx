@@ -84,7 +84,7 @@ export function QueueBanner({ items, paused, sessionBusy, nowMs, disabled, onSen
               </span>
             : failed
             ? <span className="queue-meta danger" title={item.error ?? undefined}>{item.ambiguous ? 'May already have been sent' : item.error ?? 'Could not be sent'}</span>
-            : (scheduled || retry) && <span className="queue-meta">{retry ? 'retrying ' : ''}{item.lateBySecs && item.lateBySecs > 0 ? 'late' : describeDue(item.dueAt, nowMs)}</span>}
+            : (scheduled || retry) && <span className="queue-meta">{retry ? 'retrying ' : ''}{item.whenLimitResets ? 'when the limit resets' : item.lateBySecs && item.lateBySecs > 0 ? 'late' : describeDue(item.dueAt, nowMs)}</span>}
           <span className="queue-actions">
             {!failed && !retry && item.status === 'queued' && !editing && item.text && <button type="button" className="queue-icon" disabled={disabled} aria-label="Edit queued message" title="Edit" onClick={() => { setDraft(item.text); setEditing(item.id) }}><Pencil size={12} /></button>}
             {plainIndex > 0 && <button type="button" className="queue-icon" disabled={disabled} aria-label="Move up" title="Move up" onClick={() => move(item.id, -1)}><ChevronUp size={13} /></button>}

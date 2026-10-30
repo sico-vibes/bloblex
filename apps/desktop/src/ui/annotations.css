@@ -1,0 +1,20 @@
+/* Phase 1B: notes on parts of a bot's reply. */
+.annotate-pop { position: fixed; z-index: 60; }
+.annotate-pop.writing { width: min(300px, calc(100vw - 16px)); padding: 10px; display: grid; gap: 8px; border-radius: 10px; background: var(--surface-overlay); box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(0, 0, 0, .28); }
+.annotate-pop blockquote { margin: 0; padding-left: 8px; overflow: hidden; color: var(--text-3); border-left: 2px solid var(--line); font-size: var(--fs-xs); line-height: 1.4; }
+.annotate-pop textarea { width: 100%; padding: 7px 8px; resize: vertical; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: inherit; font-size: var(--fs-sm); }
+.annotate-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.annotate-open { height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-1); border: 0; border-radius: 8px; background: var(--surface-overlay); box-shadow: 0 0 0 1px var(--line), 0 6px 18px rgba(0, 0, 0, .24); font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.annotate-open:disabled { color: var(--text-3); cursor: default; }
+.annotation-tray { min-width: 0; margin: 0; padding: 0; display: grid; gap: 4px; list-style: none; }
+.annotation-chip { min-width: 0; padding: 5px 6px 5px 9px; display: flex; align-items: flex-start; gap: 7px; border-radius: 8px; background: var(--surface-subtle); font-size: var(--fs-xs); }
+.annotation-chip > svg { flex: none; margin-top: 2px; color: var(--text-3); }
+.annotation-chip-copy { min-width: 0; flex: 1; display: grid; gap: 1px; line-height: 1.35; }
+.annotation-chip-copy > span { overflow: hidden; color: var(--text-3); text-overflow: ellipsis; white-space: nowrap; }
+.annotation-chip-copy > strong { overflow-wrap: anywhere; color: var(--text-1); font-weight: 500; }
+.annotation-chip > button { flex: none; width: 20px; height: 20px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.annotation-chip > button:hover { color: var(--text-1); background: var(--surface-overlay); }
+.message-annotations { margin-bottom: 4px; display: grid; gap: 4px; }
+.message-annotation { min-width: 0; padding: 6px 9px; border-radius: 8px; background: var(--surface-subtle); font-size: var(--fs-xs); line-height: 1.4; }
+.message-annotation blockquote { margin: 0 0 2px; padding-left: 7px; overflow: hidden; color: var(--text-3); border-left: 2px solid var(--line); text-overflow: ellipsis; }
+.message-annotation p { margin: 0; overflow-wrap: anywhere; color: var(--text-1); }

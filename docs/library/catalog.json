@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "7c67f38",
-  "documentCount": 359,
+  "revision": "78f25a0",
+  "documentCount": 361,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1811,7 +1811,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "2ce379a373b606b670ba85f65470efce17f552d27d92b2cbd940183a3de2e554",
+      "sha256": "c7b060a1db955459c6958e05d4ed6af73afcb42ee1490be9e566fab686136117",
       "headings": [
         {
           "id": "update-commands",
@@ -1886,6 +1886,11 @@
         {
           "id": "wave-13-loop-guards-sharing-phone-catch-up-and-outside-sessions",
           "text": "Wave 13: loop guards, sharing, phone catch-up and outside sessions",
+          "level": 3
+        },
+        {
+          "id": "phase-1b-30-october-2026-compare-limit-reset-sends-stash-notes-new-projects-problem-reports",
+          "text": "Phase 1B (30 October 2026): compare, limit-reset sends, stash, notes, new projects, problem reports",
           "level": 3
         },
         {
@@ -3418,7 +3423,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "35ee0b5f6b75b6bac8c749502f5ea56d921f46c643e1ab99bd3b7ffcb8fea39e",
+      "sha256": "f1ad5b8ad3282208705ceb93e0435df7097a69ebdfbe588ddba9089d9457673c",
       "headings": [
         {
           "id": "release-command",
@@ -4072,6 +4077,56 @@
         {
           "id": "gates-run-from-dfx70-report-the-tail-of-each",
           "text": "Gates (run from D:\\fx70, report the tail of each)",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-1b-brief",
+      "source": "docs/history/wave15/phase-1b-brief.md",
+      "title": "Brief: Phase 1B, from Theo's T3 Code video (filtered for bots, desktop only)",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "e1b049e2efe5f0bb5c198571d5b0741382b815c756991431a78c999847e57f27",
+      "headings": [
+        {
+          "id": "1-fan-out-and-compare",
+          "text": "1. Fan-out and compare",
+          "level": 2
+        },
+        {
+          "id": "2-send-when-a-usage-limit-resets",
+          "text": "2. Send when a usage limit resets",
+          "level": 2
+        },
+        {
+          "id": "3-prompt-stash",
+          "text": "3. Prompt stash",
+          "level": 2
+        },
+        {
+          "id": "4-annotate-a-reply",
+          "text": "4. Annotate a reply",
+          "level": 2
+        },
+        {
+          "id": "5-create-a-new-project",
+          "text": "5. Create a new project",
+          "level": 2
+        },
+        {
+          "id": "6-report-a-problem",
+          "text": "6. Report a problem",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
           "level": 2
         },
         {
@@ -16614,6 +16669,36 @@
         {
           "id": "coming-next",
           "text": "Coming next",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "installation",
+          "text": "Installation",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/releases/0.1.0-beta.43",
+      "source": "docs/releases/0.1.0-beta.43.md",
+      "title": "Bitbots 0.1.0-beta.43",
+      "section": "Release notes",
+      "status": "Release note",
+      "sha256": "a3e47e8cb49e5f6a60b1449992e03c289cdb01f34417db8ad8ee22b10b54bd3a",
+      "headings": [
+        {
+          "id": "added",
+          "text": "Added",
+          "level": 2
+        },
+        {
+          "id": "changed",
+          "text": "Changed",
           "level": 2
         },
         {

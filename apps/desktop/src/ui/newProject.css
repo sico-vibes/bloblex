@@ -1,0 +1,35 @@
+/* Phase 1B: the new project dialog and the report a problem dialog. */
+.blob-dialog.new-project { width: min(480px, calc(100% - 32px)); }
+.new-project-field { display: grid; gap: 4px; }
+.new-project-field > span { color: var(--text-3); font-size: var(--fs-xs); }
+.new-project-field input { width: 100%; height: 34px; padding: 0 10px; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: inherit; font-size: var(--fs-sm); }
+.new-project-browse { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 7px; }
+.new-project-browse > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.new-project-check { display: flex; align-items: flex-start; gap: 8px; color: var(--text-1); font-size: var(--fs-sm); line-height: 1.35; cursor: pointer; }
+.new-project-check input { flex: none; margin: 2px 0 0; }
+.new-project-check small { display: block; margin-top: 1px; color: var(--text-3); font-size: var(--fs-xs); }
+.new-project-visibility { margin-left: 22px; display: flex; gap: 14px; font-size: var(--fs-sm); }
+.new-project-visibility label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-1); cursor: pointer; }
+.new-project-visibility input { margin: 0; }
+.blob-dialog p.new-project-error, .new-project-error { margin: 0; color: var(--status-danger-text); font-size: var(--fs-xs); line-height: 1.4; }
+.scaffold-plan { padding: 8px 10px; border-radius: 8px; background: var(--surface-subtle); color: var(--text-2); font-size: var(--fs-xs); line-height: 1.45; }
+.scaffold-plan strong { color: var(--text-1); font-weight: 500; }
+.scaffold-plan ol { margin: 3px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.scaffold-steps { margin: 0; padding: 0; display: grid; gap: 8px; list-style: none; }
+.scaffold-steps li { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-sm); line-height: 1.35; }
+.scaffold-steps li > svg { flex: none; margin-top: 1px; color: var(--text-3); }
+.scaffold-steps li[data-status="done"] > svg { color: var(--status-success-text, var(--text-2)); }
+.scaffold-steps li[data-status="failed"] > svg { color: var(--status-danger-text); }
+.scaffold-steps strong { color: var(--text-1); font-weight: 500; }
+.scaffold-steps li[data-status="skipped"] strong { color: var(--text-3); }
+.scaffold-steps small { display: block; overflow-wrap: anywhere; color: var(--text-3); font-size: var(--fs-xs); }
+.scaffold-url code { overflow-wrap: anywhere; font-size: var(--fs-xs); }
+
+.blob-dialog.report-problem { width: min(620px, calc(100% - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.report-problem label { display: grid; gap: 4px; }
+.report-problem label > span { color: var(--text-3); font-size: var(--fs-xs); }
+.report-problem input, .report-problem textarea { width: 100%; padding: 8px 10px; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: inherit; font-size: var(--fs-sm); line-height: 1.45; }
+.report-problem textarea { min-height: 220px; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-xs); }
+.report-problem-note { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
+.report-actions { justify-content: space-between; }
+.report-actions > span { display: inline-flex; flex-wrap: wrap; gap: 8px; }

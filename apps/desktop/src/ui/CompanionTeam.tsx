@@ -15,6 +15,7 @@ import { conversationPreview, mainSessionFor, rosterAgents, sessionIsBusy, sideS
 import { useEntityNoun } from './vocabulary'
 import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
 import { openSafeLink } from './openSafeLink'
+import { MessageAnnotations } from './ReplyAnnotations'
 
 export type BlobState = 'waiting' | 'working' | 'offline' | 'idle'
 
@@ -260,9 +261,9 @@ export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, on
   const quotedContext = reply && <ReplyContextStrip target={reply} compact available={reply.sourceSessionId === currentSessionId && availableMessageIds.has(reply.messageId)} onJump={jump} />
   const reactions = Array.isArray(message.reactions) ? message.reactions as string[] : []
   const actions = (copyText: string) => <MessageActions compact text={copyText} time={clockOf(message.createdAt)} reactions={reactions} onToggleReaction={onToggleReaction && messageId ? (emoji) => onToggleReaction(messageId, emoji) : undefined} onError={() => undefined} />
-  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}{actions(text)}<div className="bubble">{via && <span className="companion-via">via {via}</span>}<CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
+  if (role === 'user') return <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row user">{quotedContext}<MessageAnnotations compact meta={meta} />{actions(text)}<div className="bubble">{via && <span className="companion-via">via {via}</span>}<CompanionMentionText text={text} agents={agents} /><MessageReactionBadges reactions={message.reactions} /></div></div>
   const replyText = text.trim()
-  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} className="chat-row">{quotedContext}<div className="reply message-bubble"><SafeMarkdown text={replyText} onOpenLink={(url) => void openSafeLink(url)} /><MessageReactionBadges reactions={message.reactions} /></div>{actions(replyText)}</div> : null
+  return replyText ? <div id={messageId ? `companion-message-${encodeURIComponent(messageId)}` : undefined} data-companion-message-id={messageId || undefined} data-annotate-id={role === 'assistant' && messageId ? messageId : undefined} className="chat-row">{quotedContext}<div className="reply message-bubble"><SafeMarkdown text={replyText} onOpenLink={(url) => void openSafeLink(url)} /><MessageReactionBadges reactions={message.reactions} /></div>{actions(replyText)}</div> : null
 }
 
 /** Side conversations the focused blob took part in, newest first. */

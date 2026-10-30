@@ -52,6 +52,8 @@ function filterTree(nodes: readonly ConversationNode[], words: readonly string[]
 
 export type ProjectActions = {
   onCreateProject: () => Promise<Project | undefined | null> | void
+  /** Adds a folder that already exists as a project. */
+  onImportProject?: () => Promise<Project | undefined | null> | void
   onRenameProject: (project: Project) => void
   onChangeProjectFolder: (project: Project) => void
   onDeleteProject: (project: Project) => void
@@ -105,7 +107,7 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
   const pickerItems = (): MenuItem[] => [
     ...projects.map((project): MenuItem => ({ label: project.name, icon: <Folder size={15} />, checked: project.id === fallback?.id, disabled: !project.path, onSelect: () => onNew(project.id) })),
     { label: 'No project', icon: <FolderOpen size={15} />, checked: !fallback, onSelect: () => onNew(null) },
-    ...(projectActions ? ['separator', { label: 'New project…', icon: <FolderPlus size={15} />, onSelect: () => void Promise.resolve(projectActions.onCreateProject()).then((project) => { if (project?.id) onNew(project.id) }) }] as MenuItem[] : []),
+    ...(projectActions ? ['separator', { label: 'New project…', icon: <FolderPlus size={15} />, onSelect: () => void Promise.resolve(projectActions.onCreateProject()).then((project) => { if (project?.id) onNew(project.id) }) }, ...(projectActions.onImportProject ? [{ label: 'Use an existing folder…', icon: <FolderOpen size={15} />, onSelect: () => void Promise.resolve(projectActions.onImportProject?.()).then((project) => { if (project?.id) onNew(project.id) }) }] : [])] as MenuItem[] : []),
   ]
   const projectItems = (project: Project): MenuItem[] => projectActions ? [
     { label: 'New conversation here', icon: <Plus size={15} />, disabled: !canCreate || !project.path, onSelect: () => onNew(project.id) },

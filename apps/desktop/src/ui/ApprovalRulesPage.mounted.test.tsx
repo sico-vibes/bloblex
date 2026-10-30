@@ -38,6 +38,21 @@ describe('Settings → Approvals', () => {
     expect(host.textContent).not.toContain('Run `npm test`')
   })
 
+  it('offers a rule\u2019s scope only when the daemon reports it (Phase 1A), and rescopes through permission.rules.update', async () => {
+    h.rpc.mockImplementation(async (method: string) => method === 'permission.rules.list'
+      ? { rules: [{ id: 'r1', agentId: 'a1', kind: 'command', label: 'Run tests', projectId: null }, { id: 'r2', agentId: 'a1', kind: 'edit', label: 'Edit files' }] }
+      : {})
+    await mount(<ApprovalRulesPage agents={agents} projects={[{ id: 'p1', name: 'Korus', path: 'D:\\korus', sortOrder: 0 }]} />)
+    const scoped = host.querySelector<HTMLButtonElement>('.select-trigger[aria-label^="Where Codex may always Run tests"]')
+    expect(scoped).not.toBeNull()
+    // An older daemon sends no projectId and has no permission.rules.update, so its rules get no picker.
+    expect(host.querySelector('.select-trigger[aria-label^="Where Codex may always Edit files"]')).toBeNull()
+    await act(async () => { scoped!.click(); await Promise.resolve() })
+    const only = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) => option.textContent === 'Only Korus')!
+    await act(async () => { only.click(); await Promise.resolve(); await Promise.resolve() })
+    expect(h.rpc).toHaveBeenCalledWith('permission.rules.update', { id: 'r1', scope: 'project', projectId: 'p1' })
+  })
+
   it('says when nothing is saved, and when the list cannot be read', async () => {
     h.rpc.mockResolvedValue({ rules: [] })
     await mount(<ApprovalRulesPage agents={agents} />)

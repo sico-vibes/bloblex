@@ -54,11 +54,12 @@ export function ApprovalRulesPage({ agents, projects = [] }: { agents: Agent[]; 
         : [...byBot].map(([agentId, items]) => <SettingsRow key={agentId} label={nameOf(agentId)} stacked>
           <ul className="approval-rule-list">{items.map((rule) => <li key={rule.id}>
             <span className="approval-rule-label">{rule.label}</span>
-            <Select ariaLabel={`Where ${nameOf(agentId)} may always ${rule.label}`} variant="muted" value={rule.projectId ?? ''} disabled={removing === rule.id} onChange={(value) => void rescope(rule, value || null)} options={[
+            {/* Phase 1A: a daemon that scopes rules always sends projectId (null for every project); an older one can't rescope. */}
+            {'projectId' in rule && <Select ariaLabel={`Where ${nameOf(agentId)} may always ${rule.label}`} variant="muted" value={rule.projectId ?? ''} disabled={removing === rule.id} onChange={(value) => void rescope(rule, value || null)} options={[
               { value: '', label: 'Every project' },
               ...(rule.projectId && !projects.some((project) => project.id === rule.projectId) ? [{ value: rule.projectId, label: rule.projectName ?? 'A removed project' }] : []),
               ...projects.map((project) => ({ value: project.id, label: `Only ${project.name}` })),
-            ]} />
+            ]} />}
             <button type="button" className="ghost-button small" disabled={removing === rule.id} aria-label={`Stop always allowing ${rule.label} for ${nameOf(agentId)}`} onClick={() => void remove(rule)}><Trash2 size={13} aria-hidden="true" />Remove</button>
           </li>)}</ul>
         </SettingsRow>)}

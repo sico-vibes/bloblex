@@ -88,7 +88,7 @@ Read the full diff, not only the report. Check claims against the code; a lane's
 4. The updater key must be at `%USERPROFILE%\.bloblex-release\updater.key` and `updater.pass` (never print or commit them; check `updater.key.pub` equals `plugins.updater.pubkey`). If the key is missing, stop and ask the owner; do not generate a new one.
 5. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -Version <version>` from the clone: builds, signs the updater artifacts, creates the GitHub prerelease with the tag, uploads the installer, `.sig` and `latest.json`, and updates the `channel-beta` manifest.
 6. Upload `SHA256SUMS.txt` yourself (the script does not), in the form `<sha256>  <installer name>` with a trailing newline.
-7. Verify every GitHub asset digest against the local file, `channel-beta/latest.json`'s version, the staged sidecar hashes, and Authenticode status (`NotSigned` is expected).
+7. Verify every GitHub asset digest against the local file (`latest.json` has no local copy: download it and check its version and that its signature equals the `.sig`), `channel-beta/latest.json`'s version, the staged sidecar hashes, and Authenticode status (`NotSigned` is expected).
 8. Record it in `docs/operations/release-checklist.md` (Haiku), clean up the clone and lane worktrees, report the space recovered.
 9. The owner decides when to release; do not publish a version they asked to hold.
 

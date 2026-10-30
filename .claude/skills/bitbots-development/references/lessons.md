@@ -2,6 +2,14 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-30 · Lanes · Working with an in-app bot through the MCP
+
+- **A bot's worktree folder can stay locked after its turn.** `git worktree remove --force` emptied and unregistered Sona's worktree but reported "Permission denied" on the folder itself, and no process named it on its command line. Leave the empty folder for the owner; don't kill processes to free it.
+- **Check before deleting a lane worktree that holds uncommitted work.** A bot's changes stay uncommitted, so its branch shows nothing. Compare each `git status` file with `main` (ignore line endings), and check its branch has no commits of its own.
+- **Stopping a Claude bot:** steering is unavailable, so use `stop_turn` then `send_message`. A message sent at once can fail with "Claude process exited" while the old process shuts down; send it again.
+- **A new MCP tool needs a new session.** A connected Claude Code session keeps the tool list from when it connected. Until it reconnects, drive the bridge over stdio (`bitbots-mcp.exe mcp-server --endpoint <file>`).
+- **A brief must define explicit null for every optional parameter.** Phase 1A's `projectId` left it open: the front end sent null for "No project" and the daemon read it as omitted. Both sides' tests passed, and only reading the diff against the UI caught it.
+
 ## 2026-10-30 · Daemon · Phase 1A (bots across projects): what to remember
 
 - **A conversation's project is the session DTO's `projectId`, not the bot's.** The bot's `projectId` is only a default. Context, memory and rule matching read the conversation's (`memory.rs` `session_scope`; `team::attach(st, id, agent, link, folder, project_id, options)`; resume passes the stored session's). `runtime_instructions` is test-only now; sessions use `runtime_instructions_in`.

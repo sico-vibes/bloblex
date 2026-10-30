@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "5f07dec",
-  "documentCount": 358,
+  "revision": "0fdf07f",
+  "documentCount": 359,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1811,7 +1811,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "c636c2306e4c3939fdeea75586bc7313d6a8f19ee7ff114183357f5b2393cfec",
+      "sha256": "2ce379a373b606b670ba85f65470efce17f552d27d92b2cbd940183a3de2e554",
       "headings": [
         {
           "id": "update-commands",
@@ -3418,7 +3418,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "f8158cf1674a70fb7ef56de8de4f449162969fc1bfc52e9cada9be8fb295e39f",
+      "sha256": "35ee0b5f6b75b6bac8c749502f5ea56d921f46c643e1ab99bd3b7ffcb8fea39e",
       "headings": [
         {
           "id": "release-command",
@@ -16574,6 +16574,46 @@
         {
           "id": "changed",
           "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "installation",
+          "text": "Installation",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/releases/0.1.0-beta.42",
+      "source": "docs/releases/0.1.0-beta.42.md",
+      "title": "Bitbots 0.1.0-beta.42",
+      "section": "Release notes",
+      "status": "Release note",
+      "sha256": "3aff22b1300b3d58c29c76b0fa486ef5ba371f9437e864be0cb8822fa31e5f25",
+      "headings": [
+        {
+          "id": "fixed",
+          "text": "Fixed",
+          "level": 2
+        },
+        {
+          "id": "added",
+          "text": "Added",
+          "level": 2
+        },
+        {
+          "id": "changed",
+          "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "coming-next",
+          "text": "Coming next",
           "level": 2
         },
         {

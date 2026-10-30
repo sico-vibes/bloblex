@@ -373,6 +373,19 @@ describe('companion drag and usage labels', () => {
     assertIsland(approval.host, 'approval')
   })
 
+  it('names the project in the pill while the bot works in it, and not when it rests (Phase 1A)', async () => {
+    const board = { id: 'project-board', name: 'Board', path: 'C:/work/board', sortOrder: 0 }
+    configure(snapshot({ projects: [board], sessions: [session({ ...claudeSession, state: 'working', projectId: board.id, projectName: board.name })] }))
+    const view = startApp('?companion')
+    await view.settle()
+    expect(view.host.querySelector('.compact-copy [role="status"]')?.textContent).toMatch(/^Board · /)
+    view.unmount()
+    configure(snapshot({ projects: [board], sessions: [session({ ...claudeSession, state: 'idle', projectId: board.id, projectName: board.name })] }))
+    const resting = startApp('?companion')
+    await resting.settle()
+    expect(resting.host.querySelector('.compact-copy [role="status"]')?.textContent).not.toContain('Board')
+  })
+
   it('queues typed text while the blob works and stops the turn when the box is empty', async () => {
     const working = session({ ...claudeSession, state: 'working' })
     configure(snapshot({ sessions: [working] }))

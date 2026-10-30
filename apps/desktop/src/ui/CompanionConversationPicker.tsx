@@ -32,14 +32,22 @@ export function CompanionConversationPicker({ agent, sessions, projects, current
   if (!agent) return null
   const conversations = companionConversations(sessions, agent.id, current?.id ?? null)
   const project = botProjectName(agent, projects, current)
-  // With conversations in more than one project, each option names its project.
-  const placeOf = (session: Session) => projectOfSession(session, projects)?.name ?? 'No project'
-  const several = new Set(conversations.map(placeOf)).size > 1
+  // With conversations in more than one project, they are grouped under each
+  // project's name, the most recently used project first.
+  const titleOf = (session: Session) => session.title?.trim() || 'New chat'
+  const byProject = new Map<string, Session[]>()
+  for (const session of conversations) {
+    const place = projectOfSession(session, projects)?.name ?? 'No project'
+    byProject.set(place, [...(byProject.get(place) ?? []), session])
+  }
+  const options = byProject.size > 1
+    ? [...byProject].flatMap(([place, rows]) => rows.map((session, index) => ({ value: session.id, label: titleOf(session), ...(index === 0 ? { group: place } : {}) })))
+    : conversations.map((session) => ({ value: session.id, label: titleOf(session) }))
   return <div className="companion-convo-picker" data-companion-no-drag="">
     <span className="companion-convo-project" title={project ? `This conversation works in ${project}` : 'This conversation has no project'}><FolderOpen size={12} aria-hidden="true" />{project ?? 'No project'}</span>
     {conversations.length > 0
       ? <Select ariaLabel={`${agent.name}'s conversations`} variant="muted" value={current?.id ?? ''} onChange={(id) => { const chosen = conversations.find((item) => item.id === id); if (chosen) onPick(chosen) }}
-        options={conversations.map((session) => ({ value: session.id, label: several ? `${placeOf(session)} · ${session.title?.trim() || 'New chat'}` : session.title?.trim() || 'New chat' }))} />
+        options={options} />
       : <span className="companion-convo-none"><MessageSquare size={12} aria-hidden="true" />No conversations yet</span>}
   </div>
 }

@@ -152,7 +152,6 @@ export function App() {
   const companion = new URLSearchParams(location.search).has('companion')
   useEffect(() => { void applyFonts(cachedFont('bitbots.font'), cachedFont('bitbots.monoFont'), themeStyle()) }, [])
   const noun = useEntityNoun()
-  const nouns = useEntityNoun({ plural: true })
   const Noun = useEntityNoun({ capital: true })
   const platform = usePlatform()
   useEffect(() => {
@@ -2368,11 +2367,13 @@ ${fileReferenceText(sentFile)}` : typed
   )
 
   const moveAgent = async (agent: Agent, projectId: string | null) => { await teamUpdate(agent, { projectId }) }
-  const projectLabel = (projectId: string | null) => projectId ? (projects.find((project) => project.id === projectId)?.name ?? 'the project') : 'Unassigned'
   const moveBlob = useUndoable<[Agent, string | null, string | null]>(
     async (agent, projectId) => { await moveAgent(agent, projectId) },
     async (agent, _projectId, previous) => { await moveAgent(agent, previous) },
-    (agent, projectId) => `Moved '${agent.name}' to ${projectLabel(projectId)}.`,
+    (agent, projectId) => {
+      const project = projectId ? projects.find((item) => item.id === projectId)?.name ?? 'that project' : null
+      return project ? `${agent.name}'s new conversations start in ${project}.` : `${agent.name}'s new conversations start with no project.`
+    },
   )
 
   const deleteProject = async (project: Project) => { await projectAction('project.delete', { projectId: project.id }) }
@@ -2914,7 +2915,7 @@ ${fileReferenceText(sentFile)}` : typed
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restore it from Archived bots in your profile menu."} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
       {sessionDeleteTarget && <ConfirmDialog title="Delete this conversation?" body="This removes it and its messages from Bitbots. The coding agent's own history is not touched." confirmLabel="Delete" cancelLabel="Cancel" holdToConfirm successTitle="Conversation deleted" successBody={experiments.undo ? "Deletion is scheduled. Use Undo within eight seconds to keep the conversation." : "This conversation and its messages were removed from Bitbots."} onConfirm={async () => { if (experiments.undo) await deleteConversation(sessionDeleteTarget); else await rpc('session.delete', { sessionId: sessionDeleteTarget.id }) }} onComplete={() => { setSessionDeleteTarget(null); focusSidebarBlob() }} onCancel={() => { const id = sessionDeleteTarget.id; setSessionDeleteTarget(null); focusSidebarSession(id) }} />}
       {textPrompt && <TextPromptDialog {...textPrompt} onCancel={() => setTextPrompt(null)} onSubmit={async (value) => { try { await textPrompt.onSubmit(value); setTextPrompt(null) } catch (reason) { setError(messageOf(reason)) } }} />}
-      {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body={`The project is removed from Bitbots. Its ${nouns} move to Unassigned and the folder on disk is not touched.`} confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); const memberIds = agents.filter((agent) => agent.projectId === project.id).map((agent) => agent.id); if (experiments.undo) void removeProject(project, memberIds); else void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
+      {projectDelete && <ConfirmDialog title={`Delete ${projectDelete.name}?`} body="The project is removed from Bitbots, with any approvals saved only for it. Its conversations stay, under No project. The folder on disk is not touched." confirmLabel="Delete project" cancelLabel="Keep it" tone="danger" onConfirm={() => { const project = projectDelete; setProjectDelete(null); const memberIds = agents.filter((agent) => agent.projectId === project.id).map((agent) => agent.id); if (experiments.undo) void removeProject(project, memberIds); else void projectAction('project.delete', { projectId: project.id }) }} onCancel={() => setProjectDelete(null)} />}
       {pendingBlobImport && <ImportBlobDialog blob={pendingBlobImport} runtimes={runtimes} onCancel={() => { setPendingBlobImport(null); restoreCreateFocus() }} onCreate={(runtimeId) => createImportedBlob(pendingBlobImport, runtimeId)} />}
     </main>
     </>
@@ -3891,6 +3892,8 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
   const moodLabel = compactMoodLabel(displayMood)
   const statusLine = confused ? 'A little dizzy… back to normal shortly' : visibleError ?? (preparingFile ? 'Checking local file access…' : moodLabel ?? activity)
   const shimmering = ['working', 'thinking', 'tool_activity', 'file_activity'].includes(displayMood)
+  // Phase 1A: a bot works in every project, so the pill names the one it is working in.
+  const workingProject = shimmering && session && !visibleError ? projectOfSession(session, projects)?.name ?? null : null
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
   useEffect(() => { setActivityProvider(session?.provider ?? runtime?.provider ?? null) }, [session?.provider, runtime?.provider])
   // The companion window is its own page, so it sets its own conversation for local file previews.
@@ -4097,7 +4100,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
         {peekNames.length > 0
           ? <button type="button" className="companion-peek" aria-live="polite" aria-label={`${peekText(peekNames, nouns)} Open`} onClick={openPeek}><span className="companion-peek-text">{peekText(peekNames, nouns)}</span><span className="companion-peek-open">Open</span></button>
-          : <button type="button" className="compact-copy" aria-label="Open companion home" onPointerDown={compactDrag.onPointerDown} onPointerMove={compactDrag.onPointerMove} onPointerUp={compactDrag.onPointerUp} onPointerCancel={compactDrag.onPointerCancel} onClick={() => { if (compactDrag.consumeDrag()) return; fsmRef.current?.click() }}><span className="compact-name"><strong>{name}</strong>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}<ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{statusLine}</span></button>}
+          : <button type="button" className="compact-copy" aria-label="Open companion home" onPointerDown={compactDrag.onPointerDown} onPointerMove={compactDrag.onPointerMove} onPointerUp={compactDrag.onPointerUp} onPointerCancel={compactDrag.onPointerCancel} onClick={() => { if (compactDrag.consumeDrag()) return; fsmRef.current?.click() }}><span className="compact-name"><strong>{name}</strong>{agent?.role?.trim() && <span className="companion-role">{agent.role.trim()}</span>}<ApprovalPill mode={approvalMode} compact /></span><span role="status" aria-live="polite" className={`compact-status ${shimmering ? 'shimmer' : ''}`}>{workingProject ? `${workingProject} · ${statusLine}` : statusLine}</span></button>}
         <NeedsYouBadge count={waitingAgents.length} compact onOpen={openNextWaiting} />
         {permission && <ShieldAlert className="companion-alert" size={15} aria-label="Approval required" />}
         {peers.length > 0 && <div className="mini-grid" role="img" aria-label={peerSummary} data-tauri-drag-region>{peers.map((item) => { const peerRuntime = runtimes.find((candidate) => candidate.id === item.runtimeId); const offline = !connected || !peerRuntime || ['offline', 'error', 'disconnected'].includes((peerRuntime.status ?? '').toLowerCase()); return <BlobCanvas key={item.id} color={agentColorHex(item.color)} size={15} mini mood={offline ? 'offline' : 'idle'} look={agentLook(item)} label={item.name} /> })}</div>}

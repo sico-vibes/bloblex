@@ -2,6 +2,13 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (30 October 2026): two backend lanes, and the usage-bar sign-in read
+
+Owner directive in the live session of 30 October 2026, until the owner says otherwise. It amends the 29 October amendment below.
+
+- **Backend lanes:** from Phase 1, the backend may run on two in-app bots in parallel through the Bitbots MCP, each in its own git worktree: Sona (Claude Sonnet 5.5, medium) and Gogo (OpenCode Go DeepSeek V4.1 Flash, high). The Director splits the work so their files overlap as little as possible, reviews each diff, merges, runs every gate and commits. Lanes never run `git commit`, and they put proposed skill text in their reports.
+- **Usage-bar sign-in read, an exception to "no copied provider authentication":** to show usage bars, the daemon reads Claude Code's stored access token (`.credentials.json`) and OpenCode's stored API key (`auth.json`, or its credential database, read-only), and sends each only to that provider's own usage endpoint. It is off by default (`usage.readCliSignIns`) and needs the owner's choice. The credential is never stored, logged or copied, is held only for that one request, and the setting doesn't travel in backups. The exception covers the usage bar only. Codex's usage comes from its own app server and isn't part of this.
+
 # Amendment (29 October 2026): Sonnet backend, Director frontend, through the Bitbots MCP
 
 Owner directive in the live session of 29 October 2026, for the expansion plan in `docs/plans/expansion-plan-v3.md`, until the owner says otherwise. It amends the 28 October amendment below.

@@ -2,6 +2,10 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-30 · Lanes · An in-app backend bot cannot build in Auto approval mode
+
+Symptom: Sona (Claude Sonnet 5.5, medium, approval mode Auto), the Phase 1A backend lane, resumed on its own when its usage window reopened, then stopped: every `cargo` command, even `cargo --version`, came back "This command requires approval". It changed nothing, so Bitbots removed its empty worktree at the end of the turn (the folder stays, empty; the `bitbots/…` branch stays). Cause: Claude Code's auto mode refuses commands it cannot classify, and a headless bot has no one to ask. Fix/avoid: before giving a bot a build-and-test task, set its approval mode to **Ask** (the Director answers the cards with the MCP `answer_approval`, operator tier) or **Full access** in its worktree; the MCP cannot change a bot's mode, so the owner does it. A usage-limit pause resumes by itself (`watchdog_continuation`, "Continue where you left off"), so no message is needed after the reset. Phase 1A front end: project tags moved from the old sidebar group headers into the conversations panel's project menu (`TagEditor` is exported from `TeamSidebar.tsx`), tested in `ConversationsPanel.projects.mounted.test.tsx`.
+
 ## 2026-10-30 · ACP adapter · OpenCode effort race and the question tool
 
 - **"OpenCode rejected the effort setting" was a race inside OpenCode, not a Bitbots bug.**

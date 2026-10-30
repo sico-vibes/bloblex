@@ -1,14 +1,16 @@
 // The per-bot conversations column: every conversation the user had with the
-// selected bot in its project, newest first, with bot-to-bot conversations
-// branching under the conversation that started them.
+// selected bot, grouped by the project each one works in (Phase 1A: bots work
+// in every project), newest first, with bot-to-bot conversations branching
+// under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Archive, ArrowLeftRight, ChevronRight, Pencil, Plus, Search, Trash2 } from 'lucide-react'
-import type { Agent, Session } from '../types'
+import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, Tag, Trash2 } from 'lucide-react'
+import type { Agent, Project, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
 import { presentedSessionState } from './sessionOutcome'
-import { ancestorIds, conversationTree, isEmptyConversation, sessionIsBusy, sideTitle, type ConversationNode } from './teamSelectors'
+import { ancestorIds, conversationsByProject, conversationTree, defaultProjectFor, isEmptyConversation, sessionIsBusy, sideTitle, type ConversationNode } from './teamSelectors'
+import { TagEditor, TeamMenu, type MenuItem, type TagTarget } from './TeamSidebar'
 import './conversationsPanel.css'
 
 function Face({ agent, name }: { agent: Agent | null | undefined; name: string }) {
@@ -27,13 +29,6 @@ function relativeTime(value: unknown, now: number) {
   if (hours < 24) return `${hours}h`
   const days = Math.round(hours / 24)
   return days < 7 ? `${days}d` : new Date(time).toLocaleDateString([], { month: 'short', day: 'numeric' })
-}
-
-function isToday(value: unknown, now: number) {
-  const time = Date.parse(String(value ?? ''))
-  if (!Number.isFinite(time)) return false
-  const a = new Date(time), b = new Date(now)
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
 /** More conversations than this get a filter field. */
@@ -55,16 +50,26 @@ function filterTree(nodes: readonly ConversationNode[], words: readonly string[]
   return kept
 }
 
-export function ConversationsPanel({ agent, agents, sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, onRename, onArchive, onDelete }: {
+export type ProjectActions = {
+  onCreateProject: () => Promise<Project | undefined | null> | void
+  onRenameProject: (project: Project) => void
+  onChangeProjectFolder: (project: Project) => void
+  onDeleteProject: (project: Project) => void
+}
+
+export function ConversationsPanel({ agent, agents, projects = [], sessions, selectedSessionId, sideSessionId, canCreate, onSelect, onOpenSide, onNew, projectActions, onRename, onArchive, onDelete }: {
   agent: Agent
   agents: readonly Agent[]
+  projects?: readonly Project[]
   sessions: readonly Session[]
   selectedSessionId: string | null
   sideSessionId: string | null
   canCreate: boolean
   onSelect: (session: Session) => void
   onOpenSide: (sessionId: string) => void
-  onNew: () => void
+  /** Starts a conversation in a project: an id, null for no project, or undefined for the bot's default. */
+  onNew: (projectId?: string | null) => void
+  projectActions?: ProjectActions
   onRename: (session: Session, title: string) => Promise<unknown> | void
   /** Hides the conversation from this list; it can be restored on the bot's page. */
   onArchive?: (session: Session) => void
@@ -73,7 +78,7 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
   onClose?: () => void
 }) {
   // Conversations nothing was said in are not listed, except the open one.
-  const tree = useMemo(() => conversationTree(sessions.filter((session) => session.id === selectedSessionId || !isEmptyConversation(session)), agent.id, agent.projectId ?? null), [sessions, agent.id, agent.projectId, selectedSessionId])
+  const tree = useMemo(() => conversationTree(sessions.filter((session) => session.id === selectedSessionId || !isEmptyConversation(session)), agent.id), [sessions, agent.id, selectedSessionId])
   const activeId = sideSessionId ?? selectedSessionId
   const [query, setQuery] = useState('')
   const titleOf = (node: ConversationNode) => node.kind === 'side' ? sideTitle(node.session, agents as Agent[]) : (node.session.title?.trim() || 'New chat')
@@ -90,8 +95,28 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
     if (above.length) setExpanded((current) => { const next = new Set(current); for (const id of above) next.add(id); return next })
   }, [tree, activeId])
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
-  const today = shown.filter((node) => isToday(node.session.updatedAt ?? node.session.createdAt, now))
-  const earlier = shown.filter((node) => !isToday(node.session.updatedAt ?? node.session.createdAt, now))
+  const groups = useMemo(() => conversationsByProject(shown, projects), [shown, projects])
+  const fallback = defaultProjectFor(agent, projects)
+  const [menu, setMenu] = useState<{ items: MenuItem[]; label: string; x: number; y: number; trigger: HTMLElement } | null>(null)
+  const lastTrigger = useRef<HTMLElement | null>(null)
+  const [tagTarget, setTagTarget] = useState<TagTarget | null>(null)
+  const closeMenu = () => { const trigger = menu?.trigger; setMenu(null); requestAnimationFrame(() => trigger?.focus()) }
+  const openMenu = (trigger: HTMLElement, label: string, items: MenuItem[]) => { lastTrigger.current = trigger; const rect = trigger.getBoundingClientRect(); setMenu({ items, label, x: rect.left, y: rect.bottom + 4, trigger }) }
+  const pickerItems = (): MenuItem[] => [
+    ...projects.map((project): MenuItem => ({ label: project.name, icon: <Folder size={15} />, checked: project.id === fallback?.id, disabled: !project.path, onSelect: () => onNew(project.id) })),
+    { label: 'No project', icon: <FolderOpen size={15} />, checked: !fallback, onSelect: () => onNew(null) },
+    ...(projectActions ? ['separator', { label: 'New project…', icon: <FolderPlus size={15} />, onSelect: () => void Promise.resolve(projectActions.onCreateProject()).then((project) => { if (project?.id) onNew(project.id) }) }] as MenuItem[] : []),
+  ]
+  const projectItems = (project: Project): MenuItem[] => projectActions ? [
+    { label: 'New conversation here', icon: <Plus size={15} />, disabled: !canCreate || !project.path, onSelect: () => onNew(project.id) },
+    'separator',
+    { label: 'Rename project', icon: <Pencil size={15} />, onSelect: () => projectActions.onRenameProject(project) },
+    { label: 'Change folder…', icon: <FolderOpen size={15} />, onSelect: () => projectActions.onChangeProjectFolder(project) },
+    // FIX39 item 21: the Manager matches jobs to a project's tags; they moved here with the project headings.
+    { label: 'Tags…', icon: <Tag size={15} />, onSelect: () => setTagTarget({ kind: 'project', id: project.id, name: project.name, tags: [...(project.tags ?? [])] }) },
+    'separator',
+    { label: 'Delete project', icon: <Trash2 size={15} />, danger: true, onSelect: () => projectActions.onDeleteProject(project) },
+  ] : []
 
   const renderNode = (node: ConversationNode, depth: number) => {
     const { session } = node
@@ -137,15 +162,34 @@ export function ConversationsPanel({ agent, agents, sessions, selectedSessionId,
       <strong>Conversations</strong>
     </div>
     <div className="convo-new-row">
-      <button type="button" className="convo-new" aria-label="New conversation" title="Start a separate conversation with this bot" disabled={!canCreate} onClick={onNew}><Plus size={14} aria-hidden="true" />New conversation</button>
+      <div className="convo-new-split">
+        <button type="button" className="convo-new" aria-label="New conversation" title={fallback ? `Start a conversation in ${fallback.name}` : 'Start a conversation with no project'} disabled={!canCreate} onClick={() => onNew()}><Plus size={14} aria-hidden="true" />New conversation</button>
+        <button type="button" className="convo-new-pick" aria-label="Choose the project for a new conversation" aria-haspopup="menu" title="Choose a project" disabled={!canCreate} onClick={(event) => openMenu(event.currentTarget, 'Start a conversation in', pickerItems())}><ChevronDown size={13} aria-hidden="true" /></button>
+      </div>
+      <span className="convo-new-where">{fallback ? <><Folder size={11} aria-hidden="true" />{fallback.name}</> : 'No project'}</span>
     </div>
     {total > FILTER_THRESHOLD && <label className="convo-filter"><Search size={13} aria-hidden="true" /><input type="search" value={query} placeholder="Find a conversation" aria-label="Find a conversation" spellCheck={false} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') } }} /></label>}
     <div className="convo-scroll">
       {tree.length > 0 && shown.length === 0 && <p className="convo-empty">No conversation matches “{query.trim()}”.</p>}
       {tree.length === 0 && <p className="convo-empty">No conversations with {agent.name} yet.</p>}
-      {today.length > 0 && <section aria-label="Today"><h3 className="convo-group">Today</h3><ul role="tree" className="convo-list">{today.map((node) => renderNode(node, 0))}</ul></section>}
-      {earlier.length > 0 && <section aria-label="Earlier"><h3 className="convo-group">Earlier</h3><ul role="tree" className="convo-list">{earlier.map((node) => renderNode(node, 0))}</ul></section>}
+      {groups.map(({ key, project, nodes }) => {
+        const name = project?.name ?? 'No project'
+        return <section key={key} className="convo-project" aria-label={name} data-project-id={project?.id ?? 'none'}>
+          <h3 className="convo-group convo-project-head">
+            {project ? <Folder size={12} aria-hidden="true" /> : <FolderOpen size={12} aria-hidden="true" />}
+            <span className="convo-project-name" title={project?.path ?? undefined}>{name}</span>
+            {project?.tags && project.tags.length > 0 && <span className="project-tags" title={project.tags.join(', ')}>{project.tags.map((tag) => <span key={tag} className="project-tag">{tag}</span>)}</span>}
+            <span className="convo-project-tools">
+              <button type="button" className="convo-action" aria-label={`New conversation in ${name}`} title="New conversation here" disabled={!canCreate || (!!project && !project.path)} onClick={() => onNew(project?.id ?? null)}><Plus size={12} aria-hidden="true" /></button>
+              {project && projectActions && <button type="button" className="convo-action" aria-label={`${name} options`} aria-haspopup="menu" title="Project options" onClick={(event) => openMenu(event.currentTarget, `${name} actions`, projectItems(project))}><MoreHorizontal size={12} aria-hidden="true" /></button>}
+            </span>
+          </h3>
+          <ul role="tree" className="convo-list">{nodes.map((node) => renderNode(node, 0))}</ul>
+        </section>
+      })}
     </div>
+    {menu && <TeamMenu label={menu.label} position={menu} items={menu.items} onClose={closeMenu} />}
+    {tagTarget && <TagEditor target={tagTarget} onClose={() => { setTagTarget(null); requestAnimationFrame(() => lastTrigger.current?.focus()) }} />}
   </aside>
 }
 

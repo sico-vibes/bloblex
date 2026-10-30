@@ -37,10 +37,12 @@ describe('companion team overview', () => {
     expect(pickPeers(many, sessions, runtimes, true, 'lead', ['f']).map((item) => item.name)[0]).toBe('Fox')
   })
 
-  it('lists every blob by project and pins up to four to the island', () => {
+  it('lists every blob in one roster (Phase 1A) and pins up to four to the island', () => {
     const onPinnedChange = vi.fn()
     const host = mount(<CompanionTeamPicker agents={[lead, mate, casual]} projects={projects} sessions={sessions} runtimes={runtimes} connected focusedId="lead" pinned={['mate']} onSelect={vi.fn()} onPinnedChange={onPinnedChange} onClose={vi.fn()} />)
-    expect([...host.querySelectorAll('.team-picker-label')].map((label) => label.textContent)).toEqual(['Board', 'Casual'])
+    // Bots work in every project, so the picker no longer groups them by one.
+    expect(host.querySelector('.team-picker-label')).toBeNull()
+    expect([...host.querySelectorAll('.team-picker-name')].map((name) => name.firstChild?.textContent)).toEqual(['Lead', 'Mate', 'Casual'])
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Keep Casual on the island"]')!.click())
     expect(onPinnedChange).toHaveBeenCalledWith(['mate', 'casual'])
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Unpin Mate from the island"]')!.click())

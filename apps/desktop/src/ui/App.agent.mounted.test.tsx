@@ -784,13 +784,13 @@ describe('blob roster and editor', () => {
     })
   }
 
-  it('groups bots under projects, keeps casual ones in Unassigned and pins the Manager above them', async () => {
+  it('lists bots in one roster (Phase 1A) and pins the Manager above them', async () => {
     const manager = { ...opencode, id: 'agent-manager', name: 'Manager', role: 'Manager', systemRole: 'manager' as const, projectId: null }
     configure(snapshot({ projects: [board], agents: [{ ...claude, projectId: board.id, role: 'CTO', leader: true }, codex, invoice, opencode, manager, retired] }))
     const view = startApp()
     await view.settle()
     const groups = [...view.host.querySelectorAll('.team-group')].map((group) => group.getAttribute('aria-label'))
-    expect(groups).toEqual(['Manager', 'Board', 'Unassigned'])
+    expect(groups).toEqual(['Manager', 'Bots'])
     // An old team leader is an ordinary bot now.
     const formerLeader = view.host.querySelector('.team-row[data-agent-id="agent-claude"]')!
     expect(formerLeader.getAttribute('aria-label')).toBe('Claude, CTO')
@@ -800,7 +800,7 @@ describe('blob roster and editor', () => {
     expect(managerRow.getAttribute('aria-label')).toBe('Manager, Manager, Manager')
     expect(managerRow.querySelector('.leader-badge')).not.toBeNull()
     expect(managerRow.querySelector('.leader-badge svg[fill="currentColor"]')).not.toBeNull()
-    expect([...view.host.querySelectorAll('.team-group[aria-label="Unassigned"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex', 'Invoice helper', 'OpenCode'])
+    expect([...view.host.querySelectorAll('.team-group[aria-label="Bots"] .team-row strong')].map((node) => node.textContent)).toEqual(['Claude', 'Codex', 'Invoice helper', 'OpenCode'])
   })
 
   it('starts a new project in the Manager conversation with a starter message to edit', async () => {
@@ -829,7 +829,7 @@ describe('blob roster and editor', () => {
     expect(view.host.querySelector('.team-group[aria-label="Pinned"]')).toBeNull()
   })
 
-  it('moves a blob into a project from the Move to submenu', async () => {
+  it('sets a bot’s default project from the Default project submenu', async () => {
     configure(snapshot({ projects: [board] }))
     withRpc((method, params) => {
       if (method !== 'agent.team.update') return undefined
@@ -839,12 +839,16 @@ describe('blob roster and editor', () => {
     const view = startApp()
     await view.settle()
     await openMenu(view.host.querySelector<HTMLButtonElement>('.team-row[data-agent-id="agent-codex"]')!)
-    await click(menuItem(view.host, 'Move to'))
+    await click(menuItem(view.host, 'Default project'))
     const target = [...view.host.querySelectorAll<HTMLButtonElement>('.team-submenu [role="menuitemradio"]')].find((item) => item.textContent?.includes('Board'))
     await click(target)
     await view.settle()
     expect(h.rpc).toHaveBeenCalledWith('agent.team.update', { agentId: 'agent-codex', projectId: 'project-board' })
-    expect([...view.host.querySelectorAll('.team-group[aria-label="Board"] .team-row strong')].map((node) => node.textContent)).toEqual(['Codex'])
+    // The bot stays in the one roster; the submenu now marks Board as where its conversations start.
+    await openMenu(view.host.querySelector<HTMLButtonElement>('.team-row[data-agent-id="agent-codex"]')!)
+    await click(menuItem(view.host, 'Default project'))
+    const checked = [...view.host.querySelectorAll<HTMLButtonElement>('.team-submenu [role="menuitemradio"][aria-checked="true"]')].map((item) => item.textContent)
+    expect(checked).toEqual(['Board'])
   })
 
   it('opens the quick switcher from the only sidebar search control and searches bots there', async () => {

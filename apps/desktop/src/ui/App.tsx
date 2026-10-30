@@ -51,7 +51,7 @@ import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { eventSessionId, noteSessionActivity } from './sessionActivity'
 import { busyDelivery, busySendMode, BUSY_SEND_SETTING, newClientMessageId, sendWithDelivery, steerRuntimeId, useSteerAvailable, type BusySendMode } from './busySend'
 import { fetchCached, invalidateCatalog } from './catalogCache'
-import { ConversationsPanel } from './ConversationsPanel'
+import { ConversationsPanel, type ProjectActions } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
 import { PullRequestDialog } from './PullRequestDialog'
 import { pullRequestPrompt, type RepositoryState } from './sessionRepository'
@@ -59,7 +59,7 @@ import { WorkingBotsPanel } from './WorkingBotsPanel'
 import { DelegationGroup } from './DelegationGroup'
 import { buildDelegationRows, delegationRuns, newestNoticeBySide, useDelegations } from './delegations'
 import { ChangeBanner } from './ChangeBanner'
-import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, projectOfSession, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -1670,19 +1670,22 @@ export function App() {
    * removed again if it is left with nothing said. An empty open conversation
    * is reused instead of adding another.
    */
-  const newSession = (agentId?: string, _anchor?: HTMLElement | null) => {
+  /** `projectId`: a project to start in, null for no project, or undefined for the bot's default (Phase 1A). */
+  const newSession = (agentId?: string, _anchor?: HTMLElement | null, projectId?: string | null) => {
     const agent = agents.find((item) => item.id === (agentId ?? activeSelectedAgent?.id) && !item.archived)
     const runtime = agent ? runtimes.find((item) => item.id === agent.runtimeId) : null
     if (!agent || connection !== 'connected' || !runtimeUsable(runtime)) return
     const current = agent.id === activeSelectedAgent?.id ? selectedSession : mainSessionFor(sessions, agent.id)
-    if (current && !isSideSession(current) && (current.messages ?? []).length === 0 && current.agentId === agent.id) { selectAgent(agent); return }
-    void createConversation(agent)
+    // An empty conversation is reused, unless the owner asked for a different project than the one it is in.
+    const sameProject = projectId === undefined || (current ? (projectOfSession(current, projects)?.id ?? null) === projectId : false)
+    if (current && sameProject && !isSideSession(current) && (current.messages ?? []).length === 0 && current.agentId === agent.id) { selectAgent(agent); return }
+    void createConversation(agent, { projectId })
   }
-  const createConversation = async (agent: Agent, options: { quiet?: boolean } = {}): Promise<Session | null> => {
+  const createConversation = async (agent: Agent, options: { quiet?: boolean; projectId?: string | null } = {}): Promise<Session | null> => {
     if (ensuringConversation.current.has(agent.id)) return null
     ensuringConversation.current.add(agent.id)
     try {
-      const result = await rpc<{ session?: Session }>('agent.conversation.create', { agentId: agent.id })
+      const result = await rpc<{ session?: Session }>('agent.conversation.create', { agentId: agent.id, ...(options.projectId !== undefined ? { projectId: options.projectId } : {}) })
       if (!result.session?.id) return null
       // A new conversation has nothing in it yet; saying so lets the empty rules apply at once.
       upsertSession({ ...result.session, messages: result.session.messages ?? [] })
@@ -2201,7 +2204,7 @@ ${fileReferenceText(sentFile)}` : typed
       setError('This approval expired or is no longer pending. No reply was sent. Check the refreshed request state before continuing.')
       return false
     }
-    try { await doRpc('permission.reply', { permissionId: permission.id, choice, ...(options?.remember ? { remember: true } : {}) }); await refresh(); return true } catch (reason) {
+    try { await doRpc('permission.reply', { permissionId: permission.id, choice, ...(options?.remember ? { remember: true, ...(options.rememberScope ? { rememberScope: options.rememberScope } : {}) } : {}) }); await refresh(); return true } catch (reason) {
       await refresh()
       setError(messageOf(reason))
       return false
@@ -2408,6 +2411,10 @@ ${fileReferenceText(sentFile)}` : typed
     if (project) setRosterAnnouncement(`Created project ${project.name}.`)
     return project
   }
+  const renameProject = (project: Project) => setTextPrompt({ title: 'Rename project', label: 'Project name', value: project.name, confirmLabel: 'Rename', onSubmit: async (name) => { await projectAction('project.update', { projectId: project.id, name }) } })
+  const changeProjectFolder = (project: Project) => void openProjectFolder().then((path) => { if (path) void projectAction('project.update', { projectId: project.id, path }) })
+  /** Phase 1A: projects are managed where their conversations are listed, inside each bot. */
+  const conversationProjectActions: ProjectActions = { onCreateProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete }
   /** Opens the Manager's conversation with a starter message to edit and send; false without a Manager. */
   const planWithManager = (text: string) => {
     const manager = managerOf(agents)
@@ -2650,8 +2657,8 @@ ${fileReferenceText(sentFile)}` : typed
           onToggleUnread: (_agent, session, unread) => { if (session) setSeenSessions((current) => markSeen(current, session.id, unread ? new Date(0).toISOString() : new Date().toISOString())) },
           onCopyConversationId: (_agent, session) => { if (session) void navigator.clipboard.writeText(session.id).catch(() => undefined) },
           onDeleteConversation: (_agent, session) => setSessionDeleteTarget(session),
-          onRenameProject: (project) => setTextPrompt({ title: 'Rename project', label: 'Project name', value: project.name, confirmLabel: 'Rename', onSubmit: async (name) => { await projectAction('project.update', { projectId: project.id, name }) } }),
-          onChangeProjectFolder: (project) => void openProjectFolder().then((path) => { if (path) void projectAction('project.update', { projectId: project.id, path }) }),
+          onRenameProject: renameProject,
+          onChangeProjectFolder: changeProjectFolder,
           onDeleteProject: setProjectDelete,
           onToggleProjectCollapsed: (project) => void projectAction('project.update', { projectId: project.id, collapsed: !project.collapsed }),
           onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
@@ -2678,7 +2685,7 @@ ${fileReferenceText(sentFile)}` : typed
       </aside>
 
       {activeSelectedAgent
-        ? <ConversationsPanel agent={activeSelectedAgent} agents={agents} sessions={sessions} selectedSessionId={selectedSession?.id ?? null} sideSessionId={sideSessionId} canCreate={connection === 'connected' && runtimeReady} onSelect={selectConversation} onOpenSide={openSideConversation} onNew={() => newSession()} onRename={renameConversation} onArchive={(session) => void archiveConversation(session)} onDelete={(session) => setSessionDeleteTarget(session)} onClose={() => setConvosVisible(false)} />
+        ? <ConversationsPanel agent={activeSelectedAgent} agents={agents} sessions={sessions} selectedSessionId={selectedSession?.id ?? null} sideSessionId={sideSessionId} canCreate={connection === 'connected' && runtimeReady} onSelect={selectConversation} onOpenSide={openSideConversation} projects={projects} onNew={(projectId) => newSession(undefined, null, projectId)} projectActions={conversationProjectActions} onRename={renameConversation} onArchive={(session) => void archiveConversation(session)} onDelete={(session) => setSessionDeleteTarget(session)} onClose={() => setConvosVisible(false)} />
         : <aside className="conversations-panel" aria-hidden="true" />}
 
       <section className="conversation-pane">

@@ -87,8 +87,8 @@ describe('bot lock (FIX39 item 13)', () => {
     const menu = await openMenu(view, 'agent-alpha')
     const labels = [...menu.querySelectorAll<HTMLButtonElement>('.team-menu-item')]
     expect(labels.find((button) => button.textContent === 'Unlock bot')).toBeTruthy()
-    // Rename, Edit, Archive and Move to are refused while locked.
-    for (const label of ['Rename bot', 'Edit bot', 'Archive', 'Move to']) {
+    // Rename, Edit, Archive and Default project are refused while locked.
+    for (const label of ['Rename bot', 'Edit bot', 'Archive', 'Default project']) {
       expect(labels.find((button) => button.textContent === label)?.disabled, label).toBe(true)
     }
     // Placement the owner expects to keep working stays enabled.
@@ -142,16 +142,16 @@ describe('roster keyboard moves', () => {
     expect(view.querySelector('[role="status"]')?.textContent).toBe('Moved Beta down.')
   })
 
-  it('opens a Move to project menu with Alt+Shift+ArrowRight and moves on choosing', async () => {
+  it('opens the Default project menu with Alt+Shift+ArrowRight and sets it on choosing', async () => {
     const list = actions()
     const view = mount(list)
     await act(async () => { row(view, 'agent-gamma').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, shiftKey: true, bubbles: true })) })
-    const menu = view.querySelector('[role="menu"][aria-label="Move Gamma to a project"]')!
+    const menu = view.querySelector(`[role="menu"][aria-label="Gamma's default project"]`)!
     expect(menu).not.toBeNull()
-    expect([...menu.querySelectorAll<HTMLButtonElement>('.team-menu-item')].map((item) => item.textContent)).toEqual(['Korus', 'Site', 'Unassigned'])
+    expect([...menu.querySelectorAll<HTMLButtonElement>('.team-menu-item')].map((item) => item.textContent)).toEqual(['Korus', 'Site', 'No project'])
     await act(async () => { [...menu.querySelectorAll<HTMLButtonElement>('.team-menu-item')].find((item) => item.textContent === 'Korus')!.click() })
     expect(list.onMove).toHaveBeenCalledWith(gamma, 'p1')
-    expect(view.querySelector('[role="status"]')?.textContent).toBe('Moved Gamma to Korus.')
+    expect(view.querySelector('[role="status"]')?.textContent).toBe("Gamma's new conversations start in Korus.")
   })
 
   it('keeps a plain arrow key on the focus path, not the move path', async () => {

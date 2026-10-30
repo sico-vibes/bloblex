@@ -133,6 +133,43 @@ export function groupAgentsByProject(agents: readonly Agent[], projects: readonl
   return groups
 }
 
+/** Phase 1A: bots are no longer filed under projects. The roster is one list in the daemon's order; the Manager is pinned separately. */
+export function rosterAgents(agents: readonly Agent[], showHidden = false): Agent[] {
+  return agents.filter((agent) => !agent.archived && !isManager(agent) && (showHidden || agent.hidden !== true))
+}
+
+/** The project a conversation works in: its stamp, else a project whose folder is the conversation's folder. */
+export function projectOfSession(session: Session, projects: readonly Project[]): Project | null {
+  if (typeof session.projectId === 'string') return projects.find((project) => project.id === session.projectId) ?? null
+  const path = typeof session.projectPath === 'string' ? session.projectPath.replace(/[\\/]+$/, '').toLowerCase() : ''
+  return path ? projects.find((project) => project.path && project.path.replace(/[\\/]+$/, '').toLowerCase() === path) ?? null : null
+}
+
+/** Where a new conversation with this bot starts: its last project, then its default, when that project still exists. */
+export function defaultProjectFor(agent: Pick<Agent, 'projectId' | 'lastProjectId'>, projects: readonly Project[]): Project | null {
+  for (const id of [agent.lastProjectId, agent.projectId]) {
+    const project = id ? projects.find((item) => item.id === id) : undefined
+    if (project) return project
+  }
+  return null
+}
+
+export type ProjectConversations = { key: string; project: Project | null; nodes: ConversationNode[] }
+
+/** A bot's conversations grouped by the project each one works in; the most recently active project comes first. */
+export function conversationsByProject(nodes: readonly ConversationNode[], projects: readonly Project[]): ProjectConversations[] {
+  const groups = new Map<string, ProjectConversations>()
+  for (const node of nodes) {
+    const project = projectOfSession(node.session, projects)
+    const key = project?.id ?? 'none'
+    const group = groups.get(key) ?? { key, project, nodes: [] }
+    group.nodes.push(node)
+    groups.set(key, group)
+  }
+  const latest = (group: ProjectConversations) => group.nodes.reduce((best, node) => { const at = updatedAtOf(node.session); return at > best ? at : best }, '')
+  return [...groups.values()].sort((a, b) => latest(b).localeCompare(latest(a)))
+}
+
 export function leaderOf(agents: readonly Agent[]) {
   return agents.find((agent) => agent.leader === true && !agent.archived) ?? null
 }

@@ -687,7 +687,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
           {!loading && page === 'Manager' && <ManagerPage manager={managerOf(snapshot?.agents ?? [])} connected={!!snapshot} onOpenManager={onOpenAgent} agents={snapshot?.agents ?? []} onOpenSession={onOpenSession} />}
 
-          {!loading && page === 'Approvals' && <ApprovalRulesPage agents={snapshot?.agents ?? []} />}
+          {!loading && page === 'Approvals' && <ApprovalRulesPage agents={snapshot?.agents ?? []} projects={snapshot?.projects ?? []} />}
           {!loading && page === 'Health' && <HealthPage />}
           {!loading && page === 'Memory' && <MemoryPage
             agents={snapshot?.agents ?? []}

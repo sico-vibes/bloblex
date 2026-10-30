@@ -1,10 +1,11 @@
 // The companion's "which conversation" control: a bot's own conversations,
-// newest first, and the project it works in. Choosing one makes it the
-// companion's (and the main window's) open conversation.
+// newest first, and the project the open one works in (Phase 1A: a bot works in
+// every project). Choosing one makes it the companion's (and the main window's)
+// open conversation.
 import { FolderOpen, MessageSquare } from 'lucide-react'
 import type { Agent, Project, Session } from '../types'
 import { Select } from './Select'
-import { isAutomationSession, isEmptyConversation, isSideSession } from './teamSelectors'
+import { defaultProjectFor, isAutomationSession, isEmptyConversation, isSideSession, projectOfSession } from './teamSelectors'
 
 /** A bot's conversations the companion can switch between, newest first. */
 export function companionConversations(sessions: readonly Session[], agentId: string, currentId: string | null): Session[] {
@@ -14,9 +15,11 @@ export function companionConversations(sessions: readonly Session[], agentId: st
     .slice(0, 30)
 }
 
-export function botProjectName(agent: Agent | null, projects: readonly Project[]): string | null {
-  if (!agent?.projectId) return null
-  return projects.find((project) => project.id === agent.projectId)?.name ?? null
+/** The project shown beside the picker: the open conversation's, else where the bot's next conversation starts. */
+export function botProjectName(agent: Agent | null, projects: readonly Project[], current: Session | null = null): string | null {
+  if (!agent) return null
+  if (current) return projectOfSession(current, projects)?.name ?? null
+  return defaultProjectFor(agent, projects)?.name ?? null
 }
 
 export function CompanionConversationPicker({ agent, sessions, projects, current, onPick }: {
@@ -28,12 +31,15 @@ export function CompanionConversationPicker({ agent, sessions, projects, current
 }) {
   if (!agent) return null
   const conversations = companionConversations(sessions, agent.id, current?.id ?? null)
-  const project = botProjectName(agent, projects)
+  const project = botProjectName(agent, projects, current)
+  // With conversations in more than one project, each option names its project.
+  const placeOf = (session: Session) => projectOfSession(session, projects)?.name ?? 'No project'
+  const several = new Set(conversations.map(placeOf)).size > 1
   return <div className="companion-convo-picker" data-companion-no-drag="">
-    <span className="companion-convo-project" title={project ? `${agent.name} works in ${project}` : `${agent.name} has no project`}><FolderOpen size={12} aria-hidden="true" />{project ?? 'No project'}</span>
+    <span className="companion-convo-project" title={project ? `This conversation works in ${project}` : 'This conversation has no project'}><FolderOpen size={12} aria-hidden="true" />{project ?? 'No project'}</span>
     {conversations.length > 0
       ? <Select ariaLabel={`${agent.name}'s conversations`} variant="muted" value={current?.id ?? ''} onChange={(id) => { const chosen = conversations.find((item) => item.id === id); if (chosen) onPick(chosen) }}
-        options={conversations.map((session) => ({ value: session.id, label: session.title?.trim() || 'New chat' }))} />
+        options={conversations.map((session) => ({ value: session.id, label: several ? `${placeOf(session)} · ${session.title?.trim() || 'New chat'}` : session.title?.trim() || 'New chat' }))} />
       : <span className="companion-convo-none"><MessageSquare size={12} aria-hidden="true" />No conversations yet</span>}
   </div>
 }

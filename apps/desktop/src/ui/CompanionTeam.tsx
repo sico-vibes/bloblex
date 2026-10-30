@@ -11,7 +11,7 @@ import { agentColorHex } from './agentColor'
 import { activityTitle } from './ActivityDetails'
 import { buildConversationItems } from './conversation'
 import { MessageActions, MessageReactionBadges, ReplyContextStrip } from './MessageActions'
-import { conversationPreview, groupAgentsByProject, mainSessionFor, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
+import { conversationPreview, mainSessionFor, rosterAgents, sessionIsBusy, sideSessionsFor, sideTitle, splitMentions } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
 import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
 import { openSafeLink } from './openSafeLink'
@@ -69,8 +69,8 @@ function Face({ agent, size, mood = 'idle' }: { agent: Agent; size: number; mood
   return <BlobCanvas decorative color={agentColorHex(agent.color)} size={size} mini mood={mood} look={agentLook(agent)} label={agent.name} />
 }
 
-/** Every blob by project: tap to focus it, pin up to four to keep them on the island. */
-export function CompanionTeamPicker({ agents, projects, sessions, runtimes, connected, focusedId, pinned, onSelect, onPinnedChange, onClose }: {
+/** Every bot in one list: tap to focus it, pin up to four to keep them on the island. `projects` is kept for callers. */
+export function CompanionTeamPicker({ agents, sessions, runtimes, connected, focusedId, pinned, onSelect, onPinnedChange, onClose }: {
   agents: readonly Agent[]
   projects: readonly Project[]
   sessions: readonly Session[]
@@ -82,7 +82,8 @@ export function CompanionTeamPicker({ agents, projects, sessions, runtimes, conn
   onPinnedChange: (ids: string[]) => void
   onClose: () => void
 }) {
-  const groups = groupAgentsByProject(agents, projects).filter((group) => group.agents.length > 0)
+  // Phase 1A: bots are one list, as in the sidebar; projects belong to conversations.
+  const roster = rosterAgents(agents)
   const nouns = useEntityNoun({ plural: true })
   const full = pinned.length >= MAX_COMPANION_PEERS
   const togglePin = (id: string) => onPinnedChange(pinned.includes(id) ? pinned.filter((item) => item !== id) : full ? [...pinned] : [...pinned, id])
@@ -93,9 +94,8 @@ export function CompanionTeamPicker({ agents, projects, sessions, runtimes, conn
       <button type="button" className="team-picker-close" aria-label={`Close all ${nouns}`} onClick={onClose}><X size={13} /></button>
     </div>
     <div className="team-picker-scroll">
-      {groups.map((group) => <div key={group.project?.id ?? 'casual'} className="team-picker-group">
-        <span className="team-picker-label">{group.project?.name ?? 'Casual'}</span>
-        {group.agents.map((agent) => {
+      <div className="team-picker-group">
+        {roster.map((agent) => {
           const state = blobState(agent, sessions, runtimes, connected)
           const isPinned = pinned.includes(agent.id)
           return <div key={agent.id} className={`team-picker-row${agent.id === focusedId ? ' focused' : ''}`}>
@@ -107,7 +107,7 @@ export function CompanionTeamPicker({ agents, projects, sessions, runtimes, conn
             {agent.id !== focusedId && <button type="button" className={`team-picker-pin${isPinned ? ' on' : ''}`} aria-pressed={isPinned} disabled={!isPinned && full} aria-label={isPinned ? `Unpin ${agent.name} from the island` : `Keep ${agent.name} on the island`} title={isPinned ? 'Unpin from the island' : full ? `Up to ${MAX_COMPANION_PEERS} ${nouns}` : 'Keep on the island'} onClick={() => togglePin(agent.id)}>{isPinned ? <PinOff size={12} /> : <Pin size={12} />}</button>}
           </div>
         })}
-      </div>)}
+      </div>
     </div>
   </div>
 }

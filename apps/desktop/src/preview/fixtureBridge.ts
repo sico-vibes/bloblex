@@ -1122,11 +1122,15 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (!agent) throw rpcError('not_found', `That ${entityNoun(themeStyle())} is no longer available.`)
     const existing = method === 'agent.conversation' ? sessions.filter((session) => session.agentId === agent.id && !session.archived && !session.link).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0] : undefined
     if (existing) return { session: { ...existing }, created: false } as T
-    const project = projects.find((item) => item.id === agent.projectId)
+    // Phase 1A: a conversation picks its project (an id, null for none); otherwise the bot's last, then default, project.
+    const wanted = params.projectId === null ? null : typeof params.projectId === 'string' ? params.projectId : (agent.lastProjectId ?? agent.projectId ?? null)
+    const project = wanted ? projects.find((item) => item.id === wanted) : undefined
+    if (wanted && !project) throw rpcError('not_found', 'That project no longer exists.')
+    if (project && !project.path) throw rpcError('invalid_argument', 'That project has no folder on this computer.')
     const title = typeof params.title === 'string' && params.title.trim() ? params.title.trim() : 'New chat'
     // Like the daemon, a lazily created conversation is stored untitled and named
     // from the first message, never with the bot's own name.
-    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: agent.runtimeId, agentId: agent.id, title, projectPath: project?.path ?? `C:/Bloblex/workspaces/${agent.id}`, state: 'idle', modelLock: { model: agent.model, thinking: agent.thinking }, contextUsed: null, contextSize: null, updatedAt: new Date().toISOString(), messages: [] }
+    const session: Session = { id: `session-new-${sessions.length + 1}`, runtimeId: agent.runtimeId, agentId: agent.id, title, projectPath: project?.path ?? `C:/Bloblex/workspaces/${agent.id}`, projectId: project?.id ?? null, projectName: project?.name ?? null, state: 'idle', modelLock: { model: agent.model, thinking: agent.thinking }, contextUsed: null, contextSize: null, updatedAt: new Date().toISOString(), messages: [] }
     sessions = [...sessions, session]
     return { session, created: true } as T
   }

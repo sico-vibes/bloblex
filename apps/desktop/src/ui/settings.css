@@ -214,3 +214,7 @@
 .connect-command code { flex: 1 1 auto; min-width: 0; padding: 8px 10px; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: 11.5px/1.5 var(--font-mono); overflow-wrap: anywhere; user-select: text; }
 .connect-command .ghost-button { flex: none; }
 .connect-consent .approval-choices { margin: 4px 0 2px; }
+
+/* Phase 1A: an Always rule shows where it applies. */
+.approval-rule-list li .approval-rule-label { flex: 1 1 auto; }
+.approval-rule-list li .ghost-button { flex: none; }

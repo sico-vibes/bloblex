@@ -1,7 +1,8 @@
-// Project-first sidebar: projects group blobs; each blob is one ongoing
-// conversation. Casual blobs (no project) live under "Unassigned".
+// Bot-first sidebar (Phase 1A, owner decision 29 October 2026): one list of
+// bots, the Manager pinned on top. Bots work in every project; a bot's
+// conversations are grouped by project in its conversations panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
+import { Archive, Check, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { rpc } from '../tauri'
 import { agentLook } from '../blob/look'
@@ -13,15 +14,15 @@ import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
 import { shortTime } from './rosterSelectors'
-import { conversationPreview, groupAgentsByProject, isManager, mainSessionFor, managerOf, sessionIsBusy, sessionIsLimited, sidebarSubtitle } from './teamSelectors'
+import { conversationPreview, isManager, mainSessionFor, managerOf, rosterAgents, sessionIsBusy, sessionIsLimited, sidebarSubtitle } from './teamSelectors'
 import { friendlyErrorText } from './errorCopy'
 import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
 
-/** Where a pointer drag would land: on a row edge, or on a project area. */
-export type DropHint = { kind: 'row'; agentId: string; edge: 'before' | 'after' } | { kind: 'project'; projectId: string | null }
+/** Where a pointer drag would land: on a row edge. */
+export type DropHint = { kind: 'row'; agentId: string; edge: 'before' | 'after' }
 
 export function TeamMenu({ items, position, label, onClose }: { items: MenuItem[]; position: { x: number; y: number }; label: string; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -205,7 +206,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   // lands (the value below is still read synchronously).
   useCatalogVersion()
   const [showHidden, setShowHidden] = useState(false)
-  const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'project'; project: Project; x: number; y: number } | { kind: 'move'; agent: Agent; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ kind: 'blob'; agent: Agent; x: number; y: number } | { kind: 'move'; agent: Agent; x: number; y: number } | null>(null)
   // FIX39 item 21: the tag editor is opened from a project's or a bot's menu.
   const [tagTarget, setTagTarget] = useState<TagTarget | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -217,11 +218,12 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const suppressClick = useRef(false)
   const [runtimeTooltipAgentId, setRuntimeTooltipAgentId] = useState<string | null>(null)
   const menuTrigger = useRef<HTMLElement | null>(null)
-  const groups = useMemo(() => groupAgentsByProject(agents, projects, showHidden), [agents, projects, showHidden])
+  const roster = useMemo(() => rosterAgents(agents, showHidden), [agents, showHidden])
   const manager = managerOf(agents)
   const pinned = pinnedIds.map((id) => agents.find((agent) => agent.id === id && !agent.archived && (showHidden || !agent.hidden))).filter((agent): agent is Agent => !!agent)
   const hiddenCount = agents.filter((agent) => !agent.archived && agent.hidden).length
-  const rowOrder = [...pinned, ...groups.flatMap((group) => group.project?.collapsed ? [] : group.agents.filter((agent) => !pinnedIds.includes(agent.id)))]
+  const rows = roster.filter((agent) => !pinnedIds.includes(agent.id))
+  const rowOrder = [...pinned, ...rows]
   const closeMenu = () => { setMenu(null); requestAnimationFrame(() => menuTrigger.current?.focus()) }
 
   const openBlobMenu = (agent: Agent, x: number, y: number, trigger: HTMLElement | null) => { menuTrigger.current = trigger; setMenu({ kind: 'blob', agent, x, y }) }
@@ -241,9 +243,9 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     ]
     return [
       { label: isPinned ? 'Unpin' : 'Pin', icon: isPinned ? <PinOff size={15} /> : <Pin size={15} />, onSelect: () => actions.onTogglePin(agent.id) },
-      { label: 'Move to', icon: <FolderInput size={15} />, disabled: locked, submenu: [
+      { label: 'Default project', icon: <FolderInput size={15} />, disabled: locked, submenu: [
         ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => actions.onMove(agent, project.id) })),
-        { label: 'Unassigned', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => actions.onMove(agent, null) },
+        { label: 'No project', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => actions.onMove(agent, null) },
         'separator',
         { label: 'New project…', icon: <FolderPlus size={15} />, onSelect: actions.onCreateProject },
       ] },
@@ -266,20 +268,12 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       { label: 'Archive', icon: <Archive size={15} />, danger: true, disabled: locked, onSelect: () => actions.onArchive(agent) },
     ]
   }
-  const projectMenu = (project: Project): MenuItem[] => [
-    { label: `New ${noun} here`, icon: <Plus size={15} />, onSelect: () => actions.onCreate(project.id) },
-    { label: 'Rename project', icon: <Pencil size={15} />, onSelect: () => actions.onRenameProject(project) },
-    { label: 'Tags…', icon: <Tag size={15} />, onSelect: () => setTagTarget({ kind: 'project', id: project.id, name: project.name, tags: [...(project.tags ?? [])] }) },
-    { label: 'Change folder…', icon: <FolderOpen size={15} />, onSelect: () => actions.onChangeProjectFolder(project) },
-    'separator',
-    { label: 'Delete project', icon: <Trash2 size={15} />, danger: true, onSelect: () => actions.onDeleteProject(project) },
-  ]
-  /** The projects a blob can be moved to, for the keyboard "Move to project" menu. */
+  /** The keyboard "Default project" menu: where this bot's new conversations start. */
   const moveMenu = (agent: Agent): MenuItem[] => [
-    ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => { actions.onMove(agent, project.id); setAnnouncement(`Moved ${agent.name} to ${project.name}.`) } })),
-    { label: 'Unassigned', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => { actions.onMove(agent, null); setAnnouncement(`Moved ${agent.name} to Unassigned.`) } },
+    ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => { actions.onMove(agent, project.id); setAnnouncement(`${agent.name}'s new conversations start in ${project.name}.`) } })),
+    { label: 'No project', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => { actions.onMove(agent, null); setAnnouncement(`${agent.name}'s new conversations start with no project.`) } },
   ]
-  /** What sits under the pointer during a drag: a row edge, a project area, or nothing. */
+  /** What sits under the pointer during a drag: a row edge, or nothing. */
   const hintFromPoint = (x: number, y: number, selfId: string): DropHint | null => {
     const hit = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) as HTMLElement | null : null
     const row = hit?.closest?.('.team-row[data-agent-id]') as HTMLElement | null
@@ -288,8 +282,6 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       const rect = row.getBoundingClientRect()
       return { kind: 'row', agentId: targetId, edge: y < rect.top + rect.height / 2 ? 'before' : 'after' }
     }
-    const group = hit?.closest?.('.team-group[data-project-id]') as HTMLElement | null
-    if (group) return { kind: 'project', projectId: group.dataset.projectId === 'unassigned' ? null : group.dataset.projectId ?? null }
     return null
   }
   const finishDrag = (agent: Agent) => {
@@ -299,9 +291,6 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     if (hint?.kind === 'row') {
       const target = agents.find((item) => item.id === hint.agentId)
       if (target) { actions.onPlace(agent, target, hint.edge); setAnnouncement(`${agent.name} moved next to ${target.name}.`) }
-    } else if (hint?.kind === 'project') {
-      actions.onMove(agent, hint.projectId)
-      setAnnouncement(`Moved ${agent.name} to ${projects.find((item) => item.id === hint.projectId)?.name ?? 'Unassigned'}.`)
     }
   }
 
@@ -328,8 +317,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } actions.onSelect(agent) }}
       onContextMenu={(event) => { event.preventDefault(); openBlobMenu(agent, event.clientX, event.clientY, event.currentTarget) }}
       onPointerDown={(event) => {
-        // FIX39 item 13 / P5 audit F2: a locked bot is not draggable, so a drop
-        // onto Unassigned or another project cannot even ask the daemon.
+        // FIX39 item 13 / P5 audit F2: a locked bot is not draggable.
         if (event.button !== 0 || agent.locked === true) return
         drag.current = { id: agent.id, pointerId: event.pointerId, fromX: event.clientX, fromY: event.clientY, moved: false }
         try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* capture may be unavailable */ }
@@ -402,7 +390,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     </button>
     {banner}
     {needsYou}
-    <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={`${Nouns} by project`}>
+    <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={Nouns}>
       {manager && <section className="team-group manager-group" aria-label="Manager">
         <div className="team-group-rows">{renderRow(manager)}</div>
       </section>}
@@ -410,37 +398,19 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
         <div className="team-group-head static"><Pin size={13} aria-hidden="true" /><span>Pinned</span></div>
         <div className="team-group-rows">{pinned.map(renderRow)}</div>
       </section>}
-      {groups.map(({ project, agents: members }) => {
-        const key = project?.id ?? 'unassigned'
-        const rows = members.filter((agent) => !pinnedIds.includes(agent.id))
-        if (!project && rows.length === 0 && members.length === 0 && projects.length > 0) return null
-        return <section key={key} data-project-id={project?.id ?? 'unassigned'} className={`team-group ${dropHint?.kind === 'project' && dropHint.projectId === (project?.id ?? null) ? 'drop-target' : ''}`} aria-label={project?.name ?? 'Unassigned'}>
-          <div className="team-group-head">
-            {project ? <button type="button" className="team-group-toggle" aria-expanded={!project.collapsed} onClick={() => actions.onToggleProjectCollapsed(project)}
-              onContextMenu={(event) => { event.preventDefault(); menuTrigger.current = event.currentTarget; setMenu({ kind: 'project', project, x: event.clientX, y: event.clientY }) }}>
-              {project.collapsed ? <ChevronRight size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
-              <Folder size={13} aria-hidden="true" />
-              <span title={project.path ?? undefined}>{project.name}</span>
-              {project.tags && project.tags.length > 0 && <span className="project-tags" title={project.tags.join(', ')}>{project.tags.map((tag) => <span key={tag} className="project-tag">{tag}</span>)}</span>}
-            </button> : <span className="team-group-title"><FolderOpen size={13} aria-hidden="true" /><span>Unassigned</span></span>}
-            <span className="team-group-actions">
-              <button type="button" className="icon-button tiny" aria-label={`New ${noun} in ${project?.name ?? 'Unassigned'}`} title={`New ${noun}`} onClick={() => actions.onCreate(project?.id ?? null)}><Plus size={14} /></button>
-              {project && <button type="button" className="icon-button tiny" aria-label={`${project.name} options`} title="Project options" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); menuTrigger.current = event.currentTarget; setMenu({ kind: 'project', project, x: rect.left, y: rect.bottom + 4 }) }}><MoreHorizontal size={14} /></button>}
-            </span>
-          </div>
-          {!project?.collapsed && <div className="team-group-rows" role="group">
-            {rows.map(renderRow)}
-            {rows.length === 0 && <p className="team-group-empty">{project ? `Drag a ${noun} here, or create one.` : `${Nouns} without a project take general requests.`}</p>}
-          </div>}
-        </section>
-      })}
+      <section className="team-group" aria-label={Nouns}>
+        <div className="team-group-head static">
+          <span className="team-group-title"><span>{Nouns}</span></span>
+          <span className="team-group-actions"><button type="button" className="icon-button tiny" aria-label={`New ${noun}`} title={`New ${noun}`} onClick={() => actions.onCreate(null)}><Plus size={14} /></button></span>
+        </div>
+        <div className="team-group-rows" role="group">{rows.map(renderRow)}</div>
+      </section>
       {agents.filter((agent) => !agent.archived).length === 0 && <p className="team-group-empty">No {nouns} yet. Create one to start chatting.</p>}
       </div>
       {hiddenCount > 0 && <button type="button" className="team-hidden-toggle" onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={13} /> : <Eye size={13} />}{showHidden ? `Hide hidden ${nouns}` : `Show ${hiddenCount} hidden ${noun}${hiddenCount === 1 ? '' : 's'}`}</button>}
     </nav>
     {menu?.kind === 'blob' && <TeamMenu label={`${menu.agent.name} actions`} position={menu} items={blobMenu(menu.agent)} onClose={closeMenu} />}
-    {menu?.kind === 'project' && <TeamMenu label={`${menu.project.name} actions`} position={menu} items={projectMenu(menu.project)} onClose={closeMenu} />}
-    {menu?.kind === 'move' && <TeamMenu label={`Move ${menu.agent.name} to a project`} position={menu} items={moveMenu(menu.agent)} onClose={closeMenu} />}
+    {menu?.kind === 'move' && <TeamMenu label={`${menu.agent.name}'s default project`} position={menu} items={moveMenu(menu.agent)} onClose={closeMenu} />}
     {tagTarget && <TagEditor target={tagTarget} onClose={() => { setTagTarget(null); requestAnimationFrame(() => menuTrigger.current?.focus()) }} />}
     <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
   </div>

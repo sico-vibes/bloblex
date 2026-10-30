@@ -21,8 +21,8 @@ function choicesForShortcuts(choices: string[]) {
   }
 }
 
-/** Options a reply carries to `permission.reply`. */
-export type PermissionReplyOptions = { remember?: boolean }
+/** Options a reply carries to `permission.reply`. Phase 1A: an Always rule is for this project or for every project. */
+export type PermissionReplyOptions = { remember?: boolean; rememberScope?: 'project' | 'bot' }
 
 export function ApprovalCard({ permission, onReply, focusOnMount = true, variant = 'main' }: {
   permission: PermissionRequest
@@ -39,6 +39,9 @@ export function ApprovalCard({ permission, onReply, focusOnMount = true, variant
   // The daemon marks a request it can remember (same bot, same command or file, a safe kind); "Always allow" saves a rule.
   const rememberable = (permission as { rememberable?: unknown }).rememberable === true && !!shortcuts.allow
   const rememberLabel = typeof (permission as { rememberLabel?: unknown }).rememberLabel === 'string' ? String((permission as { rememberLabel?: unknown }).rememberLabel) : ''
+  // Phase 1A: a request that knows its conversation's project can be remembered for that project only.
+  const projectName = typeof (permission as { projectName?: unknown }).projectName === 'string' ? String((permission as { projectName?: unknown }).projectName).trim() : ''
+  const what = rememberLabel ? `: ${rememberLabel}` : ''
   const command = typeof permission.command === 'string' && permission.command.trim() ? permission.command : null
   const detail = typeof permission.detail === 'string' ? permission.detail : typeof permission.description === 'string' ? permission.description : null
   const tool = typeof permission.tool === 'string' ? permission.tool : null
@@ -91,7 +94,12 @@ export function ApprovalCard({ permission, onReply, focusOnMount = true, variant
       </div>
       {detail ? <p>{detail}</p> : !command && <p>{`The agent requested permission${tool ? ` to use ${tool}` : ''}.`}</p>}
       {command && <div className="permission-command"><pre><code>{command}</code></pre><button type="button" className="permission-copy-button" aria-label={copied ? 'Command copied' : 'Copy command'} title={copied ? 'Copied' : 'Copy command'} onClick={() => void copyCommand()}>{copied ? <Check size={13} /> : <Copy size={13} />}</button></div>}
-      <div className="permission-actions">{choices.map((choice) => <Fragment key={choice}><PermissionChoiceButton permission={permission} choice={choice} className={`permission-choice ${choice === shortcuts.allow ? 'permission-choice-primary' : ''} ${choice === shortcuts.deny ? 'permission-choice-secondary' : ''} ${variant === 'companion' ? 'companion-permission-choice' : ''}`} onReply={onReply}>{permissionChoiceLabel(choice)}{choice === shortcuts.allow && <kbd>Enter</kbd>}{choice === shortcuts.deny && <kbd>Esc</kbd>}</PermissionChoiceButton>{choice === shortcuts.allow && rememberable && <PermissionChoiceButton permission={permission} choice={shortcuts.allow!} className={`permission-choice permission-choice-always ${variant === 'companion' ? 'companion-permission-choice' : ''}`} title={rememberLabel ? `Always allow for this bot: ${rememberLabel}. You can remove it in Settings → Approvals.` : 'Always allow this for this bot. You can remove it in Settings → Approvals.'} onReply={(choice) => onReply(choice, { remember: true })}>Always allow</PermissionChoiceButton>}</Fragment>)}</div>
+      <div className="permission-actions">{choices.map((choice) => <Fragment key={choice}><PermissionChoiceButton permission={permission} choice={choice} className={`permission-choice ${choice === shortcuts.allow ? 'permission-choice-primary' : ''} ${choice === shortcuts.deny ? 'permission-choice-secondary' : ''} ${variant === 'companion' ? 'companion-permission-choice' : ''}`} onReply={onReply}>{permissionChoiceLabel(choice)}{choice === shortcuts.allow && <kbd>Enter</kbd>}{choice === shortcuts.deny && <kbd>Esc</kbd>}</PermissionChoiceButton>{choice === shortcuts.allow && rememberable && (projectName
+        ? <>
+          <PermissionChoiceButton permission={permission} choice={shortcuts.allow!} className={`permission-choice permission-choice-always ${variant === 'companion' ? 'companion-permission-choice' : ''}`} title={`Always allow for this bot in ${projectName}${what}. You can change or remove it in Settings → Approvals.`} onReply={(choice) => onReply(choice, { remember: true, rememberScope: 'project' })}>Always in {projectName}</PermissionChoiceButton>
+          <PermissionChoiceButton permission={permission} choice={shortcuts.allow!} className={`permission-choice permission-choice-always ${variant === 'companion' ? 'companion-permission-choice' : ''}`} title={`Always allow for this bot in every project${what}. You can change or remove it in Settings → Approvals.`} onReply={(choice) => onReply(choice, { remember: true, rememberScope: 'bot' })}>Always, every project</PermissionChoiceButton>
+        </>
+        : <PermissionChoiceButton permission={permission} choice={shortcuts.allow!} className={`permission-choice permission-choice-always ${variant === 'companion' ? 'companion-permission-choice' : ''}`} title={rememberLabel ? `Always allow for this bot: ${rememberLabel}. You can remove it in Settings → Approvals.` : 'Always allow this for this bot. You can remove it in Settings → Approvals.'} onReply={(choice) => onReply(choice, { remember: true })}>Always allow</PermissionChoiceButton>)}</Fragment>)}</div>
     </div>
   </section>
 }

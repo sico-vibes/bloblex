@@ -76,3 +76,20 @@
 .convo-flag.needs { color: var(--status-working-text, var(--status-working)); }
 .convo-flag.failed { color: var(--danger-ink); }
 .convo-row.main:hover .convo-flag, .convo-row.main:focus-within .convo-flag { visibility: hidden; }
+
+/* Phase 1A: a new conversation picks its project, and conversations are grouped by project. */
+.convo-new-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.convo-new-split { display: flex; min-width: 0; }
+.convo-new-split .convo-new { flex: 1 1 auto; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.convo-new-pick { flex: 0 0 30px; height: 32px; padding: 0; display: grid; place-items: center; color: var(--text-3); border: 1px dashed var(--line-strong); border-left: 0; border-radius: 0 10px 10px 0; background: transparent; cursor: pointer; }
+.convo-new-pick:hover:not(:disabled) { color: var(--text-1); border-style: solid; background: var(--surface-hover); }
+.convo-new-pick:disabled { cursor: default; opacity: .5; }
+.convo-new-pick:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.convo-new-where { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; color: var(--text-3); font-size: var(--fs-2xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.convo-project + .convo-project { margin-top: 6px; }
+.convo-project-head { display: flex; align-items: center; gap: 5px; min-width: 0; margin-right: 4px; }
+.convo-project-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-project-tools { display: flex; gap: 1px; opacity: 0; transition: opacity 100ms ease; }
+.convo-project-head:hover .convo-project-tools, .convo-project-head:focus-within .convo-project-tools { opacity: 1; }
+.convo-project-tools .convo-action { width: 20px; height: 20px; }
+@media (prefers-reduced-motion: reduce) { .convo-project-tools { transition: none; } }

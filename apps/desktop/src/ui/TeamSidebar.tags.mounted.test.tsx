@@ -75,11 +75,7 @@ function menuItem(menu: HTMLElement, label: string) {
 }
 
 describe('tags (FIX39 item 21)', () => {
-  it('shows a project\u2019s tags as chips in the sidebar', () => {
-    const view = mount(actions())
-    const chips = [...view.querySelectorAll('.project-tag')].map((chip) => chip.textContent)
-    expect(chips).toEqual(['ui', 'backend'])
-  })
+  // Phase 1A: project tags moved to the conversations panel (ConversationsPanel.projects.mounted.test.tsx).
 
   it('edits a bot\u2019s tags through agent.team.update', async () => {
     const view = mount(actions())
@@ -97,19 +93,6 @@ describe('tags (FIX39 item 21)', () => {
     await act(async () => { [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Save tags')!.click() })
     expect(h.rpc).toHaveBeenCalledWith('agent.team.update', { agentId: 'agent-alpha', tags: ['reviewer', 'payments'] })
     expect(view.querySelector('.tag-editor')).toBeNull()
-  })
-
-  it('edits a project\u2019s tags through project.update', async () => {
-    const view = mount(actions())
-    const toggle = view.querySelector<HTMLButtonElement>('.team-group[data-project-id="p1"] .team-group-toggle')!
-    await act(async () => { toggle.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })) })
-    const menu = view.querySelector<HTMLElement>('.team-menu')!
-    await act(async () => { menuItem(menu, 'Tags…')!.click() })
-    const dialog = view.querySelector<HTMLElement>('.tag-editor')!
-    // Remove 'ui', keep 'backend'.
-    await act(async () => { dialog.querySelector<HTMLButtonElement>('button[aria-label="Remove ui"]')!.click() })
-    await act(async () => { [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Save tags')!.click() })
-    expect(h.rpc).toHaveBeenCalledWith('project.update', { projectId: 'p1', tags: ['backend'] })
   })
 
   it('disables Tags on a locked bot', async () => {

@@ -542,7 +542,8 @@ describe('blob roster and editor', () => {
     await click(buttonNamed(view.host, 'Archive'))
     const dialog = view.host.querySelector('[role="dialog"]')
     expect(dialog?.textContent).toContain('Archive Claude?')
-    expect(dialog?.textContent).toContain('It leaves the sidebar and companion. Its conversations stay saved. Restore it from Archived bots in your profile menu.')
+    // Phase 1: undo is on by default.
+    expect(dialog?.textContent).toContain('It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds.')
     expect(dialog?.querySelector('.blob-dialog-icon.warning')).not.toBeNull()
     await view.settle()
     expect(document.activeElement?.textContent).toBe('Keep it')

@@ -1,8 +1,9 @@
 // Composer footer controls: permission mode, attachment tray and the shared
 // popover behaviour used by the model, effort and context controls.
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { Check, ChevronDown, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, X, CircleAlert } from 'lucide-react'
+import { Check, ChevronDown, FilePenLine, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, X, CircleAlert } from 'lucide-react'
 import type { Agent, ApprovalMode, Session } from '../types'
+import { parseApprovalMode } from '../approvalContract'
 import { rpc } from '../tauri'
 import { ConfirmDialog } from './BlobPage'
 import { useEntityNoun } from './vocabulary'
@@ -36,6 +37,7 @@ export function moveMenuFocus(menu: HTMLElement | null, key: string) {
 
 export const APPROVAL_MODE_COPY: Record<ApprovalMode, { label: string; title: string; detail: string }> = {
   ask: { label: 'Ask first', title: 'Ask first', detail: 'You approve each command and file change.' },
+  accept_edits: { label: 'Accept edits', title: 'Auto-accept edits', detail: 'Reading and editing files inside the project run; every command asks.' },
   auto: { label: 'Auto', title: 'Auto-approve', detail: 'Low-risk actions inside the project run; anything else asks.' },
   bypass: { label: 'Full access', title: 'Full access', detail: 'The agent acts without asking. Use only in projects you trust.' },
 }
@@ -43,11 +45,13 @@ export const APPROVAL_MODE_COPY: Record<ApprovalMode, { label: string; title: st
 /** FIX39 item 13: the one sentence a locked bot's disabled composer controls show. */
 export const LOCKED_CONTROL_TOOLTIP = 'This bot is locked. Unlock it to change its settings.'
 
-export function sessionApprovalMode(session: Session, agent: Agent | null): { mode: ApprovalMode; pinned: boolean } {
-  const pinned = session.modelLock?.approvalMode
-  if (pinned === 'ask' || pinned === 'auto' || pinned === 'bypass') return { mode: pinned, pinned: true }
-  const inherited = agent?.effectiveApprovalMode ?? agent?.approvalMode
-  return { mode: inherited === 'auto' || inherited === 'bypass' ? inherited : 'ask', pinned: false }
+/** Order: the conversation's own choice, then its project's, then the bot's (which already includes the default). */
+export function sessionApprovalMode(session: Session, agent: Agent | null): { mode: ApprovalMode; pinned: boolean; fromProject?: boolean } {
+  const pinned = parseApprovalMode(session.modelLock?.approvalMode)
+  if (pinned) return { mode: pinned, pinned: true }
+  const project = parseApprovalMode(session.projectApprovalMode)
+  if (project) return { mode: project, pinned: false, fromProject: true }
+  return { mode: parseApprovalMode(agent?.effectiveApprovalMode ?? agent?.approvalMode) ?? 'ask', pinned: false }
 }
 
 /**
@@ -64,6 +68,7 @@ export function permissionWrite(next: ApprovalMode, botMode: ApprovalMode): Appr
 
 function ModeIcon({ mode, size = 14 }: { mode: ApprovalMode; size?: number }) {
   if (mode === 'bypass') return <CircleAlert size={size} aria-hidden="true" />
+  if (mode === 'accept_edits') return <FilePenLine size={size} aria-hidden="true" />
   if (mode === 'auto') return <ShieldCheck size={size} aria-hidden="true" />
   return <Hand size={size} aria-hidden="true" />
 }
@@ -89,7 +94,7 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const { mode, pinned } = sessionApprovalMode(session, agent)
-  const blobMode = sessionApprovalMode({ ...session, modelLock: { ...session.modelLock, approvalMode: undefined } }, agent).mode
+  const blobMode = sessionApprovalMode({ ...session, projectApprovalMode: null, modelLock: { ...session.modelLock, approvalMode: undefined } }, agent).mode
   const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
   usePopoverDismiss(open, rootRef, close)
   useEffect(() => { if (open) requestAnimationFrame(() => menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()) }, [open])
@@ -103,6 +108,14 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
     const before = session
     setSaving(true)
     if (!agent) { setSaving(false); onError(new Error('Choose a bot first.')); return }
+    // The project's own setting would override the bot's, so here the choice stays on this conversation.
+    if (session.projectApprovalMode && !before.id.startsWith('draft:')) {
+      try {
+        const result = await rpc<{ session?: Session }>('session.permissions.set', { sessionId: before.id, approvalMode: write ?? blobMode })
+        if (result.session?.id === before.id) onSessionUpdated(result.session)
+      } catch (reason) { onError(reason) } finally { setSaving(false) }
+      return
+    }
     if (!before.id.startsWith('draft:')) onSessionUpdated({ ...before, modelLock: { ...(before.modelLock ?? {}), approvalMode: undefined } })
     try {
       const updated = await rpc<{ agent?: Agent }>('agent.update', { agentId: agent.id, approvalMode: write })
@@ -132,12 +145,12 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
     </button>
     {open && <div ref={menuRef} className="composer-menu permission-menu align-left" role="menu" aria-label="Permissions for this conversation" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
       <div className="composer-menu-heading">Permissions</div>
-      {(['ask', 'auto', 'bypass'] as const).map((item) => <button key={item} type="button" role="menuitemradio" aria-checked={item === mode} className={`composer-menu-item rich mode-${item}`} onClick={() => choose(item)}>
+      {(['ask', 'accept_edits', 'auto', 'bypass'] as const).map((item) => <button key={item} type="button" role="menuitemradio" aria-checked={item === mode} className={`composer-menu-item rich mode-${item}`} onClick={() => choose(item)}>
         <span className="composer-menu-icon"><ModeIcon mode={item} size={15} /></span>
         <span className="composer-menu-text"><strong>{APPROVAL_MODE_COPY[item].title}{item === blobMode && <small className="composer-menu-tag">{Noun} default</small>}</strong><small>{APPROVAL_MODE_COPY[item].detail}</small></span>
         {item === mode && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
       </button>)}
-      <p className="composer-menu-note">{note ?? `Applies to this ${noun} from now on, starting with the next message. A turn already running keeps the mode it started with.`}</p>
+      <p className="composer-menu-note">{note ?? (session.projectApprovalMode ? 'This project sets its own approvals, so this changes only this conversation.' : `Applies to this ${noun} from now on, starting with the next message. A turn already running keeps the mode it started with.`)}</p>
     </div>}
     {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. This is the ${noun}'s own setting, so every conversation is affected.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(permissionWrite('bypass', blobMode)) }} onCancel={() => setConfirmBypass(false)} />}
   </div>

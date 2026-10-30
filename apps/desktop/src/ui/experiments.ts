@@ -1,6 +1,7 @@
 import type { JsonRecord, Session, Snapshot } from '../types'
 import { entityNoun } from './vocabulary'
 import { themeStyle } from '../blob/bitbots'
+import { keysFor, sendRows, SHORTCUT_ACTIONS, type SendShortcut, type ShortcutBindings } from './shortcuts'
 
 export const EXPERIMENTS = [
   { name: 'changeReview', label: 'Change review', hint: () => 'Review, keep or revert the files changed by a turn.', help: () => 'Shows saved file diffs below each completed reply. Keep dismisses a file. Revert confirms and reverses only a complete patch that still applies cleanly.' },
@@ -18,7 +19,9 @@ export const EXPERIMENTS = [
 ] as const
 export type ExperimentName = typeof EXPERIMENTS[number]['name']
 export type Experiments = Record<ExperimentName, boolean>
-export const DEFAULT_EXPERIMENTS = Object.fromEntries(EXPERIMENTS.map(({ name }) => [name, name === 'resumeAfterUsageLimits'])) as Experiments
+/** On unless the owner turned them off: a stored `false` stays off, and no stored value means on. */
+const ON_BY_DEFAULT = new Set<string>(['resumeAfterUsageLimits', 'memory', 'search', 'changeReview', 'undo', 'messageActions', 'autoTitles', 'autoRetry'])
+export const DEFAULT_EXPERIMENTS = Object.fromEntries(EXPERIMENTS.map(({ name }) => [name, ON_BY_DEFAULT.has(name)])) as Experiments
 
 export function filesUnderReply(session: Session, message: JsonRecord): JsonRecord[] {
   if (message.role !== 'assistant' || typeof message.turnId !== 'string') return []
@@ -43,14 +46,15 @@ export function waitingBlobCount(snapshot: Snapshot | null, now: number): number
   return waiting.size
 }
 
-export function shortcutRows(speechEnabled: boolean) {
+export function shortcutRows(speechEnabled: boolean, bindings: ShortcutBindings = {}, sendShortcut: SendShortcut = 'enter') {
+  const bound = SHORTCUT_ACTIONS.flatMap((action) => { const keys = keysFor(action.id, bindings); return keys ? [[keys === 'Ctrl+K' ? 'Ctrl+K / ⌘K' : keys, action.label]] : [] })
+  const [send, newLine] = sendRows(sendShortcut)
   return [
-    ['Ctrl+K / ⌘K', 'Quick switcher'],
+    ...bound,
     ...(speechEnabled ? [['Ctrl+E', 'Start or stop dictation']] : []),
     ['Ctrl+Alt+B', 'Show or hide companion (when its shortcut is enabled)'],
-    ['Ctrl+/', 'Keyboard shortcuts'],
-    ['Enter', 'Send a prompt; choose a highlighted mention or reference'],
-    ['Shift+Enter', 'New line'],
+    [send[0], `${send[1]}; Enter also chooses a highlighted mention or reference`],
+    newLine,
     ['@', 'Mention a teammate in the composer'],
     ['#', 'Reference a side conversation in the composer'],
     ['↑ / ↓', 'Navigate switcher, mention and reference results'],

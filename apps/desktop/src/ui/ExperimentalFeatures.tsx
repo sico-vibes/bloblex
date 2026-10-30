@@ -9,6 +9,7 @@ import { parseUnifiedDiff } from './diffParser'
 import { useDialogAccessibility } from './dialogFocus'
 import { friendlyErrorText } from './errorCopy'
 import { shortcutRows } from './experiments'
+import type { SendShortcut, ShortcutBindings } from './shortcuts'
 import { useEntityNoun } from './vocabulary'
 import './experiments.css'
 
@@ -58,9 +59,9 @@ export function MessageSearch({ agents, onChoose, onClose }: { agents: Agent[]; 
   </section></div>
 }
 
-export function ShortcutSheet({ speechEnabled, onClose }: { speechEnabled: boolean; onClose: () => void }) {
+export function ShortcutSheet({ speechEnabled, bindings, sendShortcut, onClose }: { speechEnabled: boolean; bindings?: ShortcutBindings; sendShortcut?: SendShortcut; onClose: () => void }) {
   const { ref, close } = useDialogAccessibility(onClose)
-  return <div className="sheet-backdrop quick-switcher-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close() }}><section ref={ref} className="quick-switcher shortcut-sheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><header><h2>Keyboard shortcuts</h2><button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close keyboard shortcuts" onClick={close}><X size={16} /></button></header><dl>{shortcutRows(speechEnabled).map(([keys, label]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{label}</dd></div>)}</dl></section></div>
+  return <div className="sheet-backdrop quick-switcher-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close() }}><section ref={ref} className="quick-switcher shortcut-sheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><header><h2>Keyboard shortcuts</h2><button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close keyboard shortcuts" onClick={close}><X size={16} /></button></header><dl>{shortcutRows(speechEnabled, bindings, sendShortcut).map(([keys, label]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{label}</dd></div>)}</dl></section></div>
 }
 
 export type UndoToast = { id: string; text: string; deadline: number; undo: () => Promise<void> }

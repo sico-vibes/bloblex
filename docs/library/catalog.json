@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "78f25a0",
-  "documentCount": 361,
+  "revision": "0020834",
+  "documentCount": 362,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1286,7 +1286,7 @@
       "title": "Settings",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "98d98f25dc19fc12d6c11dd5a05fa67eff658733ceef875fdb172fdc64176ae1",
+      "sha256": "62f71fb0c8d0ee8e1eae0a2d5cd40c56faf5c7a9ae645994d4ff0534acb5a17b",
       "headings": [
         {
           "id": "purpose",
@@ -1326,6 +1326,16 @@
         {
           "id": "experimental-features",
           "text": "Experimental features",
+          "level": 3
+        },
+        {
+          "id": "shortcuts-and-the-usage-bars-30-october-2026",
+          "text": "Shortcuts and the usage bars (30 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "renamed-keys",
+          "text": "Renamed keys",
           "level": 3
         },
         {
@@ -1781,7 +1791,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "47f5c814e3cd4f6798bd91462811c65bd8614c9cdf725b7f0c49985af365bf88",
+      "sha256": "adeca90cea64935b807c248a2219469d5df269cdc882f09b41f7aef7b2dda591",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1811,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "c7b060a1db955459c6958e05d4ed6af73afcb42ee1490be9e566fab686136117",
+      "sha256": "320e60a90aef205a178951de6c99143d2d14ebfdc668d7ced702e73e250f259c",
       "headings": [
         {
           "id": "update-commands",
@@ -1894,6 +1904,11 @@
           "level": 3
         },
         {
+          "id": "phase-1-approvals-and-project-overrides-30-october-2026-lane-a",
+          "text": "Phase 1, approvals and project overrides (30 October 2026, lane A)",
+          "level": 3
+        },
+        {
           "id": "desktop-notifications",
           "text": "Desktop notifications",
           "level": 2
@@ -1926,6 +1941,11 @@
         {
           "id": "wave-14-bitbots-mcp",
           "text": "Wave 14: Bitbots MCP",
+          "level": 2
+        },
+        {
+          "id": "phase-1-lane-b-sign-in-read-experiments-shortcuts-and-shims-30-october-2026",
+          "text": "Phase 1, Lane B: sign-in read, experiments, shortcuts and shims (30 October 2026)",
           "level": 2
         }
       ]
@@ -4077,6 +4097,56 @@
         {
           "id": "gates-run-from-dfx70-report-the-tail-of-each",
           "text": "Gates (run from D:\\fx70, report the tail of each)",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-1-brief",
+      "source": "docs/history/wave15/phase-1-brief.md",
+      "title": "Brief: Phase 1, approvals and settings",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "8e1fbeddd01ca50c238a88a7b3c4aca08cbb1d4af9f8355b9790d8030803edb0",
+      "headings": [
+        {
+          "id": "lane-a-approval-modes",
+          "text": "Lane A: approval modes",
+          "level": 2
+        },
+        {
+          "id": "lane-a-per-project-overrides",
+          "text": "Lane A: per-project overrides",
+          "level": 2
+        },
+        {
+          "id": "lane-b-the-usage-bar-sign-in-read-becomes-opt-in",
+          "text": "Lane B: the usage-bar sign-in read becomes opt-in",
+          "level": 2
+        },
+        {
+          "id": "lane-b-useful-experiments-on-by-default",
+          "text": "Lane B: useful experiments on by default",
+          "level": 2
+        },
+        {
+          "id": "lane-b-shortcut-settings",
+          "text": "Lane B: shortcut settings",
+          "level": 2
+        },
+        {
+          "id": "lane-b-settings-compatibility-shims",
+          "text": "Lane B: settings compatibility shims",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
           "level": 2
         },
         {

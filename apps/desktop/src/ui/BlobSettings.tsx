@@ -16,7 +16,7 @@ import {
 import { Select } from './Select'
 import { providerBrand } from './providerBrand'
 import { AutoApprovedList, BypassConfirmDialog } from './approvalUi'
-import { ChevronDown, ChevronRight, Hand, RefreshCw, ShieldAlert, ShieldCheck, type LucideIcon } from 'lucide-react'
+import { ChevronDown, ChevronRight, FilePenLine, Hand, RefreshCw, ShieldAlert, ShieldCheck, type LucideIcon } from 'lucide-react'
 import { HelpTip, RowCopy } from './SettingsParts'
 import { fetchCached, invalidateCatalog, readCached } from './catalogCache'
 import { LookEditor } from './LookEditor'
@@ -42,6 +42,7 @@ const NOTIFICATION_LEVEL_HELP: Record<'all' | 'input' | 'muted', string> = {
 /** Plain-language permissions (FIX22 B8). The values are unchanged. */
 const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; name: string; sentence: string; Icon: LucideIcon }> = [
   { value: 'ask', name: 'Ask first', sentence: 'nothing changes until you approve each action', Icon: Hand },
+  { value: 'accept_edits', name: 'Auto-accept edits', sentence: 'reading and editing project files go through; every command asks', Icon: FilePenLine },
   { value: 'auto', name: 'Auto-approve', sentence: 'safe actions go through, risky ones still ask', Icon: ShieldCheck },
   { value: 'bypass', name: 'Full access', sentence: 'actions run without asking; automations still use safe actions only', Icon: ShieldAlert },
 ]
@@ -171,7 +172,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     let cancelled = false
     rpc<{ settings?: Record<string, unknown> }>('settings.get').then((result) => {
       if (cancelled) return
-      setMemoryOn(result?.settings?.['experimental.memory'] === true)
+      setMemoryOn(result?.settings?.['experimental.memory'] !== false)
     }).catch(() => { if (!cancelled) setMemoryOn(false) })
     return () => { cancelled = true }
   }, [memoryEnabled, agentId])
@@ -228,7 +229,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
 
   const onApproval = (value: string) => {
     if (value === 'bypass') { if (draft.approvalMode !== 'bypass') setBypassOpen(true); return }
-    const mode = value === 'ask' || value === 'auto' ? value : null
+    const mode = value === 'ask' || value === 'accept_edits' || value === 'auto' ? value : null
     onDraftChange({ ...draft, approvalMode: mode })
   }
 

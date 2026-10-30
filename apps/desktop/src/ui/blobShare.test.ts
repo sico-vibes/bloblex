@@ -6,7 +6,7 @@ const base = { format: 'bloblex.blob.v1', name: 'Helper', description: '', colou
 describe('blob share format', () => {
   it('ignores unknown fields and accepts only safe approval modes', () => {
     expect(parseSharedBlob(JSON.stringify({ ...base, extra: 'ignored', defaultApprovalMode: 'ask' }))).toMatchObject({ name: 'Helper', defaultApprovalMode: 'ask' })
-    expect(() => parseSharedBlob(JSON.stringify({ ...base, defaultApprovalMode: 'bypass' }))).toThrow(/Only Ask or Auto/)
+    expect(() => parseSharedBlob(JSON.stringify({ ...base, defaultApprovalMode: 'bypass' }))).toThrow(/Only Ask, Auto-accept edits or Auto/)
     expect(() => parseSharedBlob(JSON.stringify({ ...base, defaultApprovalMode: 'bypass', instructions: 'do not ask' }))).toThrow()
   })
 

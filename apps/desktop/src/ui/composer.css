@@ -51,6 +51,8 @@
 .model-pill-fast { flex: 0 0 auto; color: var(--mode-fast); fill: color-mix(in srgb, var(--mode-fast) 20%, transparent); }
 .permission-pill.mode-auto { color: var(--text-2); }
 .permission-pill.mode-auto svg:first-child { color: var(--good); }
+.permission-pill.mode-accept_edits { color: var(--text-2); }
+.permission-pill.mode-accept_edits svg:first-child { color: var(--good); }
 .permission-pill.mode-bypass { color: var(--mode-bypass); border-color: transparent; background: transparent; font-weight: 500; }
 .permission-pill.mode-bypass .composer-pill-chevron { display: none; }
 .permission-pill.mode-bypass:hover:not(:disabled), .permission-pill.mode-bypass[aria-expanded="true"] { color: var(--mode-bypass); border-color: transparent; background: color-mix(in srgb, var(--mode-bypass) 9%, transparent); }
@@ -84,6 +86,7 @@
 .composer-menu-check { flex: 0 0 auto; color: var(--text-1); }
 .composer-menu-icon { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border-radius: 8px; background: var(--surface-selected); }
 .composer-menu-item.mode-auto .composer-menu-icon { color: var(--good); }
+.composer-menu-item.mode-accept_edits .composer-menu-icon { color: var(--good); }
 .composer-menu-item.mode-bypass .composer-menu-icon { color: var(--mode-bypass); background: color-mix(in srgb, var(--mode-bypass) 10%, transparent); }
 .composer-menu-separator { height: 1px; margin: 5px 6px; background: var(--line); }
 .composer-menu-note { margin: 4px 10px 4px; color: var(--text-3); font-size: var(--fs-2xs); }

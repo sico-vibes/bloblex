@@ -4,7 +4,7 @@ import type { RemoteStatus } from './remote/remoteContract'
 import { parseAutoResolved, parseBypassActive } from './approvalContract'
 
 export type { AutoResolvedAction, BypassNotice } from './approvalContract'
-export type ApprovalMode = 'ask' | 'auto' | 'bypass'
+export type ApprovalMode = 'ask' | 'accept_edits' | 'auto' | 'bypass'
 
 export type JsonRecord = Record<string, unknown>
 
@@ -212,6 +212,8 @@ export interface Project extends JsonRecord {
   description?: string
   /** FIX39 item 21: what kind of work this project is for, for Manager routing. */
   tags?: string[]
+  /** Phase 1: the owner's per-project settings (see ProjectSettingsDialog). */
+  overrides?: { models?: Record<string, string>; approvalMode?: ApprovalMode | null; setupScript?: string | null }
 }
 
 /** Side conversation between two blobs, or a scheduled run; absent on a blob's main conversation. */
@@ -319,6 +321,8 @@ export interface Session extends JsonRecord {
   limitedUntil?: string | null
   /** Phase 1B: the comparison this conversation belongs to. */
   fanoutId?: string | null
+  /** Phase 1: the project's approval override, when it has one. It applies unless the conversation has its own. */
+  projectApprovalMode?: ApprovalMode | null
   /** The project the conversation was started for (daemon-stamped; absent on older rows). */
   projectId?: string | null
   /** Phase 1A: the project's name, sent with the session (null for no project). */

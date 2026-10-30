@@ -48,10 +48,10 @@ describe('conversation permission mode', () => {
 
     await act(async () => { trigger.click() })
     const items = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
-    expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
+    expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false'])
     expect(items[0].textContent).toContain('Bot default')
     // Choosing Auto writes the bot, not the conversation, and drops the pin.
-    await act(async () => { items[1].click() })
+    await act(async () => { items[2].click() })
     await flush()
     expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'auto' })
     expect(rpc).toHaveBeenCalledWith('session.permissions.set', { sessionId: 'session', approvalMode: null })
@@ -62,7 +62,7 @@ describe('conversation permission mode', () => {
     // Full access still asks first, then writes the bot.
     rpc.mockClear()
     await act(async () => { trigger.click() })
-    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[2].click() })
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[3].click() })
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain('full access')
     expect(rpc).not.toHaveBeenCalled()
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === 'Allow full access')!.click() })
@@ -84,7 +84,7 @@ describe('conversation permission mode', () => {
     const draft: Session = { id: 'draft:agent', runtimeId: 'runtime', agentId: 'agent', state: 'idle', messages: [] }
     const host = mount(<PermissionModeControl session={draft} agent={agent} disabled={false} onSessionUpdated={updated} onAgentUpdated={agentUpdated} onError={() => undefined} />)
     await act(async () => { host.querySelector<HTMLButtonElement>('.permission-pill')!.click() })
-    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[1].click() })
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[2].click() })
     await flush()
     expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'auto' })
     expect(rpc).not.toHaveBeenCalledWith('session.permissions.set', expect.anything())
@@ -120,7 +120,7 @@ describe('conversation permission mode', () => {
     const drained: Session = { ...session, modelLock: { model: 'alpha', thinking: 'low', approvalMode: 'ask' } }
     const host = mount(<PermissionModeControl session={drained} agent={bypassAgent} disabled={false} onSessionUpdated={updated} onAgentUpdated={agentUpdated} onError={() => undefined} />)
     await act(async () => { host.querySelector<HTMLButtonElement>('.permission-pill')!.click() })
-    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[2].click() })
+    await act(async () => { host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[3].click() })
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === 'Allow full access')!.click() })
     await flush()
     expect(rpc).toHaveBeenCalledWith('agent.update', { agentId: 'agent', approvalMode: 'bypass' })

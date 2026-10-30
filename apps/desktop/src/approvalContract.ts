@@ -1,4 +1,4 @@
-export type ApprovalMode = 'ask' | 'auto' | 'bypass'
+export type ApprovalMode = 'ask' | 'accept_edits' | 'auto' | 'bypass'
 
 export interface AgentApprovalRef {
   approvalMode?: ApprovalMode | null
@@ -12,7 +12,7 @@ export interface PolicyAgentRow {
 }
 
 export interface PermissionsPolicy {
-  defaultMode: 'ask' | 'auto'
+  defaultMode: ApprovalMode
   perAgent: PolicyAgentRow[]
 }
 
@@ -21,7 +21,7 @@ export interface AutoResolvedAction {
   sessionId?: string
   turnId?: string
   agentId?: string
-  mode: 'auto' | 'bypass'
+  mode: 'auto' | 'accept_edits' | 'bypass'
   decision?: string
   category?: string
   summary: string
@@ -40,12 +40,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function parseApprovalMode(value: unknown): ApprovalMode | null {
-  if (value === 'ask' || value === 'auto' || value === 'bypass') return value
+  if (value === 'ask' || value === 'accept_edits' || value === 'auto' || value === 'bypass') return value
   return null
 }
 
-export function parseGlobalMode(value: unknown): 'ask' | 'auto' {
-  return value === 'auto' ? 'auto' : 'ask'
+export function parseGlobalMode(value: unknown): ApprovalMode {
+  return parseApprovalMode(value) ?? 'ask'
 }
 
 export function effectiveApprovalMode(agent: AgentApprovalRef | null | undefined): ApprovalMode | null {
@@ -56,15 +56,16 @@ export function effectiveApprovalMode(agent: AgentApprovalRef | null | undefined
 }
 
 export function visibleApprovalMode(draftMode: ApprovalMode | null | undefined, agent: AgentApprovalRef | null | undefined): ApprovalMode | null {
-  if (draftMode === 'ask' || draftMode === 'auto' || draftMode === 'bypass') return draftMode
+  if (parseApprovalMode(draftMode)) return draftMode as ApprovalMode
   return effectiveApprovalMode(agent)
 }
 
 export function approvalDescription(mode: ApprovalMode | null) {
+  if (mode === 'accept_edits') return 'Bitbots approves reading and editing files inside the project and asks about everything else, including every command.'
   if (mode === 'auto') return 'Bitbots approves low-risk actions inside the project and asks about everything else. Budgets, cancel, and Pause all still apply.'
   if (mode === 'bypass') return 'Bitbots approves every action without asking, and may launch the provider so it does not ask either. Budgets, cancel, and Pause all still stop the work.'
   if (mode === 'ask') return 'Every permission request waits for you.'
-  return 'Use the global default. The default can be Ask or Auto-approve. Bypass is chosen on this bot only.'
+  return 'Use the default from Settings › Agents.'
 }
 
 export function parsePermissionsPolicy(value: unknown): PermissionsPolicy {

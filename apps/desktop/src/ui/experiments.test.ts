@@ -7,7 +7,9 @@ describe('experimental feature rules', () => {
     const count = EXPERIMENTS.length
     expect(count).toBeGreaterThanOrEqual(11)
     expect(new Set(EXPERIMENTS.map((e) => e.name)).size).toBe(count)
-    expect(Object.entries(DEFAULT_EXPERIMENTS).filter(([key]) => key !== 'resumeAfterUsageLimits').every(([, value]) => !value)).toBe(true)
+    // Phase 1: these are on unless the owner turned them off; the rest stay opt-in.
+    const on = ['autoRetry', 'autoTitles', 'changeReview', 'memory', 'messageActions', 'resumeAfterUsageLimits', 'search', 'undo']
+    expect(Object.entries(DEFAULT_EXPERIMENTS).filter(([, value]) => value).map(([key]) => key).sort()).toEqual(on)
     expect(DEFAULT_EXPERIMENTS.resumeAfterUsageLimits).toBe(true)
   })
   it('attaches only a completed turn’s files under its last assistant reply', () => {

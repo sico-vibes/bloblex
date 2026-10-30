@@ -171,12 +171,21 @@ describe('settings modal', () => {
     expect(about?.querySelector('button, input, select, textarea')).toBeNull()
 
     await page('Agents')
-    expect((await selectOptions(view.host, 'Default approval mode')).map((option) => option.value)).toEqual(['ask', 'auto'])
+    expect((await selectOptions(view.host, 'Default approval mode')).map((option) => option.value)).toEqual(['ask', 'accept_edits', 'auto', 'bypass'])
     await chooseOption(view.host, 'Default approval mode', 'auto')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'auto' })
     expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass')).toBe(false)
-    expect(viewText(view.host)).toContain('Bypass can only be turned on for a single bot')
+    expect(viewText(view.host)).toContain('Full access runs everything without asking')
+    // Phase 1: Full access can be the default, only after an explicit yes, and only then is it sent.
+    await chooseOption(view.host, 'Default approval mode', 'bypass')
+    await view.settle()
+    expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass'), 'nothing sent before the yes').toBe(false)
+    const fullDefault = [...view.host.querySelectorAll('[role="dialog"]')].find((dialog) => dialog.textContent?.includes('Make Full access the default?'))!
+    expect(fullDefault.textContent).toContain('Scheduled work still stays on safe actions')
+    await act(async () => { [...fullDefault.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Make it the default')!.click() })
+    await view.settle()
+    expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'bypass', confirm: true })
     const runtimeHead = view.host.querySelector<HTMLButtonElement>('.runtime-entry-head')!
     expect(runtimeHead.getAttribute('aria-expanded')).toBe('false')
     expect(runtimeHead.textContent).toContain('Codex')

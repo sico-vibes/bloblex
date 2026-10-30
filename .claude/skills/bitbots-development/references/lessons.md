@@ -12,6 +12,22 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **PowerShell calls don't share environment changes:** remove `BITBOTS_HOOK_BRIDGE` and `BITBOTS_REMOTE_WEB_DIR` in the same command that runs `cargo test`, or the two known env tests fail.
 - **Python in a Bash heredoc is fine for text without backslashes** (it handled the CRLF `tiers.json`); put anything with Windows paths in a file.
 
+## 2026-10-30 · Phase 1: modes, overrides, the sign-in read, and two lanes in parallel
+
+- **Widening a CHECK on `agents` means rebuilding from the table's own stored SQL** (`ensure_agent_accept_edits`): it has gained columns since version 9, so a fixed column list would lose data. Change the CHECK text in the old migration SQL too, so fresh databases skip the rebuild and its backup. A CHECK it doesn't recognise returns `Ok`: opening the app matters more than one new mode. A failed backup or rebuild still returns an error.
+- **Test a table rebuild on a copy of the real database before shipping**, made with SQLite's backup API so it is consistent while the app runs. Compare rows, columns, indexes, conversations, messages and settings, and run a second open to prove no second backup.
+- **OpenCode's `session/prompt` had a hard 30-minute limit** (`bloblex-adapter-acp/src/lib.rs`). A long turn was marked failed with "OpenCode prompt failed" while OpenCode kept working, unseen, and the next message failed in seconds because OpenCode was still busy. When a bot's status and its processes disagree, check the processes: `durationMs` close to a round number points at a timer.
+- **A permission test's later "ask" cases are weak.** A pending card parks the conversation in `waiting_permission`, so later requests in the same test aren't judged by the mode. Put it back to `working` between requests.
+- **Keep the project id computed ahead of `exec_options_for_session` in `new_session`,** or the project's mode applies later than launch and Claude and Codex relaunch on the first turn.
+- **A default of `bypass` needs a safe fallback everywhere it is read.** The permission arm fell back to the stored default when options couldn't be read, which would have approved everything. It now falls back to `ask`.
+- **Project data that is code or widens permissions must be closed at every outlet:** storage's plain `project_update` refuses `overrides`, redaction drops the key by name, project events aren't sent to devices, and backups don't carry projects.
+- **On Windows, killing `cmd.exe` leaves what it started running.** Keep the child alive until `taskkill /T /F /PID` has run. Dropping it first means taskkill finds nothing and the tree survives.
+- **An opt-in read must be gated where the file is opened, and tested by proving the read never ran:** an injected fetch whose counter stays 0 with the switch off and reaches 1 with it on, or the test passes on a gate that never polls. Never point a test at the real `USERPROFILE`.
+- **Turning an experiment's default on breaks tests that assumed off,** spread across files. Set the switch explicitly in each one, and run the full gate rather than a filtered one. With `autoRetry` off, `after_failed_turn` returns before recording any decision.
+- **No setting key has ever been renamed** (scanned 30 October 2026: every revision of `main.rs`, storage `lib.rs` and the UI's settings writes). `SETTING_SHIMS` starts empty. Repeat the scan before assuming a rename exists.
+- **The bash tool can turn a typed backslash-zero into a real NUL byte,** and it did in `lib.rs`. Build such text with `chr(92)` in a script, and check `lib.rs` still has exactly one NUL. The Read tool refuses that whole file, so read it with `grep -a` or PowerShell.
+- **Two lanes merged cleanly when their files were kept apart in the brief.** The one conflict was the long `validation_key` line in `settings.set`, where both lanes added to the same statement. Merge the finished lane first, and hold an unfinished fix back with `git diff -- . ':(exclude)<path>'` when its files are separate.
+
 ## 2026-10-30 · Lanes · Working with an in-app bot through the MCP
 
 - **`.blob-dialog` wins over a new dialog's width.** `blobPage.css` loads late and sets `width: min(440px, …)`, so a one-class rule such as `.report-problem { width: … }` silently loses, and a row of buttons wraps. Write `.blob-dialog.report-problem`. Measure with `getBoundingClientRect` when a dialog looks narrow: the preview's viewport is 1280 wide even though screenshots are scaled to 800.

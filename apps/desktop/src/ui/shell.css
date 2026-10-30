@@ -158,6 +158,7 @@
 .model-pill { height: 26px; max-width: 220px; margin-right: 4px; padding: 0 10px; display: inline-flex; align-items: center; overflow: hidden; color: var(--text-2); border-radius: var(--radius-pill); background: var(--surface-raised); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; cursor: default; }
 .approval-pill { height: 22px; padding: 0 9px; display: inline-flex; align-items: center; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-size: var(--fs-2xs); }
 .approval-pill-bypass { color: var(--status-working); border-color: var(--warning-line); }
+.approval-pill-accept_edits { color: var(--text-1); }
 .approval-pill.compact { height: 18px; padding: 0 6px; font-size: 10px; }
 .more-menu-wrap { position: relative; }
 .more-menu { top: calc(100% + 6px); right: 0; width: max-content; min-width: 210px; max-width: 320px; max-height: none; overflow-x: hidden; }

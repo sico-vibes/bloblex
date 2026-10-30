@@ -1,4 +1,7 @@
 import { EXPERIMENTS, DEFAULT_EXPERIMENTS, type Experiments, type ExperimentName } from './experiments'
+import { KeybindingEditor } from './KeybindingEditor'
+import { normalizeBindings, normalizeSendShortcut, oppositeKeys, SEND_SHORTCUTS, type SendShortcut, type ShortcutBindings } from './shortcuts'
+import type { ApprovalMode } from '../types'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArchiveRestore, Bot, Cable, Brain, Check, ChevronDown, ChevronRight, Download, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Stethoscope, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
@@ -75,7 +78,7 @@ export function providerDisplayName(provider: string | undefined) {
   return providerBrand(provider ?? '').name || labelize(provider, 'Coding agent')
 }
 
-export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onOpenSession, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, claudeWorkflowsEnabled = false, onClaudeWorkflowsChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
+export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, initialPage, onClose, onRefresh, onError, onOpenAgent, onOpenSession, onRunSetup = () => undefined, focusUpdates = false, usageBarEnabled = false, onUsageBarChange, onSendShortcutChange, onShortcutBindingsChange, claudeWorkflowsEnabled = false, onClaudeWorkflowsChange, usageTipsEnabled = false, onUsageTipsChange, activityDetails = false, onActivityDetailsChange, runtimeLogos = false, onRuntimeLogosChange, experiments = DEFAULT_EXPERIMENTS, onExperimentChange, speechEnabled = true, onSpeechEnabledChange, speechModel = '', onSpeechModelChange }: {
   snapshot: Snapshot | null
   scanStatus?: DiscoveryStatus
   initialPage: SettingsPageId
@@ -90,6 +93,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   /** Experimental: the plan-usage bar along the bottom of the main window. */
   usageBarEnabled?: boolean
   onUsageBarChange?: (enabled: boolean) => void
+  onSendShortcutChange?: (shortcut: SendShortcut) => void
+  onShortcutBindingsChange?: (bindings: ShortcutBindings) => void
   claudeWorkflowsEnabled?: boolean
   onClaudeWorkflowsChange?: (enabled: boolean) => void
   /** Experimental: surface accurate provider-reported high quota above the active composer. */
@@ -160,7 +165,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [profileDeleteTarget, setProfileDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [defaultMode, setDefaultMode] = useState<'ask' | 'auto'>('ask')
+  const [defaultMode, setDefaultMode] = useState<ApprovalMode>('ask')
+  const [confirmFullDefault, setConfirmFullDefault] = useState(false)
+  const [readSignIns, setReadSignIns] = useState(false)
+  const [sendShortcut, setSendShortcut] = useState<SendShortcut>('enter')
+  const [bindings, setBindings] = useState<ShortcutBindings>({})
   const [openRuntimes, setOpenRuntimes] = useState<Record<string, boolean>>({})
   const [speechModels, setSpeechModels] = useState<SpeechModelRow[]>([])
   const [speechReady, setSpeechReady] = useState<Record<string, boolean>>({})
@@ -179,6 +188,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       const preferences = recordFrom(settingsResult)
       const settings = recordFrom(preferences.settings ?? preferences)
       setBusyMode(settings['composer.busySendMode'] === 'queue' ? 'queue' : 'steer')
+      setSendShortcut(normalizeSendShortcut(settings['composer.sendShortcut']))
+      setBindings(normalizeBindings(settings['shortcuts.bindings']))
+      setReadSignIns(settings['usage.readCliSignIns'] === true)
       if (typeof settings['companion.openAtStartup'] === 'boolean') setCompanionOpenAtStartup(settings['companion.openAtStartup'])
       if (typeof settings.closeToTray === 'boolean') setCloseToTrayValue(settings.closeToTray)
       const soundPrefs = soundPrefsFromSettings(settings)
@@ -422,13 +434,15 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
     await previewSoundVolume(soundVolume)
   }
 
-  const saveDefaultMode = async (value: string) => {
+  const saveDefaultMode = async (value: string, confirmed = false) => {
     const mode = parseGlobalMode(value)
-    if (value !== 'ask' && value !== 'auto') return
+    if (value !== mode) return
+    if (mode === 'bypass' && !confirmed) { setConfirmFullDefault(true); return }
+    setConfirmFullDefault(false)
     const failure = await guarded(async () => {
-      await rpc('settings.set', { key: 'permissions.default_mode', value: mode })
+      await rpc('settings.set', { key: 'permissions.default_mode', value: mode, ...(mode === 'bypass' ? { confirm: true } : {}) })
       setDefaultMode(mode)
-      setNotice(mode === 'auto' ? `${Nouns} without their own setting now auto-approve low-risk actions.` : `${Nouns} without their own setting now ask first.`)
+      setNotice(mode === 'auto' ? `${Nouns} without their own setting now auto-approve low-risk actions.` : mode === 'accept_edits' ? `${Nouns} without their own setting now accept file edits and ask about commands.` : mode === 'bypass' ? `${Nouns} without their own setting now have Full access.` : `${Nouns} without their own setting now ask first.`)
       onError(null)
     })
     if (failure) onError(failure)
@@ -515,6 +529,9 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label="When you send while a bot is working" hint="Steer reaches the running turn where supported; Queue waits for it to end. Ctrl+Enter (⌘+Enter on Mac) sends the other way; Shift+Enter adds a line.">
                 <Select ariaLabel="When you send while a bot is working" variant="muted" value={busyMode} disabled={saving} onChange={(value) => { const next = value === 'queue' ? 'queue' : 'steer'; void saveSetting('composer.busySendMode', next).then((failure) => { if (!failure) setBusyMode(next) }) }} options={[{ value: 'steer', label: 'Steer' }, { value: 'queue', label: 'Queue' }]} />
               </SettingsRow>
+              <SettingsRow label="Send a message with" hint={`The other Enter keys add a new line. ${oppositeKeys(sendShortcut)} sends the other way while a bot is working.`}>
+                <Select ariaLabel="Send a message with" variant="muted" value={sendShortcut} disabled={saving} onChange={(value) => { const next = normalizeSendShortcut(value); void saveSetting('composer.sendShortcut', next).then((failure) => { if (!failure) { setSendShortcut(next); onSendShortcutChange?.(next) } }) }} options={SEND_SHORTCUTS.map((item) => ({ value: item.value, label: item.label }))} />
+              </SettingsRow>
               <SettingsRow label="Run setup again" hint="Review the welcome steps and coding agent sign-in status.">
                 <button type="button" className="secondary-button small" onClick={onRunSetup}>Run setup</button>
               </SettingsRow>
@@ -592,8 +609,11 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               <SettingsRow label={<span className="experimental-label">Usage tips<span className="experimental-tag">Experimental</span></span>} hint="Shows a notice above the active composer when the selected CLI reports 75%, 90% or 100% use in a current quota window. It uses the reported window reset when available, can be dismissed per period, and includes no estimates or upgrade link.">
                 <button type="button" className={`toggle ${usageTipsEnabled ? 'on' : ''}`} role="switch" aria-label="Usage tips" aria-checked={usageTipsEnabled} disabled={saving} onClick={() => { const next = !usageTipsEnabled; void saveSetting('experimental.usageTips', next).then((failure) => { if (!failure) onUsageTipsChange?.(next) }) }}><i /></button>
               </SettingsRow>
-              <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span></span>} hint="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window, read from the sign-in each CLI already has. Turn it off if the numbers are not useful to you; the Usage page still has them.">
+              <SettingsRow label={<span className="experimental-label">Usage bar<span className="experimental-tag">Experimental</span></span>} hint="Shows each coding agent's plan limits (for example 5-hour and weekly usage) along the bottom of the main window. Claude Code and OpenCode need “Read sign-ins for usage bars” below; Codex reports its own.">
                 <button type="button" className={`toggle ${usageBarEnabled ? 'on' : ''}`} role="switch" aria-label="Usage bar" aria-checked={usageBarEnabled} disabled={saving} onClick={() => { const next = !usageBarEnabled; void saveSetting('experimental.usageBar', next).then((failure) => { if (!failure) onUsageBarChange?.(next) }) }}><i /></button>
+              </SettingsRow>
+              <SettingsRow label="Read sign-ins for usage bars" hint="Lets Bitbots read Claude Code’s and OpenCode’s saved sign-ins to ask each one for your usage, and send them only there. They are never stored, logged or copied. Off means no usage numbers from those two.">
+                <button type="button" className={`toggle ${readSignIns ? 'on' : ''}`} role="switch" aria-label="Read sign-ins for usage bars" aria-checked={readSignIns} disabled={saving} onClick={() => { const next = !readSignIns; void saveSetting('usage.readCliSignIns', next).then((failure) => { if (!failure) setReadSignIns(next) }) }}><i /></button>
               </SettingsRow>
               <SettingsRow label={<span className="experimental-label">Runtime logos<span className="experimental-tag">Experimental</span></span>} hint={`Shows the logo of the coding agent each ${noun} runs on (Claude Code, Codex or OpenCode) just before its name, in the sidebar and the conversation header. Hover the logo to see which runtime it is.`}>
                 <button type="button" className={`toggle ${runtimeLogos ? 'on' : ''}`} role="switch" aria-label="Runtime logos" aria-checked={runtimeLogos} disabled={saving} onClick={() => { const next = !runtimeLogos; void saveSetting('experimental.runtimeLogos', next).then((failure) => { if (!failure) onRuntimeLogosChange?.(next) }) }}><i /></button>
@@ -615,16 +635,17 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
           {!loading && page === 'Appearance' && <AppearancePage />}
 
+          {!loading && page === 'General' && <KeybindingEditor bindings={bindings} disabled={saving} onSave={async (next) => { const failure = await saveSetting('shortcuts.bindings', next); if (!failure) { setBindings(next); onShortcutBindingsChange?.(next) } return failure ? 'That shortcut could not be saved.' : null }} />}
           {!loading && page === 'Remote' && <RemoteSettings onOpenPower={() => switchPage('General')} />}
           {!loading && page === 'Connections' && <ConnectionsPage connected={inDesktop && !!snapshot} />}
 
           {!loading && page === 'Agents' && <>
             <p className="settings-intro">Bitbots runs the coding agents installed on this device. Sign in with each agent's own command line tool; Bitbots never handles your provider login.</p>
             <SettingsGroup title="Approvals">
-              <SettingsRow label="Default approval" hint={`Ask waits for you. Auto-approve allows low-risk actions inside the project. Bypass can only be turned on for a single ${noun}.`}>
+              <SettingsRow label="Default approval" hint="For bots without their own setting. Ask waits for you. Auto-accept edits lets file changes through and asks about commands. Auto-approve allows low-risk actions inside the project. Full access runs everything without asking. Scheduled work always stays on safe actions.">
                 {policyError
                   ? <span className="settings-unavailable"><span className="settings-value">Unavailable</span><Select ariaLabel="Default approval mode" variant="muted" value="ask" disabled onChange={() => undefined} options={[{ value: 'ask', label: 'Ask' }]} /></span>
-                  : <Select ariaLabel="Default approval mode" variant="muted" value={defaultMode} disabled={saving} onChange={(value) => void saveDefaultMode(value)} options={[{ value: 'ask', label: 'Ask' }, { value: 'auto', label: 'Auto-approve' }]} />}
+                  : <Select ariaLabel="Default approval mode" variant="muted" value={defaultMode} disabled={saving} onChange={(value) => void saveDefaultMode(value)} options={[{ value: 'ask', label: 'Ask' }, { value: 'accept_edits', label: 'Auto-accept edits' }, { value: 'auto', label: 'Auto-approve' }, { value: 'bypass', label: 'Full access' }]} />}
               </SettingsRow>
             </SettingsGroup>
             <SettingsGroup title="Coding agents" action={<button type="button" className="ghost-button small" onClick={() => void onRefresh()} disabled={saving || scanStatus.scanning} aria-busy={scanStatus.scanning}><RefreshCw size={13} className={scanStatus.scanning ? 'spinning' : ''} />{scanStatus.scanning ? 'Scanning…' : 'Scan again'}</button>}>
@@ -757,6 +778,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       </section>
       {profileDeleteTarget && <ConfirmDialog title={`Remove ${profileDeleteTarget.name}?`} body="This removes the custom launcher profile from Bitbots. It does not uninstall the coding agent." confirmLabel="Remove" cancelLabel="Keep launcher" holdToConfirm successTitle="Launcher removed" successBody="The custom launcher profile was removed from Bitbots." onConfirm={async () => { await deleteProfile(profileDeleteTarget.id) }} onComplete={() => setProfileDeleteTarget(null)} onCancel={() => setProfileDeleteTarget(null)} />}
       {diagnosticsOpen && <DiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />}
+      {confirmFullDefault && <ConfirmDialog title="Make Full access the default?" body={`Every ${noun} without its own setting will run commands and change files without asking you, in every project. Scheduled work still stays on safe actions. You can still set any ${noun} to ask.`} confirmLabel="Make it the default" cancelLabel="Keep the current default" tone="danger" onConfirm={() => void saveDefaultMode('bypass', true)} onCancel={() => setConfirmFullDefault(false)} />}
     </div>
 }
 
@@ -771,6 +793,7 @@ function BlobLink({ agent, mode, onOpen }: { agent: Agent; mode: string; onOpen:
 function approvalLabel(mode: string) {
   if (mode === 'bypass') return 'Bypass approvals'
   if (mode === 'auto') return 'Auto-approve'
+  if (mode === 'accept_edits') return 'Auto-accept edits'
   return 'Ask before acting'
 }
 

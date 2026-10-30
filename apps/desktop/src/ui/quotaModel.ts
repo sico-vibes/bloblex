@@ -31,6 +31,7 @@ export const SIGN_IN_NEEDED = 'Sign-in needed'
 
 const ERROR_STATUS: Record<string, string> = {
   no_credentials: SIGN_IN_NEEDED,
+  read_off: 'Turn on “Read sign-ins for usage bars” in Settings › Experimental.',
   unauthorized: SIGN_IN_NEEDED,
   no_subscription: 'No subscription',
   protocol: 'Unreadable',

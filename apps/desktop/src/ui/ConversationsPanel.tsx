@@ -3,7 +3,7 @@
 // in every project), newest first, with bot-to-bot conversations branching
 // under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, Tag, Trash2 } from 'lucide-react'
+import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Tag, Trash2 } from 'lucide-react'
 import type { Agent, Project, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -52,6 +52,8 @@ function filterTree(nodes: readonly ConversationNode[], words: readonly string[]
 
 export type ProjectActions = {
   onCreateProject: () => Promise<Project | undefined | null> | void
+  /** Phase 1: the project's model, approvals and setup script. */
+  onOpenProjectSettings?: (project: Project) => void
   /** Adds a folder that already exists as a project. */
   onImportProject?: () => Promise<Project | undefined | null> | void
   onRenameProject: (project: Project) => void
@@ -114,6 +116,7 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
     'separator',
     { label: 'Rename project', icon: <Pencil size={15} />, onSelect: () => projectActions.onRenameProject(project) },
     { label: 'Change folder…', icon: <FolderOpen size={15} />, onSelect: () => projectActions.onChangeProjectFolder(project) },
+    ...(projectActions.onOpenProjectSettings ? [{ label: 'Project settings…', icon: <SlidersHorizontal size={15} />, onSelect: () => projectActions.onOpenProjectSettings?.(project) }] : []),
     // FIX39 item 21: the Manager matches jobs to a project's tags; they moved here with the project headings.
     { label: 'Tags…', icon: <Tag size={15} />, onSelect: () => setTagTarget({ kind: 'project', id: project.id, name: project.name, tags: [...(project.tags ?? [])] }) },
     'separator',

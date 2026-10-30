@@ -437,7 +437,11 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().has('positions')) fixtureSettings['companion.positions'] = { [String(flags().get('positions') ?? 'display')]: { x: 120, y: 900 } }
     return { settings: { ...fixtureSettings, ...(fixturePreset() === 'usage-tip-90' ? { 'experimental.usageTips': true } : {}) } } as T
   }
-  if (method === 'settings.set') { fixtureSettings[String(params.key)] = params.value; return { saved: true } as T }
+  if (method === 'settings.set') {
+    if (params.key === 'permissions.default_mode' && params.value === 'bypass' && params.confirm !== true) throw rpcError('invalid_argument', 'Confirm making Full access the default first.')
+    fixtureSettings[String(params.key)] = params.value
+    return { saved: true } as T
+  }
   if (method === 'session.repository') return fixtureRepository(String(params.sessionId ?? '')) as T
   if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
   if (method === 'session.rename') {
@@ -1233,6 +1237,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     return { project } as T
   }
   if (method === 'project.update') {
+    if ((params.overrides as { approvalMode?: unknown } | undefined)?.approvalMode === 'bypass' && params.confirm !== true) throw rpcError('invalid_argument', 'Confirm Full access for this project first.')
+    if (params.overrides) projects = projects.map((project) => project.id === params.projectId ? { ...project, overrides: params.overrides as Project['overrides'] } : project)
     projects = projects.map((project) => project.id === params.projectId ? { ...project, ...(typeof params.name === 'string' ? { name: params.name } : {}), ...(typeof params.collapsed === 'boolean' ? { collapsed: params.collapsed } : {}), ...('path' in params ? { path: typeof params.path === 'string' ? params.path : null } : {}) } : project)
     return { project: projects.find((project) => project.id === params.projectId) } as T
   }

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { Fragment, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { outsideSender } from './messageOrigin'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
@@ -94,6 +94,8 @@ import { ChangeReview, MessageSearch, ShortcutSheet, UndoToasts, type MessageSea
 import { openSafeLink } from './openSafeLink'
 import { markWhatsNewSeen, readSeenVersion, releaseNotes, shouldShowWhatsNew, WhatsNewDialog } from './WhatsNew'
 import { DiagnosticsDialog } from './DiagnosticsDialog'
+import { ProjectSettingsDialog } from './ProjectSettingsDialog'
+import { composerEnterAction, keysFor, normalizeBindings, normalizeSendShortcut, oppositeKeys, useShortcutActions, type SendShortcut, type ShortcutBindings } from './shortcuts'
 import { CompanionFanoutSummary, CompareView, FanoutDialog } from './FanoutCompare'
 import { NewProjectDialog } from './NewProjectDialog'
 import { StashMenu, type RestoredDraft } from './PromptStash'
@@ -176,6 +178,9 @@ export function App() {
   /** Experimental, off by default: each turn's commands, tools and edits as one expandable line. */
   const [activityDetails, setActivityDetails] = useState(false)
   const [busyMode, setBusyMode] = useState<BusySendMode>('steer')
+  const [sendShortcut, setSendShortcut] = useState<SendShortcut>('enter')
+  const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>({})
+  const [projectSettings, setProjectSettings] = useState<Project | null>(null)
   const [steerRevision, setSteerRevision] = useState(0)
   const [deliveryNotice, setDeliveryNotice] = useState<string | null>(null)
   /** Companion preferences: chat height and the teammates kept on the island. */
@@ -201,16 +206,10 @@ export function App() {
   const [revertTarget, setRevertTarget] = useState<{ sessionId: string; file: Record<string, unknown> } | null>(null)
   const undoToasts = useUndoToasts()
   const changeExperiment = useCallback((name: ExperimentName, enabled: boolean) => setExperiments((current) => ({ ...current, [name]: enabled })), [])
-  useEffect(() => {
-    if (!experiments.shortcuts || companion) return
-    const keydown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.key === '/' && !event.altKey && !event.shiftKey) { event.preventDefault(); setShortcutsOpen(true) }
-    }
-    document.addEventListener('keydown', keydown)
-    return () => document.removeEventListener('keydown', keydown)
-  }, [experiments.shortcuts, companion])
   /** True once the daemon has sent `appearance.style`, retiring the legacy bitbots switch. */
   const applyWindowSetting = useCallback((key: string, value: unknown) => {
+    if (key === 'composer.sendShortcut') { setSendShortcut(normalizeSendShortcut(value)); return }
+    if (key === 'shortcuts.bindings') { setShortcutBindings(normalizeBindings(value)); return }
     if (key === BUSY_SEND_SETTING) { setBusyMode(busySendMode(value)); return }
     if (key === 'exec_gate.codex.steer') { setSteerRevision(v => v + 1); return }
     const experiment = EXPERIMENTS.find(({ name }) => key === `experimental.${name}`)
@@ -518,7 +517,7 @@ export function App() {
     }
   }, [companion])
 
-  useQuickSwitcherShortcut(!companion && !blobPage && !analyticsOpen, openQuickSwitcher)
+  useQuickSwitcherShortcut(!companion && !blobPage && !analyticsOpen, openQuickSwitcher, keysFor('app.quickSwitcher', shortcutBindings))
 
   useEffect(() => {
     if (!inDesktop || companion) return
@@ -544,7 +543,7 @@ export function App() {
     void rpc<Record<string, unknown>>('settings.get').then((result) => {
       const values = result.settings && typeof result.settings === 'object' ? result.settings as Record<string, unknown> : result
       if (!active) return
-      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
+      for (const key of ['appearance.style', 'appearance.accent', 'appearance.density', 'appearance.font', 'appearance.monoFont', 'appearance.theme', 'appearance.textSize', 'hints.seen', 'onboarding.tour', 'claude.enableWorkflows', 'automations.paused', 'power.keepAwake', 'speech.engine', 'speech.cloud.consent', 'composer.sendShortcut', 'shortcuts.bindings', 'experimental.bitbots', 'experimental.usageBar', 'experimental.usageTips', 'experimental.usageTipDismissals', 'experimental.activityDetails', 'experimental.runtimeLogos', ...EXPERIMENTS.map(({ name }) => `experimental.${name}`), 'companion.pinnedBlobs', 'speech.enabled', 'speech.model', BUSY_SEND_SETTING, 'exec_gate.codex.steer']) applyWindowSetting(key, values[key])
       setWindowSettingsLoaded(true)
     }).catch(() => undefined)
     return () => { active = false }
@@ -633,12 +632,17 @@ export function App() {
   for (const session of sessions) sessionOwnersRef.current.set(session.id, session.agentId ?? null)
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
-  // Ctrl+` shows or hides the terminal, the same key as in editors.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Backquote') { event.preventDefault(); setTerminalDockOpen((open) => !open) } }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // The app's rebindable shortcuts (Settings › General). Ctrl+` for the terminal is the same key as in editors.
+  const shortcutHandlers = useRef<Parameters<typeof useShortcutActions>[2]>({})
+  const stableShortcutHandlers = useMemo(() => ({
+    'app.terminal': () => setTerminalDockOpen((open) => !open),
+    'app.shortcutSheet': () => shortcutHandlers.current['app.shortcutSheet']?.(),
+    'app.settings': () => setSettingsSheet(true),
+    'app.askSeveral': () => setFanoutOpen(true),
+    'conversation.new': () => shortcutHandlers.current['conversation.new']?.(),
+    'conversation.togglePanel': () => shortcutHandlers.current['conversation.togglePanel']?.(),
+  }), [])
+  useShortcutActions(!companion, shortcutBindings, stableShortcutHandlers)
   useEffect(() => { setActivityProvider(selectedSession?.provider ?? selectedRuntime?.provider ?? null) }, [selectedSession?.provider, selectedRuntime?.provider])
   // Local files that messages mention are previewed from this conversation's folder only.
   useEffect(() => { setMediaScope(selectedSession && !isDraftSession(selectedSession) ? { sessionId: selectedSession.id, projectPath: selectedSession.projectPath ?? null } : null) }, [selectedSession?.id, selectedSession?.projectPath])
@@ -2458,7 +2462,7 @@ ${fileReferenceText(sentFile)}` : typed
   const renameProject = (project: Project) => setTextPrompt({ title: 'Rename project', label: 'Project name', value: project.name, confirmLabel: 'Rename', onSubmit: async (name) => { await projectAction('project.update', { projectId: project.id, name }) } })
   const changeProjectFolder = (project: Project) => void openProjectFolder().then((path) => { if (path) void projectAction('project.update', { projectId: project.id, path }) })
   /** Phase 1A: projects are managed where their conversations are listed, inside each bot. */
-  const conversationProjectActions: ProjectActions = { onCreateProject: openNewProject, onImportProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete }
+  const conversationProjectActions: ProjectActions = { onOpenProjectSettings: setProjectSettings, onCreateProject: openNewProject, onImportProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete }
   /** Opens the Manager's conversation with a starter message to edit and send; false without a Manager. */
   const planWithManager = (text: string) => {
     const manager = managerOf(agents)
@@ -2497,7 +2501,7 @@ ${fileReferenceText(sentFile)}` : typed
 
   if (companion) {
     return <>
-      <Companion deliveryNotice={deliveryNotice} busyMode={busyMode} steerAvailable={companionSteerAvailable} onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionRealSessionId)} onOpenSettings={(page) => void showMainSettings(companionRealSessionId, page)} onSendPrompt={async (draftOrSessionId, text, command, opposite = false, hasContext = false, noteList = []) => {
+      <Companion sendShortcut={sendShortcut} deliveryNotice={deliveryNotice} busyMode={busyMode} steerAvailable={companionSteerAvailable} onToggleReaction={(sessionId, messageId, emoji) => toggleMessageReaction(sessionId, messageId, emoji)} permissionQueue={companionQueue} onPickPermission={setCompanionPick} onSnoozePermission={snoozeCompanionPermission} agent={companionAgent} agents={agents} projects={snapshot?.projects ?? []} sessions={sessions} quotas={snapshot?.quotas ?? []} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onError={(reason) => setError(messageOf(reason))} pinned={companionPinned} activityDetails={activityDetails} speechEnabled={speechEnabled} speechModel={speechModel} usageTip={usageTip} onDismissUsageTip={dismissUsageTip} onPinnedChange={(ids) => { setCompanionPinned(ids); void rpc('settings.set', { key: 'companion.pinnedBlobs', value: ids }).catch(() => undefined) }} onAnswerQuestion={answerQuestion} onOpenSession={(sessionId) => void showMainWindow(sessionId)} runtime={companionRuntime} runtimes={runtimes} session={companionSession} usage={snapshot?.usageSummary} connected={connection === 'connected'} appError={error} reconnectAttempts={reconnectAttempts} reconnectFailed={reconnectFailed} onRetryConnection={retryConnection} activityLabel={companionStatus.label} permission={companionPermission} approvalMode={companionMode} onReply={answerPermission} onNewSession={(anchor) => newSession(companionAgent?.id, anchor)} onOpenMain={() => void showMainWindow(companionRealSessionId)} onOpenSettings={(page) => void showMainSettings(companionRealSessionId, page)} onSendPrompt={async (draftOrSessionId, text, command, opposite = false, hasContext = false, noteList = []) => {
         // The first message of a draft is what creates the conversation; the daemon titles it from that message.
         let sessionId = draftOrSessionId
         if (isDraftSession({ id: draftOrSessionId } as Session)) {
@@ -2521,6 +2525,11 @@ ${fileReferenceText(sentFile)}` : typed
   const sessionBusy = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const limitUntil = sessionBusy ? null : limitWaitingUntil(selectedSession, now)
   sendPromptRef.current = sendPrompt
+  shortcutHandlers.current = {
+    'app.shortcutSheet': () => { if (experiments.shortcuts) setShortcutsOpen(true) },
+    'conversation.new': () => { if (connection === 'connected' && activeSelectedAgent) newSession() },
+    'conversation.togglePanel': () => setConvosVisible(!convosOpen),
+  }
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
   const composerDelivery = busyDelivery(busyOverride ?? busyMode, false, selectedSession?.state, steerAvailable, !!(attachments.length || slashCommand || leadingCommand(composer, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) || conversationRefs.length || replyTarget))
   const promptQueue = selectedSession ? snapshot?.queues?.[selectedSession.id] : undefined
@@ -2864,7 +2873,8 @@ ${fileReferenceText(sentFile)}` : typed
                   if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickConversation(hashCandidates[Math.min(hashRef.index, hashCandidates.length - 1)]); return }
                   if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
                 }
-                if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendPrompt(undefined, event.ctrlKey || event.metaKey) }
+                const enter = composerEnterAction(event.nativeEvent, sendShortcut)
+                if (enter) { event.preventDefault(); void sendPrompt(undefined, enter === 'opposite') }
               }} placeholder={!runtimeReady ? `${agentName}'s coding agent is not ready` : limitUntil ? `${agentName} is at its usage limit. A message goes out at ${limitResetTime(limitUntil)}` : selectedSession.state === 'waiting_permission' ? `Answer the request above, or queue a message for ${agentName}` : sessionBusy ? composerDelivery.mode === 'steer' ? `Steer ${agentName} now` : `Queue a message for ${agentName}` : activeSelectedAgent?.systemRole === 'manager' && !(selectedSession.messages ?? []).some((message) => message.role === 'user') ? `Tell ${agentName} what needs doing. Type @ to name a bot` : `Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={busy || !runtimeReady} rows={1} />
               <div className="composer-control-strip" data-tour="controls">
                 <div className="composer-controls-start">
@@ -2879,7 +2889,7 @@ ${fileReferenceText(sentFile)}` : typed
                   {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
                   {sessionBusy && <DeliveryModeToggle mode={composerDelivery.mode} steerChoice={steerAvailable} disabled={connection !== 'connected'} onModeChange={setBusyOverride} />}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
-                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || clipboardReadPending || (!composer.trim() && !annotations.length && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={limitUntil ? 'Send when the limit resets' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={clipboardReadPending ? 'Preparing the pasted image' : connection !== 'connected' ? 'Waiting for the connection' : limitUntil ? `Goes out when the limit resets, at ${limitResetTime(limitUntil)}` : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer this turn now. Ctrl+Enter queues instead.' : 'Add to the queue. Ctrl+Enter sends the other way where supported.' : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : limitUntil ? <Clock size={16} /> : sessionBusy && composerDelivery.mode === 'queue' ? <ListPlus size={17} /> : <ArrowUp size={17} />}</button>
+                  <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || clipboardReadPending || (!composer.trim() && !annotations.length && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={limitUntil ? 'Send when the limit resets' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={clipboardReadPending ? 'Preparing the pasted image' : connection !== 'connected' ? 'Waiting for the connection' : limitUntil ? `Goes out when the limit resets, at ${limitResetTime(limitUntil)}` : sessionBusy ? composerDelivery.mode === 'steer' ? `Steer this turn now. ${oppositeKeys(sendShortcut)} queues instead.` : `Add to the queue. ${oppositeKeys(sendShortcut)} sends the other way where supported.` : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : limitUntil ? <Clock size={16} /> : sessionBusy && composerDelivery.mode === 'queue' ? <ListPlus size={17} /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
@@ -2904,7 +2914,7 @@ ${fileReferenceText(sentFile)}` : typed
       {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
       {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} claudeWorkflowsEnabled={claudeWorkflowsEnabled} onClaudeWorkflowsChange={setClaudeWorkflowsEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} onOpenSession={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); setSettingsSheet(false); setSettingsFocus(null); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />}
+      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} onSendShortcutChange={setSendShortcut} onShortcutBindingsChange={setShortcutBindings} claudeWorkflowsEnabled={claudeWorkflowsEnabled} onClaudeWorkflowsChange={setClaudeWorkflowsEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} onOpenSession={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); setSettingsSheet(false); setSettingsFocus(null); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />}
       {messageMenu && selectedSession?.id === messageMenu.sessionId && <MessageContextMenu position={messageMenu} canRetry={messageMenu.latest && connection === 'connected' && runtimeReady && !busy && !sessionBusy} onClose={closeMessageMenu} onRetry={() => {
         void doRpc('session.prompt', {
           sessionId: messageMenu.sessionId,
@@ -2949,9 +2959,10 @@ ${fileReferenceText(sentFile)}` : typed
         } catch (reason) { setHandoffError(messageOf(reason)) } finally { setHandoffBusy(false) }
       })()} />}
       {whatsNewOpen && !companion && <WhatsNewDialog onClose={() => setWhatsNewOpen(false)} onOpenLink={(url) => void openSafeLink(url)} />}
-      {shortcutsOpen && experiments.shortcuts && <ShortcutSheet speechEnabled={speechEnabled} onClose={() => setShortcutsOpen(false)} />}
+      {shortcutsOpen && experiments.shortcuts && <ShortcutSheet speechEnabled={speechEnabled} bindings={shortcutBindings} sendShortcut={sendShortcut} onClose={() => setShortcutsOpen(false)} />}
       {diagnosticsOpen && !companion && <DiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />}
       {fanoutOpen && !companion && <FanoutDialog agents={agents} projects={projects} runtimes={runtimes} initialAgent={activeSelectedAgent ?? null} onCancel={() => setFanoutOpen(false)} onStarted={(fanout) => { setFanoutOpen(false); setCompareId(fanout.id); setTasksOpen(false); setCompareOpen(true) }} />}
+      {projectSettings && !companion && <ProjectSettingsDialog project={projectSettings} runtimes={runtimes} onClose={() => setProjectSettings(null)} onSaved={() => { setProjectSettings(null); void refresh() }} />}
       {newProjectOpen && !companion && <NewProjectDialog onCancel={() => finishNewProject(null)} onDone={finishNewProject} />}
       <UndoToasts toasts={undoToasts} onRemove={removeUndoToast} onError={setError} />
       {revertTarget && <ConfirmDialog title={`Revert ${String(revertTarget.file.path)}?`} body="Only this turn’s saved change will be reversed. Later edits that conflict with it prevent the revert." confirmLabel="Revert change" cancelLabel="Keep it" tone="warning" onConfirm={async () => {
@@ -3324,7 +3335,7 @@ function recordFrom(value: unknown): Record<string, unknown> { return value && t
 const COMPACT_HOLD_TO_DRAG_MS = 220
 const COMPACT_DRAG_SLOP_PX = 4
 
-function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string, options?: PermissionReplyOptions) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean, annotations?: ReplyAnnotation[]) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
+function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer', steerAvailable = false, agent, agents, projects = [], sessions = [], quotas = [], onSessionUpdated, onError, pinned = [], activityDetails = false, speechEnabled = true, speechModel = DEFAULT_SPEECH_MODEL_ID, usageTip, onDismissUsageTip, onPinnedChange, runtime, runtimes, session, usage, connected, appError, reconnectAttempts = 0, reconnectFailed = false, onRetryConnection, activityLabel, permission, approvalMode, onReply, onAnswerQuestion, onNewSession, onOpenMain, onOpenSession, onOpenSettings, onSendPrompt, onCancelTurn, onSelectAgent, onSelectConversation, queuedCount = 0, onLoadQueue, permissionQueue = [], onPickPermission, onSnoozePermission, onToggleReaction, slashSkills = [] }: { sendShortcut?: SendShortcut; deliveryNotice?: string | null; busyMode?: BusySendMode; steerAvailable?: boolean; agent: Agent | null; agents: Agent[]; projects?: Project[]; sessions?: Session[]; quotas?: Record<string, unknown>[]; onSessionUpdated?: (session: Session) => void; onError?: (reason: unknown) => void; pinned?: string[]; activityDetails?: boolean; speechEnabled?: boolean; speechModel?: string; usageTip?: UsageTipModel | null; onDismissUsageTip?: (tip: UsageTipModel) => void; onPinnedChange?: (ids: string[]) => void; runtime: Runtime | null; runtimes: Runtime[]; session: Session | null; usage?: Record<string, unknown>; connected: boolean; appError: string | null; reconnectAttempts?: number; reconnectFailed?: boolean; onRetryConnection?: () => void; activityLabel: string; permission?: PermissionRequest; approvalMode: ReturnType<typeof effectiveApprovalMode>; onReply: (permission: PermissionRequest, choice: string, options?: PermissionReplyOptions) => boolean | void | Promise<boolean | void>; onAnswerQuestion?: (permission: PermissionRequest, answers: Record<string, string[]> | null) => Promise<unknown> | void; onNewSession: (anchor?: HTMLElement | null) => void; onOpenMain: () => void; onOpenSession?: (sessionId: string) => void; onOpenSettings: (page?: SettingsPageId) => void; onSendPrompt: (sessionId: string, text: string, command?: SlashCommand | null, opposite?: boolean, hasContext?: boolean, annotations?: ReplyAnnotation[]) => Promise<unknown>; onCancelTurn: (sessionId: string) => Promise<unknown>; queuedCount?: number; onLoadQueue?: (sessionId: string) => void; onSelectAgent: (agent: Agent) => void; onSelectConversation?: (session: Session) => void; permissionQueue?: PermissionRequest[]; onPickPermission?: (id: string) => void; onSnoozePermission?: (id: string) => void; onToggleReaction?: (sessionId: string, messageId: string, emoji: string) => Promise<unknown> | void; slashSkills?: SlashSkill[] }) {
   const sessionModelLock = session?.modelLock
   const nouns = useEntityNoun({ plural: true })
   const platform = usePlatform()
@@ -4003,7 +4014,7 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
               {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
               {!sessionBusy && limitWaitingUntil(session, clock) && <p className="companion-queue-note" role="status">{name} is at its usage limit. A message goes out at {limitResetTime(limitWaitingUntil(session, clock) as string)}.</p>}
               <ReplyAnnotator container={chatLogRef} full={companionNotes.length >= MAX_ANNOTATIONS} onAdd={(note) => setCompanionNotes((current) => current.length >= MAX_ANNOTATIONS ? current : [...current, note])} />
-              {sessionBusy && <p className="companion-queue-note" role="status">{companionDelivery.mode === 'steer' ? 'Steer now' : 'Queue after this turn'} · Ctrl+Enter / ⌘+Enter sends the other way{deliveryNotice ? ` · ${deliveryNotice}` : ''}</p>}
+              {sessionBusy && <p className="companion-queue-note" role="status">{companionDelivery.mode === 'steer' ? 'Steer now' : 'Queue after this turn'} · {oppositeKeys(sendShortcut)} sends the other way{deliveryNotice ? ` · ${deliveryNotice}` : ''}</p>}
               <form className="chat-bar companion-chat-composer" data-companion-no-drag="" onSubmit={(event) => void sendCompanionPrompt(event)}>
                 <AnnotationTray annotations={companionNotes} onRemove={(index) => setCompanionNotes((current) => current.filter((_, position) => position !== index))} />
                 {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
@@ -4015,7 +4026,8 @@ function Companion({ deliveryNotice, busyMode = 'steer', steerAvailable = false,
                     if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickCompanionSlash(companionSlashCandidates[Math.min(slash.index, companionSlashCandidates.length - 1)]); return }
                     if (event.key === 'Escape') { event.preventDefault(); setSlash(null); return }
                   }
-                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendCompanionPrompt(event, event.ctrlKey || event.metaKey) }
+                  const enter = composerEnterAction(event.nativeEvent, sendShortcut)
+                  if (enter) { event.preventDefault(); void sendCompanionPrompt(event, enter === 'opposite') }
                 }} disabled={!connected || !runtimeUsable(runtime) || !session || session.state === 'waiting_permission'} rows={1} />
                 <div className="companion-composer-bar">
                 <div className="companion-composer-start">

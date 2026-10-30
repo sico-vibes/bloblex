@@ -17,12 +17,12 @@ export interface SharedBlob {
   thinking: string | null
   speed: string | null
   look: BlobLook
-  defaultApprovalMode?: 'ask' | 'auto'
+  defaultApprovalMode?: 'ask' | 'accept_edits' | 'auto'
   providerId?: string
 }
 
 export function serializeBlob(agent: Agent, providerId: string): string {
-  const defaultApprovalMode = agent.approvalMode === 'ask' || agent.approvalMode === 'auto' ? agent.approvalMode : undefined
+  const defaultApprovalMode = agent.approvalMode === 'ask' || agent.approvalMode === 'accept_edits' || agent.approvalMode === 'auto' ? agent.approvalMode : undefined
   const blob: SharedBlob = {
     format: BLOB_SHARE_FORMAT,
     name: agent.name,
@@ -61,10 +61,10 @@ export function parseSharedBlob(text: string): SharedBlob {
   if (parsed.providerId !== undefined && parsed.providerId !== null) {
     providerId = optionalText(parsed.providerId, 100, 'provider').trim() || undefined
   }
-  if (parsed.defaultApprovalMode !== undefined && parsed.defaultApprovalMode !== 'ask' && parsed.defaultApprovalMode !== 'auto') throw new Error('Only Ask or Auto approval can be imported.')
+  if (parsed.defaultApprovalMode !== undefined && parsed.defaultApprovalMode !== 'ask' && parsed.defaultApprovalMode !== 'accept_edits' && parsed.defaultApprovalMode !== 'auto') throw new Error('Only Ask, Auto-accept edits or Auto approval can be imported.')
   return {
     format: BLOB_SHARE_FORMAT, name, description, colour, instructions, model, thinking, speed, look,
-    ...(parsed.defaultApprovalMode === 'ask' || parsed.defaultApprovalMode === 'auto' ? { defaultApprovalMode: parsed.defaultApprovalMode } : {}),
+    ...(parsed.defaultApprovalMode === 'ask' || parsed.defaultApprovalMode === 'accept_edits' || parsed.defaultApprovalMode === 'auto' ? { defaultApprovalMode: parsed.defaultApprovalMode } : {}),
     ...(providerId ? { providerId } : {}),
   }
 }

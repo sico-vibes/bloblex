@@ -409,7 +409,8 @@ describe('sidebar usage analytics', () => {
     let resolveDelete!: () => void
     h.rpc.mockImplementation(async (method: string) => {
       if (method === 'events.replay') return { replayAvailable:true, events:[] }
-      if (method === 'settings.get') return { settings:{} }
+      // Phase 1: undo is on by default and defers the delete, and this test is about the immediate one.
+      if (method === 'settings.get') return { settings:{ 'experimental.undo':false } }
       if (method === 'session.delete') return new Promise<void>((resolve) => { resolveDelete = resolve })
       return {}
     })

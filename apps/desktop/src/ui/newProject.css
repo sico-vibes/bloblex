@@ -26,6 +26,21 @@
 .scaffold-url code { overflow-wrap: anywhere; font-size: var(--fs-xs); }
 
 .blob-dialog.report-problem { width: min(620px, calc(100% - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.project-settings-models { display: grid; gap: 8px; }
+.project-settings-heading { color: var(--text-3); font-size: var(--fs-xs); }
+.project-setup-script { width: 100%; padding: 8px 10px; resize: vertical; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.45; }
+.project-settings-note { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.4; }
+.project-full-access { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--mode-bypass) 10%, transparent); }
+.keybinding-list { margin: 0; padding: 0; list-style: none; }
+.keybinding-list li { min-height: 40px; padding: 4px 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, auto) 56px; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+.keybinding-list li:last-child { border-bottom: 0; }
+.keybinding-label { min-width: 0; color: var(--text-1); font-size: var(--fs-sm); }
+.keybinding-keys { height: 28px; padding: 0 10px; color: var(--text-2); border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); font-size: var(--fs-xs); white-space: nowrap; cursor: pointer; }
+.keybinding-keys.recording { color: var(--text-1); border-color: var(--text-2); }
+.keybinding-keys kbd { font: inherit; font-family: var(--font-mono); }
+.keybinding-none { color: var(--text-3); }
+.keybinding-actions { display: inline-flex; justify-content: flex-end; gap: 2px; }
+.keybinding-problem { margin: 6px 0 0; color: var(--status-danger-text); font-size: var(--fs-xs); }
 .report-problem label { display: grid; gap: 4px; }
 .report-problem label > span { color: var(--text-3); font-size: var(--fs-xs); }
 .report-problem input, .report-problem textarea { width: 100%; padding: 8px 10px; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: inherit; font-size: var(--fs-sm); line-height: 1.45; }

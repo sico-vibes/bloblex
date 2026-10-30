@@ -6,14 +6,14 @@ import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { useEntityNoun } from './vocabulary'
 
 export function ApprovalBadge({ mode }: { mode: ApprovalMode | null | undefined }) {
-  if (mode !== 'auto' && mode !== 'bypass') return null
-  const label = mode === 'auto' ? 'Auto-approve' : 'Bypass approvals'
+  if (mode !== 'auto' && mode !== 'accept_edits' && mode !== 'bypass') return null
+  const label = mode === 'auto' ? 'Auto-approve' : mode === 'accept_edits' ? 'Auto-accept edits' : 'Bypass approvals'
   return <span className={`approval-badge approval-badge-${mode}`} role="img" aria-label={label} title={label}><Shield size={12} aria-hidden="true" /></span>
 }
 
 export function ApprovalPill({ mode, compact = false }: { mode: ApprovalMode | null | undefined; compact?: boolean }) {
-  if (mode !== 'auto' && mode !== 'bypass') return null
-  const label = mode === 'auto' ? 'Auto' : 'Bypass'
+  if (mode !== 'auto' && mode !== 'accept_edits' && mode !== 'bypass') return null
+  const label = mode === 'auto' ? 'Auto' : mode === 'accept_edits' ? 'Edits' : 'Bypass'
   return <span className={`approval-pill approval-pill-${mode}${compact ? ' compact' : ''}`} role="status">{label}</span>
 }
 

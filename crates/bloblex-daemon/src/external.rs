@@ -397,7 +397,8 @@ fn catalog() -> Vec<(Tier, Value)> {
         entry(Viewer, "turn_metrics", "Per turn: start and end time, duration, tool calls, tokens when the coding agent reported them, the outcome, and the error (message and detail) of a failed turn. Unknown values are left out, never zero.", schema(json!({"sessionId": id("The conversation."), "last": {"type": "integer", "minimum": 1, "maximum": 50, "description": "How many turns (default 5)."}}), &["sessionId"])),
         entry(Viewer, "worktree_status", "For a conversation working in its own git copy: branch, base, files changed and commits ahead. Null when it has none.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
         entry(Viewer, "list_approvals", "Approvals waiting for the owner: id, conversation, bot, tool and a summary.", schema(json!({}), &[])),
-        entry(Chat, "send_message", "Sends a message to a bot. With sessionId it continues that conversation (queued after the running turn when it is busy); with botId it continues the bot's latest conversation, or starts a new one when newConversation is true or there is none. Returns at once; use wait_for_turn for the reply.", schema(json!({"botId": id("The bot."), "sessionId": id("An existing conversation."), "text": id("The message, up to 100,000 characters."), "newConversation": {"type": "boolean", "description": "Start a new conversation with botId."}, "projectId": id("The project for a new conversation, from list_projects. Without it (and without projectPath) the conversation opens in the project of the bot's latest conversation, then its default project, then its own folder."), "projectPath": id("The folder for a new conversation; a registered project's folder opens in that project.")}), &["text"])),
+        entry(Chat, "send_message", "Sends a message to a bot. With sessionId it continues that conversation (queued after the running turn when it is busy); with botId it continues the bot's latest conversation, or starts a new one when newConversation is true or there is none. Returns at once; use wait_for_turn for the reply.", schema(json!({"botId": id("The bot."), "sessionId": id("An existing conversation."), "text": id("The message, up to 100,000 characters."), "newConversation": {"type": "boolean", "description": "Start a new conversation with botId."}, "projectId": id("The project for a new conversation, from list_projects. Without it (and without projectPath) the conversation opens in the project of the bot's latest conversation, then its default project, then its own folder."), "projectPath": id("The folder for a new conversation; a registered project's folder opens in that project."), "whenLimitResets": {"type": "boolean", "description": "With sessionId, for a conversation waiting for a usage limit: send the message when the limit resets."}}), &["text"])),
+        entry(Chat, "fan_out", "Sends one message to several bots at once, each in its own new conversation, so the answers can be compared. Returns at once with a conversation per bot; use wait_for_turn on each for its reply.", schema(json!({"botIds": {"type": "array", "minItems": 2, "maxItems": 6, "items": {"type": "string"}, "description": "2 to 6 different bots."}, "text": id("The message, up to 100,000 characters."), "projectId": id("The project for every conversation, from list_projects. Without it each bot opens in its usual project."), "worktrees": {"type": "boolean", "description": "Give each conversation its own git worktree (the Operator level only; the default below it is false)."}}), &["botIds", "text"])),
         entry(Chat, "steer", "Sends extra guidance to the turn that is running now, without stopping it.", schema(json!({"sessionId": id("The conversation."), "text": id("The guidance.")}), &["sessionId", "text"])),
         entry(Chat, "stop_turn", "Stops the turn that is running in a conversation.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
         entry(Operator, "create_bot", "Creates a bot. Use list_runtimes for the runtime and model; the bot works in projectPath. Its permission mode is ask unless you pass auto.", schema(json!({"name": id("The bot's name, up to 60 characters."), "runtimeId": id("From list_runtimes."), "model": id("A model id from list_runtimes."), "effort": id("An effort the model offers."), "projectPath": id("The folder the bot works in."), "role": id("A short role, up to 40 characters."), "approvalMode": {"type": "string", "enum": ["ask", "auto"], "description": "How the bot asks before acting (default ask)."}}), &["name", "runtimeId", "model", "projectPath"])),
@@ -480,6 +481,7 @@ async fn call_tool(st: &AppState, tier: Tier, name: &str, args: &Value) -> ToolR
         "worktree_status" => worktree_status(st, args).await,
         "list_approvals" => list_approvals(st),
         "send_message" => send_message(st, tier, args).await,
+        "fan_out" => fan_out(st, tier, args).await,
         "steer" => steer(st, args).await,
         "stop_turn" => stop_turn(st, args).await,
         "create_bot" => create_bot(st, args).await,
@@ -854,10 +856,36 @@ fn allowed_folder(st: &AppState, tier: Tier, agent: &Value, requested: &str) -> 
     if wanted == own || known { Ok(()) } else { Err(format!("That folder is neither this bot's own nor a registered project. {}", needs(Tier::Operator))) }
 }
 
+/// Phase 1B: one message to 2 to 6 bots, each in a new conversation of its own.
+async fn fan_out(st: &AppState, tier: Tier, args: &Value) -> ToolResult {
+    let text = valid_text(args)?;
+    let worktrees = match args.get("worktrees") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_bool().ok_or("worktrees must be true or false.")?),
+    };
+    // Below the Operator level the default is no worktree, and asking for one is refused.
+    if tier < Tier::Operator && worktrees == Some(true) { return Err(needs(Tier::Operator)); }
+    let mut params = json!({"agentIds": args.get("botIds").cloned().unwrap_or(Value::Null), "text": text});
+    if tier < Tier::Operator { params["worktrees"] = json!(false); } else if let Some(flag) = worktrees { params["worktrees"] = json!(flag); }
+    if let Some(project) = text_arg(args, "projectId") { params["projectId"] = json!(project); }
+    let client = st.external.client();
+    let (fanout, rows) = crate::fanout::start(st, &params, Some(client.as_deref().unwrap_or("MCP"))).await.map_err(fail)?;
+    Ok(json!({"fanoutId": fanout["id"], "rows": rows.iter().map(|row| json!({"botId": row["agentId"], "sessionId": row["sessionId"], "error": row["error"]})).collect::<Vec<_>>()}))
+}
+
 async fn send_message(st: &AppState, tier: Tier, args: &Value) -> ToolResult {
     let text = valid_text(args)?;
     let want_worktree = args.get("worktree").and_then(Value::as_bool).unwrap_or(false);
     if want_worktree && tier < Tier::Operator { return Err(needs(Tier::Operator)); }
+    if args.get("whenLimitResets").and_then(Value::as_bool) == Some(true) {
+        let id = text_arg(args, "sessionId").ok_or("whenLimitResets needs a sessionId.")?;
+        let client = st.external.client();
+        let row = st.db.session_brief(id).map_err(|_| "That conversation was not found.".to_owned())?;
+        if row["link"]["kind"] == "side" { return Err("That is a side conversation and is read-only.".to_owned()); }
+        return crate::queue::add_marked(st, json!({"sessionId": id, "text": text, "whenLimitResets": true}), Some(client.as_deref().unwrap_or("MCP"))).await
+            .map(|added| json!({"sessionId": id, "turnStarted": false, "queued": true, "whenLimitResets": true, "dueAt": added["item"]["dueAt"]}))
+            .map_err(fail);
+    }
     let new_conversation = args.get("newConversation").and_then(Value::as_bool).unwrap_or(false);
     let client = st.external.client();
     let client_name = client.as_deref().unwrap_or("MCP");

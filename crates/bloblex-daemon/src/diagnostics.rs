@@ -450,7 +450,7 @@ fn timestamp() -> String {
 
 /// The OS version, reduced to a numeric version like `10.0.26100`. Anything the
 /// command prints beyond that is dropped.
-fn os_version() -> String {
+pub(crate) fn os_version() -> String {
     #[cfg(target_os = "windows")]
     let output = std::process::Command::new("cmd").args(["/c", "ver"]).output();
     #[cfg(unix)]
@@ -514,8 +514,10 @@ fn zip_name() -> String {
 }
 
 /// `diagnostics.preview` and `diagnostics.export`.
-pub async fn rpc(st: &AppState, method: &str, _params: &Value) -> Result<Value, DispatchError> {
+pub async fn rpc(st: &AppState, method: &str, params: &Value) -> Result<Value, DispatchError> {
     match method {
+        "diagnostics.issueDraft" => crate::issue_report::draft(st).await,
+        "diagnostics.issuePost" => crate::issue_report::post(st, params).await,
         "diagnostics.preview" => {
             let entries = collect(st).await?;
             Ok(json!({

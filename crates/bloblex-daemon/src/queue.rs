@@ -99,7 +99,7 @@ fn validate_due_at(raw: &str) -> Result<String, DispatchError> {
 /// Keep only the allowlisted prompt keys the daemon stores for later delivery.
 /// `client_message_id` is an id the UI generated, never message content, and it
 /// is kept so a replayed add finds the first item instead of duplicating it.
-fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::PromptAttachment], client_message_id: Option<&str>) -> Value {
+fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::PromptAttachment], client_message_id: Option<&str>, annotations: &Value) -> Value {
     let attachments = attachments.iter().map(|attachment| json!({"path":attachment.path.to_string_lossy(),"name":attachment.name})).collect::<Vec<_>>();
     let mut params = json!({"text":text,"attachments":attachments});
     if let Some(client_id) = client_message_id { params["clientMessageId"] = json!(client_id); }
@@ -109,6 +109,7 @@ fn allowlisted_params(p: &Value, text: &str, attachments: &[bloblex_agent_core::
     }
     if p["replyTo"].is_object() { params["replyTo"] = p["replyTo"].clone(); }
     if p["command"].is_object() { params["command"] = p["command"].clone(); }
+    if annotations.as_array().is_some_and(|notes| !notes.is_empty()) { params["annotations"] = annotations.clone(); }
     params
 }
 
@@ -134,6 +135,7 @@ fn prompt_params(session_id: &str, item: &Value, confirm_resend: bool) -> Value 
     if item["conversationRefs"].as_array().is_some_and(|items| !items.is_empty()) { params["conversationRefs"] = item["conversationRefs"].clone(); }
     if item["replyTo"].is_object() { params["replyTo"] = item["replyTo"].clone(); }
     if item["command"].is_object() { params["command"] = item["command"].clone(); }
+    if item["annotations"].as_array().is_some_and(|notes| !notes.is_empty()) { params["annotations"] = item["annotations"].clone(); }
     // Internal auto-retry items carry the daemon-generated meta the prompt path
     // validates against its allowlist. Plain/scheduled items have none.
     if item["meta"].is_object() { params["meta"] = item["meta"].clone(); }
@@ -152,7 +154,8 @@ pub(crate) async fn emit_changed(st: &AppState, session_id: &str) {
 fn validate_body(session: &Value, p: &Value) -> Result<Vec<bloblex_agent_core::PromptAttachment>, DispatchError> {
     let text = p["text"].as_str().unwrap_or("");
     let attachments = crate::prompt_attachments(&p["attachments"])?;
-    if (text.is_empty() && attachments.is_empty()) || text.len() > 1_000_000 {
+    let has_notes = p["annotations"].as_array().is_some_and(|notes| !notes.is_empty());
+    if (text.is_empty() && attachments.is_empty() && !has_notes) || text.len() > 1_000_000 {
         return Err(derr("invalid_argument", "text must contain 1 to 1000000 UTF-8 bytes", StatusCode::BAD_REQUEST));
     }
     if !attachments.is_empty() && !matches!(session["provider"].as_str().unwrap_or(""), "claude" | "codex") {
@@ -177,11 +180,26 @@ pub(crate) async fn add_marked(st: &AppState, p: Value, mcp_client: Option<&str>
     // A command is validated before it is queued, so a bad one fails here
     // rather than when the queue later tries to send it.
     crate::commands::directive(st, session_id, &p["command"])?;
-    let due_at = match p.get("dueAt") {
+    let annotations = json!(crate::prepare_annotations(st, session_id, &p["annotations"])?);
+    let mut due_at = match p.get("dueAt") {
         None | Some(Value::Null) => None,
-        Some(Value::String(raw)) => Some(validate_due_at(raw)?),
+        Some(Value::String(raw)) => Some(raw.as_str()),
         _ => return Err(derr("invalid_argument", "dueAt must be an RFC3339 timestamp", StatusCode::BAD_REQUEST)),
     };
+    let when_limit_resets = match p.get("whenLimitResets") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(flag)) => *flag,
+        _ => return Err(derr("invalid_argument", "whenLimitResets must be true or false", StatusCode::BAD_REQUEST)),
+    };
+    let reset_at: Option<String>;
+    if when_limit_resets {
+        if due_at.is_some() { return Err(derr("invalid_argument", "Choose either a time or when the usage limit resets.", StatusCode::BAD_REQUEST)); }
+        reset_at = limit_reset(st, session_id);
+        if reset_at.is_none() { return Err(derr("conflict", "This conversation isn't waiting for a usage limit.", StatusCode::CONFLICT)); }
+        due_at = reset_at.as_deref();
+    }
+    // A time the owner picked is bounded; the reset the daemon read is not.
+    let due_at = match due_at { Some(raw) if !when_limit_resets => Some(validate_due_at(raw)?), Some(raw) => Some(raw.to_owned()), None => None };
     let text = p["text"].as_str().unwrap_or("");
     let client_message_id = crate::client_message_id(&p["clientMessageId"])?;
     let kind = if due_at.is_some() { "send_later" } else { "user" };
@@ -204,7 +222,8 @@ pub(crate) async fn add_marked(st: &AppState, p: Value, mcp_client: Option<&str>
         if st.db.queue_count_queued(session_id).map_err(queue_error)? >= QUEUE_MAX {
             return Err(derr("conflict", "The queue is full.", StatusCode::CONFLICT));
         }
-        let mut params = allowlisted_params(&p, text, &attachments, client_message_id.as_deref());
+        let mut params = allowlisted_params(&p, text, &attachments, client_message_id.as_deref(), &annotations);
+        if when_limit_resets { params["whenLimitResets"] = json!(true); }
         if let Some(client) = mcp_client { params["meta"] = json!({"kind":"mcp","client":client.chars().take(60).collect::<String>()}); }
         st.db.queue_add(session_id, &params, kind, due_at.as_deref()).map_err(queue_error)?
     };
@@ -335,13 +354,38 @@ async fn send_specific(st: &AppState, session_id: &str, id: &str, confirm: bool)
     }
 }
 
+/// The end of the session's usage-limit window when it is still ahead, as stored UTC.
+fn limit_reset(st: &AppState, session_id: &str) -> Option<String> {
+    let (_, until) = st.db.session_limit_info(session_id).ok()?;
+    let at = chrono::DateTime::parse_from_rfc3339(&until?).ok()?.with_timezone(&Utc);
+    (at > Utc::now()).then(|| at.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+/// Whether the items waiting for a usage limit to reset may be sent now.
+///
+/// Not while the window is still ahead: a window that was extended moves every waiting
+/// item to the new reset instead (and tells the window). Not in the second the reset
+/// arrives either, while the watchdog's own "continue" has yet to be queued: that
+/// continuation goes first, and the waiting item follows it once the turn ends. With
+/// "resume after usage limits" off there is no continuation, so the item just goes.
+async fn limit_waiters_may_send(st: &AppState, session_id: &str) -> bool {
+    if !st.db.queue_has_limit_waiters(session_id).unwrap_or(false) { return true; }
+    if let Some(reset) = limit_reset(st, session_id) {
+        if st.db.queue_move_limit_waiters(session_id, &reset).unwrap_or(false) { emit_changed(st, session_id).await; }
+        return false;
+    }
+    let resume_on = st.db.settings().unwrap_or(Value::Null)["experimental.resumeAfterUsageLimits"] != false;
+    !(resume_on && st.db.watchdog_due_sessions(&now_utc()).unwrap_or_default().iter().any(|id| id == session_id))
+}
+
 /// Claim and send the next eligible item. `allow_plain` is the caller's wish to
 /// send plain prompts; a paused session forces scheduled-only selection.
 pub(crate) async fn drain_next(st: &AppState, session_id: &str, allow_plain: bool) {
     let lock = st.queue.lock_for(session_id);
     let _guard = lock.lock().await;
     let allow_plain = allow_plain && !st.queue.is_paused(session_id);
-    let item = match st.db.queue_claim_next(session_id, &now_utc(), allow_plain) {
+    let include_waiters = limit_waiters_may_send(st, session_id).await;
+    let item = match st.db.queue_claim_next(session_id, &now_utc(), allow_plain, include_waiters) {
         Ok(Some(item)) => item,
         Ok(None) => return,
         Err(_) => return,

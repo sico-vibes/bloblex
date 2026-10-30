@@ -2,6 +2,16 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-30 · Daemon · Phase 1B (compare, limit-reset sends, stash, notes, new projects, problem reports): what to remember
+
+- **A queued send to a limited conversation is only blocked for the `Queue` origin.** `session_prompt_impl` refuses `state == "limited"` unless the origin is User or Mcp, and a plain `send_later` item goes out as `User`. So "send when the limit resets" needs no special origin; what it needs is `due_tick` not claiming it early. `queue_claim_next(.., include_waiters)` and `limit_waiters_may_send` (`queue.rs`) hold it while `limitedUntil` is ahead (and move its `due_at` when the window was extended), and while the watchdog's own continuation is still to be queued (setting on, `watchdog_due_sessions` lists the session). The continuation is kind `retry` and the waiter sorts after it by `whenLimitResets` in the claim's ORDER BY.
+- **A turn that ends at once discards an untouched worktree** (`after_task_turn`), so a test that wants to see the copy needs an adapter that never finishes (`QueueAdapter`). Fan-out tests that only read replies use `TeamAdapter`.
+- **Fan-out record first, rows later.** `fanout_create` runs before the conversations, so `fanoutId` (resolved through the table in the session DTOs) is valid from the first `session.changed`; `fanout_set_rows` fills the rows in at the end. Deleting the record needs no write to the conversations.
+- **Child modules of the storage crate can `impl Storage`** and reach the private `conn` (`phase1b.rs`); it keeps new code out of the 10,000-line `lib.rs`, whose one NUL byte makes grep treat it as binary (use `grep -a`) and Edit the only safe editor.
+- **Stubbing `gh`:** a `.cmd` (Windows) or `sh` script on a path that `scaffold::gh_program()` returns under `cfg(test)`, serialised with `GH_TEST_LOCK`. `tokio::process::Command` quotes an argument with spaces in a batch file's `%*`. git needs `GIT_AUTHOR_*`/`GIT_COMMITTER_*` set in tests that make a commit.
+- **PowerShell calls don't share environment changes:** remove `BITBOTS_HOOK_BRIDGE` and `BITBOTS_REMOTE_WEB_DIR` in the same command that runs `cargo test`, or the two known env tests fail.
+- **Python in a Bash heredoc is fine for text without backslashes** (it handled the CRLF `tiers.json`); put anything with Windows paths in a file.
+
 ## 2026-10-30 · Lanes · Working with an in-app bot through the MCP
 
 - **A bot's worktree folder can stay locked after its turn.** `git worktree remove --force` emptied and unregistered Sona's worktree but reported "Permission denied" on the folder itself, and no process named it on its command line. Leave the empty folder for the owner; don't kill processes to free it.

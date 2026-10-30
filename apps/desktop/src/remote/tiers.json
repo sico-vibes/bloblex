@@ -800,6 +800,111 @@
       "params": null
     },
     {
+      "method": "fanout.start",
+      "class": "never",
+      "minTier": null,
+      "why": "Comparing bots is a desktop feature; it starts several conversations on the host.",
+      "params": null
+    },
+    {
+      "method": "fanout.get",
+      "class": "never",
+      "minTier": null,
+      "why": "Comparison records are the owner's, read at the desktop.",
+      "params": null
+    },
+    {
+      "method": "fanout.list",
+      "class": "never",
+      "minTier": null,
+      "why": "Comparison records are the owner's, read at the desktop.",
+      "params": null
+    },
+    {
+      "method": "fanout.pick",
+      "class": "never",
+      "minTier": null,
+      "why": "Choosing a comparison's answer is the owner's, at the desktop.",
+      "params": null
+    },
+    {
+      "method": "fanout.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "Removing a comparison record is the owner's, at the desktop.",
+      "params": null
+    },
+    {
+      "method": "stash.add",
+      "class": "never",
+      "minTier": null,
+      "why": "The prompt stash holds the owner's drafts and images; it is never sent to a remote device.",
+      "params": null
+    },
+    {
+      "method": "stash.list",
+      "class": "never",
+      "minTier": null,
+      "why": "The prompt stash holds the owner's drafts and images; it is never sent to a remote device.",
+      "params": null
+    },
+    {
+      "method": "stash.update",
+      "class": "never",
+      "minTier": null,
+      "why": "The prompt stash holds the owner's drafts and images; it is never sent to a remote device.",
+      "params": null
+    },
+    {
+      "method": "stash.image",
+      "class": "never",
+      "minTier": null,
+      "why": "Stashed images are the owner's files; they are never sent to a remote device.",
+      "params": null
+    },
+    {
+      "method": "stash.restore",
+      "class": "never",
+      "minTier": null,
+      "why": "The prompt stash holds the owner's drafts and images; it is never sent to a remote device.",
+      "params": null
+    },
+    {
+      "method": "stash.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "The prompt stash holds the owner's drafts and images; it is never sent to a remote device.",
+      "params": null
+    },
+    {
+      "method": "project.scaffold.status",
+      "class": "never",
+      "minTier": null,
+      "why": "Creating a project is a desktop action; it checks the host's git and GitHub sign-in.",
+      "params": null
+    },
+    {
+      "method": "project.scaffold",
+      "class": "never",
+      "minTier": null,
+      "why": "Creating a project makes folders, runs git and can publish a repository on the host; the owner confirms it at the desktop.",
+      "params": null
+    },
+    {
+      "method": "diagnostics.issueDraft",
+      "class": "never",
+      "minTier": null,
+      "why": "The problem report is built from the host's diagnostics and is the owner's at the computer.",
+      "params": null
+    },
+    {
+      "method": "diagnostics.issuePost",
+      "class": "never",
+      "minTier": null,
+      "why": "Posting a problem report uses the owner's GitHub sign-in on the host; only the owner at the desktop may send it.",
+      "params": null
+    },
+    {
       "method": "pricing.*",
       "class": "never",
       "minTier": null,
@@ -1186,7 +1291,9 @@
     "task.run.finished": "drop",
     "delegation.updated": "allow",
     "outside.sessions.changed": "drop",
-    "external.changed": "drop"
+    "external.changed": "drop",
+    "fanout.changed": "drop",
+    "stash.changed": "drop"
   },
   "settingsAllowlist": [
     "appearance.style",

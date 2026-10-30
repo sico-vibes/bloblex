@@ -7,6 +7,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod experiments;
+mod phase1b;
 pub mod cron;
 
 #[derive(Debug, Error)]
@@ -1857,6 +1858,9 @@ fn queued_prompt_dto(id:&str,session_id:&str,position:i64,params_json:&str,kind:
         "sendId": queue_send_id(id, &params),
     });
     if let Some(reply) = params.get("replyTo").filter(|value| !value.is_null()) { item["replyTo"] = reply.clone(); }
+    if let Some(notes) = params.get("annotations").filter(|value| value.is_array()) { item["annotations"] = notes.clone(); }
+    // "Send when the usage limit resets": the item waits for the session's reset. Always present.
+    item["whenLimitResets"] = json!(params.get("whenLimitResets").and_then(Value::as_bool).unwrap_or(false));
     // Internal auto-retry items carry daemon-generated meta so the send path can
     // rebuild the allowlisted prompt without re-reading the storage row.
     if let Some(meta) = params.get("meta").filter(|value| value.is_object()) { item["meta"] = meta.clone(); }
@@ -2017,7 +2021,7 @@ impl Storage {
     /// database from an earlier version failed with `no such table: tasks` (FIX43).
     fn migrate(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         let storage = Self::migrate_versions(conn, path)?;
-        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
+        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; phase1b::ensure_phase1b_schema(&c)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
         Ok(storage)
     }
     fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
@@ -3395,8 +3399,8 @@ impl Storage {
     pub fn sessions(&self) -> Result<Vec<Value>, StorageError> { self.session_list(false) }
     pub fn session_list(&self, include_archived: bool) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until,COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)) FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
-        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?,"projectId":r.get::<_,Option<String>>(16)?,"projectName":r.get::<_,Option<String>>(17)?})))?;
+        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until,COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')) FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
+        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?,"projectId":r.get::<_,Option<String>>(16)?,"projectName":r.get::<_,Option<String>>(17)?,"fanoutId":r.get::<_,Option<String>>(18)?})))?;
         iter.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
@@ -3745,6 +3749,10 @@ impl Storage {
             params_json = params.to_string();
         }
         if let Some(next) = due_at {
+            // Picking a time (or none) replaces "when the limit resets".
+            if let Ok(mut params) = serde_json::from_str::<Value>(&params_json) {
+                if let Some(map) = params.as_object_mut() { if map.remove("whenLimitResets").is_some() { params_json = params.to_string(); } }
+            }
             match next {
                 None => { kind = "user".to_owned(); due = None; }
                 Some(value) => { kind = "send_later".to_owned(); due = Some(value.to_owned()); }
@@ -3848,12 +3856,12 @@ impl Storage {
     /// Atomically claim the next eligible item. When `allow_plain` is false
     /// only due scheduled items are candidates, so a paused session never
     /// auto-sends a plain prompt.
-    pub fn queue_claim_next(&self, session_id: &str, now: &str, allow_plain: bool) -> Result<Option<Value>, StorageError> {
+    pub fn queue_claim_next(&self, session_id: &str, now: &str, allow_plain: bool, include_waiters: bool) -> Result<Option<Value>, StorageError> {
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row: Option<(String,i64,String,String,Option<String>)> = tx.query_row(
-            "SELECT id,position,params_json,kind,due_at FROM queued_prompts WHERE session_id=?1 AND status='queued' AND ((kind IN ('send_later','retry') AND due_at IS NOT NULL AND due_at<=?2) OR (?3 AND kind='user')) ORDER BY CASE WHEN kind IN ('send_later','retry') THEN 0 ELSE 1 END,due_at,position,created_at,id LIMIT 1",
-            params![session_id,now,allow_plain],
+            "SELECT id,position,params_json,kind,due_at FROM queued_prompts WHERE session_id=?1 AND status='queued' AND ((kind IN ('send_later','retry') AND due_at IS NOT NULL AND due_at<=?2) OR (?3 AND kind='user')) AND (?4 OR COALESCE(json_extract(params_json,'$.whenLimitResets'),0)!=1) ORDER BY CASE WHEN kind IN ('send_later','retry') THEN 0 ELSE 1 END,COALESCE(json_extract(params_json,'$.whenLimitResets'),0),due_at,position,created_at,id LIMIT 1",
+            params![session_id,now,allow_plain,include_waiters],
             |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))
         ).optional()?;
         let Some((id,position,params,kind,due)) = row else { tx.commit()?; return Ok(None); };
@@ -6640,7 +6648,7 @@ impl Storage {
         self.session_detail_parts(c, id, true)
     }
     fn session_detail_parts(&self, c: &Connection, id: &str, full: bool) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
         let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
@@ -7227,7 +7235,7 @@ const SESSION_MESSAGES_SQL: &str = "SELECT json_object('id',id,'turnId',turn_id,
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
-        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
         [id],
         |r| r.get(0),
     ).optional()?;
@@ -9292,7 +9300,7 @@ mod tests {
         let converted = db.queue_update("s-queue", &scheduled_id, Some("scheduled"), Some(None)).unwrap();
         assert_eq!((converted["kind"].as_str(), converted["text"].as_str()), (Some("user"), Some("scheduled")));
         assert!(converted["dueAt"].is_null());
-        let claimed = db.queue_claim_next("s-queue", "9999-01-01T00:00:00.000Z", true).unwrap().unwrap();
+        let claimed = db.queue_claim_next("s-queue", "9999-01-01T00:00:00.000Z", true, true).unwrap().unwrap();
         let claimed_id = claimed["id"].as_str().unwrap().to_owned();
         assert_eq!(claimed["status"], "sending");
         assert!(matches!(db.queue_update("s-queue", &claimed_id, Some("x"), None), Err(StorageError::AgentConflict)), "only queued items can be edited");

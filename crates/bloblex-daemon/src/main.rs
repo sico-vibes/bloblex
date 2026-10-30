@@ -38,6 +38,10 @@ use uuid::Uuid;
 
 mod catalog;
 mod diagnostics;
+mod fanout;
+mod issue_report;
+mod stash;
+mod scaffold;
 mod mcp_bridge;
 mod model_presentation;
 mod team;
@@ -872,7 +876,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "memory.list" | "memory.get" | "memory.create" | "memory.update" | "memory.approve" | "memory.delete" | "memory.restore" => memory::rpc(st, method, &p).await,
         "skills.list" | "skills.get" | "skills.forAgent" | "skills.scan" | "skills.import" | "skills.delete" | "skills.toggle" => skills::rpc(st, method, &p).await,
         "backup.export" | "backup.preview" | "backup.import" => backup::rpc(st, method, &p).await,
-        "diagnostics.preview" | "diagnostics.export" => diagnostics::rpc(st, method, &p).await,
+        "diagnostics.preview" | "diagnostics.export" | "diagnostics.issueDraft" | "diagnostics.issuePost" => diagnostics::rpc(st, method, &p).await,
+        "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
+        "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
+        "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -3377,6 +3384,46 @@ fn prepare_reply_snapshot(st: &AppState, session_id: &str, session: &Value, valu
     Ok(Some(json!({"sourceSessionId":source_session,"messageId":message_id,"role":role,"author":author,"excerpt":excerpt,"truncated":truncated,"createdAt":source["createdAt"]})))
 }
 
+/// Most notes one message may carry, and the bound of a quote and of a note.
+const MAX_ANNOTATIONS: usize = 10;
+const MAX_ANNOTATION_CHARS: usize = 2_000;
+
+/// Phase 1B: the notes the owner marked on the bot's earlier replies. Each names an
+/// assistant message in this conversation; the quote comes from rendered text, so it is
+/// not required to match the stored message. Returns the normalised list (empty for none).
+pub(crate) fn prepare_annotations(st: &AppState, session_id: &str, value: &Value) -> Result<Vec<Value>, DispatchError> {
+    let invalid = |message: &str| derr("invalid_argument", message, StatusCode::BAD_REQUEST);
+    let items = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(items) => items,
+        _ => return Err(invalid("annotations must be a list.")),
+    };
+    if items.len() > MAX_ANNOTATIONS { return Err(invalid("A message can carry up to 10 notes.")); }
+    items.iter().map(|item| {
+        let message_id = item["messageId"].as_str().filter(|id| !id.is_empty() && id.len() <= 128).ok_or_else(|| invalid("Each note needs the message it is about."))?;
+        let quote = item["quote"].as_str().filter(|text| !text.trim().is_empty() && text.chars().count() <= MAX_ANNOTATION_CHARS).ok_or_else(|| invalid("A note's quote must be 1 to 2000 characters."))?;
+        let note = item["note"].as_str().filter(|text| !text.trim().is_empty() && text.chars().count() <= MAX_ANNOTATION_CHARS).ok_or_else(|| invalid("A note must be 1 to 2000 characters."))?;
+        let source = st.db.message_reply_source(session_id, message_id).map_err(|error| match error {
+            bloblex_storage::StorageError::AgentNotFound => invalid("A marked message is not in this conversation."),
+            _ => derr("internal", "Could not read the marked message.", StatusCode::INTERNAL_SERVER_ERROR),
+        })?;
+        if source["role"] != "assistant" { return Err(invalid("Only a bot's reply can be marked.")); }
+        Ok(json!({"messageId": message_id, "quote": quote, "note": note}))
+    }).collect()
+}
+
+/// The block the coding agent reads before the owner's text, the same for every provider.
+/// It is built per turn and never stored: the transcript keeps the owner's words.
+fn annotation_prompt_block(annotations: &[Value], text: &str) -> String {
+    if annotations.is_empty() { return String::new(); }
+    let items = annotations.iter().enumerate().map(|(index, note)| {
+        let quote = note["quote"].as_str().unwrap_or("").lines().map(|line| format!("> {line}")).collect::<Vec<_>>().join("\n");
+        format!("{}. On this part:\n{quote}\nNote: {}", index + 1, note["note"].as_str().unwrap_or(""))
+    }).collect::<Vec<_>>().join("\n\n");
+    let block = format!("The owner marked parts of your earlier reply:\n\n{items}\n\n");
+    if text.is_empty() { block.trim_end().to_owned() } else { block }
+}
+
 /// Who is asking for a turn. Controls whether a side conversation is writable
 /// and which daemon-generated `meta` kinds the prompt path will accept.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3497,6 +3544,7 @@ struct TurnDriver {
     reply_snapshot: Option<Value>,
     references: Option<(String, Value)>,
     command_directive: Option<String>,
+    annotation_block: String,
     exec_options: ExecOptions,
     provider: String,
     desired_instruction_hash: Option<String>,
@@ -3568,7 +3616,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
     let text = p["text"].as_str().unwrap_or("").to_owned();
     let attachments = prompt_attachments(&p["attachments"])?;
-    if (text.is_empty() && attachments.is_empty()) || text.len() > 1_000_000 {
+    if (text.is_empty() && attachments.is_empty() && p["annotations"].as_array().is_none_or(|notes| notes.is_empty())) || text.len() > 1_000_000 {
         return Err(derr(
             "invalid_argument",
             "text must contain 1 to 1000000 UTF-8 bytes",
@@ -3589,6 +3637,8 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     // provider prompt; the stored message keeps the text exactly as typed.
     let command_directive = commands::directive(st, &sid, &p["command"])?;
     let reply_snapshot = prepare_reply_snapshot(st, &sid, &session_before, &p["replyTo"])?;
+    let annotations = prepare_annotations(st, &sid, &p["annotations"])?;
+    let annotation_block = annotation_prompt_block(&annotations, &text);
     // Side conversations the user tagged with # reach the blob as context; the
     // stored message keeps the text exactly as typed.
     let references = team::reference_context(st, &sid, &p["conversationRefs"]);
@@ -3718,9 +3768,10 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         if let Some((retry_of, attempt)) = &retry_chain {
             let _ = st.db.merge_turn_data(&turn, &json!({"retryOf":retry_of,"attempt":attempt}));
         }
-        if client_message_id.is_some() || allowed_meta.is_some() || reply_snapshot.is_some() {
+        if client_message_id.is_some() || allowed_meta.is_some() || reply_snapshot.is_some() || !annotations.is_empty() {
             let mut meta = allowed_meta.unwrap_or_else(|| json!({}));
             if let Some(snapshot) = &reply_snapshot { meta["replyTo"] = snapshot.clone(); }
+            if !annotations.is_empty() { meta["annotations"] = json!(annotations); }
             // The replay key lives with the message it created; it is an id the
             // UI generated, never message text, so it is safe to store.
             if let Some(client_id) = &client_message_id { meta["clientMessageId"] = json!(client_id); }
@@ -3796,7 +3847,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     // A send means this conversation is no longer just "warmed".
     st.warm_lru.lock().await.retain(|id| id != &sid);
     let state = st.clone();
-    let driver = TurnDriver { sid: sid.clone(), turn: turn.clone(), text, attachments, reply_snapshot, references, command_directive, exec_options, provider, desired_instruction_hash };
+    let driver = TurnDriver { sid: sid.clone(), turn: turn.clone(), text, attachments, reply_snapshot, references, command_directive, annotation_block, exec_options, provider, desired_instruction_hash };
     tokio::spawn(async move { run_turn(state, driver).await; });
     Ok(json!({"turnId":turn,"accepted":true,"state":next_state}))
 }
@@ -3818,7 +3869,7 @@ async fn note_prompt_delivered(st: &AppState, sid: &str) {
 /// cancellation) exactly once.
 async fn run_turn(state: AppState, driver: TurnDriver) {
     let st = &state;
-    let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, command_directive, exec_options, provider, desired_instruction_hash } = driver;
+    let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, command_directive, annotation_block, exec_options, provider, desired_instruction_hash } = driver;
     // 1. Activate the provider (resume a saved session, or start fresh).
     if let Err(error) = activate_session(st, &sid, Owner::Turn(turn.clone())).await {
         finish_activation_failure(st, &sid, &turn, &error).await;
@@ -3957,7 +4008,7 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
         let command_context = command_directive.as_deref().unwrap_or("");
         format!(
-            "{text}{handover}{recap}{manager}{memory}{skills}{reference_context}{reply_context}{command}",
+            "{annotation_block}{text}{handover}{recap}{manager}{memory}{skills}{reference_context}{reply_context}{command}",
             handover = handover_context.as_deref().unwrap_or(""),
             recap = recap_context.as_deref().unwrap_or(""),
             manager = manager_context.as_deref().unwrap_or(""),
@@ -5170,6 +5221,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr = listener.local_addr()?;
     *st.team.address.lock().unwrap() = Some(addr.to_string());
     *st.team.data_dir.lock().unwrap() = data_dir;
+    stash::prune_restored(&st);
     // The outside-session hook needs this run's address and token.
     outside::startup(&st);
     // Wave 14: a fresh token and endpoint file for the Bitbots MCP, when it is on.
@@ -12270,6 +12322,9 @@ mod phase2a_tests {
 
     // Phase 1A: bots across projects.
     include!("phase1a_tests.rs");
+
+    // Phase 1B: fan-out, limit-reset sends, the stash, annotations, scaffolding and the problem report.
+    include!("phase1b_tests.rs");
 
     #[tokio::test]
     async fn team_update_project_move_does_not_archive() {

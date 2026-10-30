@@ -767,3 +767,70 @@ async fn external_send_message_takes_a_project_and_conversations_carry_it() {
     assert_eq!(alpha_row["botIds"], json!([c.agent]), "{alpha_row}");
     let _ = std::fs::remove_dir_all(&c.dir);
 }
+
+#[tokio::test]
+async fn external_fan_out_respects_the_level() {
+    // The Viewer level does not see the tool; Chat and Operator do.
+    let viewer = fixture("viewer", false).await;
+    assert!(!tool_names(&viewer.st).await.contains(&"fan_out".to_owned()));
+    let _ = std::fs::remove_dir_all(&viewer.dir);
+    let c = fixture("chat", false).await;
+    assert!(tool_names(&c.st).await.contains(&"fan_out".to_owned()));
+    let second = c.st.db.agent_create(&json!({"name": "Second", "runtimeId": "ext-rt", "approvalMode": "ask"})).unwrap().0["id"].as_str().unwrap().to_owned();
+    // Below the Operator level a worktree is refused, before anything is created.
+    let (failed, reason) = tool(&c.st, "fan_out", json!({"botIds": [c.agent, second], "text": "hello", "worktrees": true})).await;
+    assert!(failed && reason.as_str().unwrap().contains("needs the Operator level"), "{reason}");
+    assert!(c.st.db.session_list(true).unwrap().is_empty(), "nothing was started");
+    // One bot is not a comparison.
+    let (failed, _) = tool(&c.st, "fan_out", json!({"botIds": [c.agent], "text": "hello"})).await;
+    assert!(failed);
+    // Without worktrees it starts a conversation per bot, marked as sent through the MCP.
+    let (failed, started) = tool(&c.st, "fan_out", json!({"botIds": [c.agent, second], "text": "hello", "worktrees": false})).await;
+    assert!(!failed, "{started}");
+    assert!(started["fanoutId"].is_string());
+    let rows = started["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert!(row["error"].is_null(), "{row}");
+        let session = row["sessionId"].as_str().unwrap();
+        let detail = c.st.db.session_detail(session).unwrap();
+        assert_eq!(detail["fanoutId"], started["fanoutId"]);
+        let messages = {
+            let mut found = Vec::new();
+            for _ in 0..100 {
+                found = c.st.db.session_detail(session).unwrap()["messages"].as_array().cloned().unwrap_or_default();
+                if found.iter().any(|message| message["role"] == "user") { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            found
+        };
+        let sent = messages.iter().find(|message| message["role"] == "user").expect("the message was sent");
+        assert_eq!(sent["meta"]["origin"]["kind"], "mcp", "{sent}");
+    }
+    let _ = std::fs::remove_dir_all(&c.dir);
+    // The Operator level may ask for worktrees; outside a git project the request is ignored.
+    let o = fixture("operator", false).await;
+    let other = o.st.db.agent_create(&json!({"name": "Other", "runtimeId": "ext-rt", "approvalMode": "ask"})).unwrap().0["id"].as_str().unwrap().to_owned();
+    let (failed, ok) = tool(&o.st, "fan_out", json!({"botIds": [o.agent, other], "text": "hello", "worktrees": true})).await;
+    assert!(!failed, "{ok}");
+    let _ = std::fs::remove_dir_all(&o.dir);
+}
+
+#[tokio::test]
+async fn external_send_message_can_wait_for_a_usage_limit() {
+    let c = fixture("chat", false).await;
+    let session = c.st.db.create_session_for_agent("limit-ext", "ext-rt", "codex", ".", "Limited", Some(&c.agent)).map(|_| "limit-ext").unwrap();
+    let (failed, reason) = tool(&c.st, "send_message", json!({"sessionId": session, "text": "later", "whenLimitResets": true})).await;
+    assert!(failed && reason.as_str().unwrap().contains("isn't waiting for a usage limit"), "{reason}");
+    let (failed, reason) = tool(&c.st, "send_message", json!({"botId": c.agent, "text": "later", "whenLimitResets": true})).await;
+    assert!(failed && reason.as_str().unwrap().contains("sessionId"), "{reason}");
+    let reset = (chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    c.st.db.watchdog_limit(session, Some(&reset)).unwrap();
+    let (failed, queued) = tool(&c.st, "send_message", json!({"sessionId": session, "text": "later", "whenLimitResets": true})).await;
+    assert!(!failed, "{queued}");
+    assert_eq!((queued["queued"].clone(), queued["whenLimitResets"].clone()), (json!(true), json!(true)));
+    let items = c.st.db.queue_list(session).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!((items[0]["whenLimitResets"].clone(), items[0]["meta"]["kind"].clone()), (json!(true), json!("mcp")));
+    let _ = std::fs::remove_dir_all(&c.dir);
+}

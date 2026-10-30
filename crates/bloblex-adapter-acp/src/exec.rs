@@ -107,6 +107,9 @@ pub(crate) fn config_content(options: &ExecOptions) -> String {
     let instructions = normalize_instructions(&options.instructions);
     let mut body = serde_json::Map::new();
     body.insert("$schema".into(), json!(SCHEMA));
+    // OpenCode asks questions through ACP elicitation, which Bitbots does not
+    // advertise, so the call would always fail; bots use `ask_user` instead.
+    body.insert("permission".into(), json!({"question": "deny"}));
     if let Some(model) = model {
         body.insert("model".into(), json!(model));
     }
@@ -535,6 +538,7 @@ mod tests {
         assert_eq!(value["$schema"], SCHEMA);
         assert!(value.get("model").is_none());
         assert!(value.get("agent").is_none());
+        assert_eq!(value["permission"]["question"], "deny");
 
         let mut options = ExecOptions { model: Some("opencode/ling".into()), instructions: Some("  ".into()), ..ExecOptions::default() };
         let model_only: Value = serde_json::from_str(&config_content(&options)).unwrap();

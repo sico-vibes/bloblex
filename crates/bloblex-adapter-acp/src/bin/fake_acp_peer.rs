@@ -61,6 +61,7 @@ struct Flags {
     efforts: Vec<String>,
     effort_id: String,
     reject_effort: Option<String>,
+    stale_effort: u32,
     reject_load: bool,
     fail_load: Option<String>,
     usage: String,
@@ -79,6 +80,7 @@ impl Flags {
         let mut efforts = "low,high,max,default".to_owned();
         let mut effort_id = "effort".to_owned();
         let mut reject_effort = None;
+        let mut stale_effort = 0u32;
         let mut reject_load = false;
         let mut fail_load = None;
         let mut usage = "sequence".to_owned();
@@ -98,6 +100,7 @@ impl Flags {
                 "--efforts" => efforts = next.unwrap_or("").to_owned(),
                 "--effort-id" => effort_id = next.unwrap_or("effort").to_owned(),
                 "--reject-effort" => reject_effort = next.map(str::to_owned),
+                "--stale-effort" => stale_effort = next.and_then(|value| value.parse().ok()).unwrap_or(0),
                 "--reject-load" => reject_load = true,
                 "--fail-load" => fail_load = next.map(str::to_owned),
                 "--usage" => usage = next.unwrap_or("sequence").to_owned(),
@@ -108,7 +111,7 @@ impl Flags {
                 "--pid-log" => pid_log = next.map(PathBuf::from),
                 _ => {}
             }
-            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--fail-load" | "--usage" | "--v2-stop-after" | "--pid-log") {
+            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--stale-effort" | "--fail-load" | "--usage" | "--v2-stop-after" | "--pid-log") {
                 2
             } else {
                 1
@@ -121,6 +124,7 @@ impl Flags {
             efforts: csv(&efforts),
             effort_id,
             reject_effort,
+            stale_effort,
             reject_load,
             fail_load,
             usage,
@@ -166,6 +170,7 @@ struct Session {
     efforts: Vec<String>,
     effort_id: String,
     reject_effort: Option<String>,
+    stale_effort: u32,
     variant_models: BTreeSet<String>,
     prompt_id: Option<Value>,
     permission_pending: Option<(Value, Value)>,
@@ -221,6 +226,7 @@ impl Session {
             efforts,
             effort_id: flags.effort_id.clone(),
             reject_effort: flags.reject_effort.clone(),
+            stale_effort: flags.stale_effort,
             variant_models,
             prompt_id: None,
             permission_pending: None,
@@ -396,6 +402,13 @@ fn apply_option(session: &mut Session, config_id: &str, value: &str) -> bool {
             }
             true
         }
+        // `<model>/<effort>`: OpenCode accepts the variant attached to the model.
+        "model" if config_id_is_combined(session, value) => {
+            let (base, variant) = value.rsplit_once('/').unwrap_or((value, ""));
+            session.model = base.to_owned();
+            session.effort = Some(next_effort(session, variant));
+            true
+        }
         "mode" if session.modes.iter().any(|mode| mode == value) => {
             session.mode = value.to_owned();
             true
@@ -405,10 +418,31 @@ fn apply_option(session: &mut Session, config_id: &str, value: &str) -> bool {
             && session.efforts.iter().any(|effort| effort == value)
             && session.reject_effort.as_deref() != Some(value) =>
         {
-            session.effort = Some(value.to_owned());
+            session.effort = Some(next_effort(session, value));
             true
         }
         _ => false,
+    }
+}
+
+fn config_id_is_combined(session: &Session, value: &str) -> bool {
+    let Some((base, variant)) = value.rsplit_once('/') else { return false };
+    let offered = if session.v2 {
+        v2_efforts_for(base).is_some_and(|levels| levels.iter().any(|level| level == variant))
+    } else {
+        session.variant_models.contains(base) && session.efforts.iter().any(|effort| effort == variant)
+    };
+    session.models.iter().any(|model| model == base) && offered && session.reject_effort.as_deref() != Some(variant)
+}
+
+/// A stale reply models OpenCode losing the variant to a late agent switch:
+/// the call is accepted but the echoed effort stays `default`.
+fn next_effort(session: &mut Session, wanted: &str) -> String {
+    if session.stale_effort > 0 {
+        session.stale_effort -= 1;
+        "default".to_owned()
+    } else {
+        wanted.to_owned()
     }
 }
 

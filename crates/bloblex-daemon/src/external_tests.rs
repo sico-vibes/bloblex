@@ -33,6 +33,24 @@ impl bloblex_agent_core::AgentAdapter for HoldAdapter {
     async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
 }
 
+/// A coding agent whose every prompt fails the way OpenCode's rejected effort does.
+#[derive(Default)]
+struct FailAdapter;
+
+#[async_trait::async_trait]
+impl bloblex_agent_core::AgentAdapter for FailAdapter {
+    async fn probe(&self, _: &RuntimeSpec) -> Result<bloblex_agent_core::ProbeResult, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+    async fn new_session(&self, _: &RuntimeSpec, request: NewSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> {
+        Ok(SessionHandle { session_id: request.session_id, provider_session_id: "fail".into(), capabilities: Default::default() })
+    }
+    async fn resume_session(&self, _: &RuntimeSpec, _: ResumeSessionRequest, _: tokio::sync::mpsc::Sender<AgentEvent>) -> Result<SessionHandle, bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Unsupported("test".into())) }
+    async fn prompt(&self, _: &SessionHandle, _: PromptRequest) -> Result<(), bloblex_agent_core::AdapterError> { Err(bloblex_agent_core::AdapterError::Protocol("OpenCode rejected the effort setting: OpenCode answered \"default\" instead of high".into())) }
+    async fn steer(&self, _: &SessionHandle, _: SteerRequest) -> Result<SteerOutcome, bloblex_agent_core::AdapterError> { Ok(SteerOutcome::Accepted) }
+    async fn cancel(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    async fn reply_permission(&self, _: &str, _: &str) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+    async fn close_session(&self, _: &SessionHandle) -> Result<(), bloblex_agent_core::AdapterError> { Ok(()) }
+}
+
 const SECRET_ENV: &str = "secret-env-value-123";
 
 struct Ctx {
@@ -53,11 +71,15 @@ fn temp_dir(label: &str) -> PathBuf {
 /// agent (`hold` keeps turns live; otherwise every prompt is answered at once) and
 /// the MCP switched on at `tier`.
 async fn fixture(tier: &str, hold: bool) -> Ctx {
+    let adapter: Arc<dyn bloblex_agent_core::AgentAdapter> = if hold { Arc::new(HoldAdapter) } else { Arc::new(TeamAdapter::default()) };
+    fixture_with(tier, adapter).await
+}
+
+async fn fixture_with(tier: &str, codex: Arc<dyn bloblex_agent_core::AgentAdapter>) -> Ctx {
     let (mut st, events) = state();
     let runtime = json!({"id": "ext-rt", "provider": "codex", "status": "online", "executablePath": "unused-test-runtime", "launchArgs": []});
     st.db.upsert_runtime(&runtime).unwrap();
     *st.runtimes.write().await = vec![runtime];
-    let codex: Arc<dyn bloblex_agent_core::AgentAdapter> = if hold { Arc::new(HoldAdapter) } else { Arc::new(TeamAdapter::default()) };
     st.adapters = Arc::new(crate::Adapters { acp: st.adapters.acp.clone(), codex, claude: st.adapters.claude.clone() });
     let dir = temp_dir("data");
     *st.team.data_dir.lock().unwrap() = Some(dir.clone());
@@ -298,6 +320,27 @@ async fn external_wait_for_turn_returns_reply_and_metrics() {
     assert_eq!(again["done"], true);
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(tool(st, "wait_for_turn", json!({"sessionId": "missing"})).await.0);
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn failed_turn_shows_its_error_in_wait_for_turn_read_conversation_and_turn_metrics() {
+    let c = fixture_with("chat", Arc::new(FailAdapter)).await;
+    let st = &c.st;
+    let (_, sent) = tool(st, "send_message", json!({"botId": c.agent, "text": "Do the thing", "newConversation": true})).await;
+    let session = sent["sessionId"].as_str().unwrap().to_owned();
+    let (error, waited) = tool(st, "wait_for_turn", json!({"sessionId": session, "timeoutSecs": 10})).await;
+    assert!(!error, "{waited}");
+    assert_eq!(waited["done"], true, "{waited}");
+    assert_eq!(waited["metrics"]["outcome"], "error", "{waited}");
+    assert!(waited["error"]["message"].as_str().is_some_and(|message| !message.is_empty()), "{waited}");
+    assert!(waited["error"]["detail"].as_str().is_some_and(|detail| detail.contains("effort")), "the Details line is kept: {waited}");
+    let (_, metrics) = tool(st, "turn_metrics", json!({"sessionId": session})).await;
+    assert_eq!(metrics[0]["error"], waited["error"], "{metrics}");
+    let (_, conversation) = tool(st, "read_conversation", json!({"sessionId": session})).await;
+    let notice = conversation.as_array().unwrap().iter().find(|item| item["role"] == "error").unwrap_or_else(|| panic!("an error item in {conversation}"));
+    assert!(notice["text"].as_str().unwrap().contains(waited["error"]["message"].as_str().unwrap()), "{notice}");
+    assert_eq!(notice["kind"], "error");
     let _ = std::fs::remove_dir_all(&c.dir);
 }
 

@@ -376,8 +376,8 @@ fn catalog() -> Vec<(Tier, Value)> {
         entry(Viewer, "list_projects", "The distinct project folders bots work in, which bots use each, and whether each is a git repository.", schema(json!({}), &[])),
         entry(Viewer, "list_conversations", "Conversations, newest first: id, bot, title, state, last update and its separate git copy when it has one.", schema(json!({"botId": id("Only this bot's conversations."), "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "How many to return (default 20)."}}), &[])),
         entry(Viewer, "read_conversation", "A conversation's messages: id, role, text, time and kind. Tool steps are one line each and images are paths only. Without afterMessageId you get the latest messages; with it, the ones after that message.", schema(json!({"sessionId": id("The conversation."), "afterMessageId": id("Only messages after this one."), "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "How many to return (default 50)."}}), &["sessionId"])),
-        entry(Viewer, "wait_for_turn", "Waits for the conversation's running turn to finish (up to timeoutSecs, 600 at most), then returns the reply and the turn's metrics. It returns early when an approval or a question is waiting.", schema(json!({"sessionId": id("The conversation."), "timeoutSecs": {"type": "integer", "minimum": 1, "maximum": 600, "description": "How long to wait (default 120)."}}), &["sessionId"])),
-        entry(Viewer, "turn_metrics", "Per turn: start and end time, duration, tool calls, tokens when the coding agent reported them, and the outcome. Unknown values are left out, never zero.", schema(json!({"sessionId": id("The conversation."), "last": {"type": "integer", "minimum": 1, "maximum": 50, "description": "How many turns (default 5)."}}), &["sessionId"])),
+        entry(Viewer, "wait_for_turn", "Waits for the conversation's running turn to finish (up to timeoutSecs, 600 at most), then returns the reply and the turn's metrics, or the error when the turn failed. It returns early when an approval or a question is waiting.", schema(json!({"sessionId": id("The conversation."), "timeoutSecs": {"type": "integer", "minimum": 1, "maximum": 600, "description": "How long to wait (default 120)."}}), &["sessionId"])),
+        entry(Viewer, "turn_metrics", "Per turn: start and end time, duration, tool calls, tokens when the coding agent reported them, the outcome, and the error (message and detail) of a failed turn. Unknown values are left out, never zero.", schema(json!({"sessionId": id("The conversation."), "last": {"type": "integer", "minimum": 1, "maximum": 50, "description": "How many turns (default 5)."}}), &["sessionId"])),
         entry(Viewer, "worktree_status", "For a conversation working in its own git copy: branch, base, files changed and commits ahead. Null when it has none.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
         entry(Viewer, "list_approvals", "Approvals waiting for the owner: id, conversation, bot, tool and a summary.", schema(json!({}), &[])),
         entry(Chat, "send_message", "Sends a message to a bot. With sessionId it continues that conversation (queued after the running turn when it is busy); with botId it continues the bot's latest conversation, or starts a new one when newConversation is true or there is none. Returns at once; use wait_for_turn for the reply.", schema(json!({"botId": id("The bot."), "sessionId": id("An existing conversation."), "text": id("The message, up to 100,000 characters."), "newConversation": {"type": "boolean", "description": "Start a new conversation with botId."}, "projectPath": id("The folder for a new conversation (default: the bot's own).")}), &["text"])),
@@ -619,6 +619,20 @@ fn stamp(value: &Value) -> Option<DateTime<Utc>> {
     value.as_str().and_then(|text| DateTime::parse_from_rfc3339(text).ok()).map(|at| at.with_timezone(&Utc))
 }
 
+/// The error of a failed turn, as the app shows it: the plain message and the Details line.
+fn turn_error(turn: &Value) -> Option<Value> {
+    if turn["state"].as_str() != Some("error") { return None; }
+    let message = match turn["failureClass"].as_str() {
+        Some(class) => crate::failure_public_message(class).to_owned(),
+        None => turn["failureMessage"].as_str().unwrap_or("The turn could not be completed.").to_owned(),
+    };
+    let mut error = json!({"message": message});
+    if let Some(detail) = turn["detail"].as_str().filter(|detail| !detail.is_empty()) {
+        error["detail"] = json!(if bloblex_security::contains_secret_marker(detail) { "(hidden)".to_owned() } else { cap(detail, 1000) });
+    }
+    Some(error)
+}
+
 /// A conversation as one list: its messages, with each tool step reduced to a line.
 fn conversation_items(detail: &Value) -> Vec<Value> {
     let mut tools: Vec<(Option<DateTime<Utc>>, Value)> = detail["tools"].as_array().cloned().unwrap_or_default().iter().map(|tool| {
@@ -629,6 +643,13 @@ fn conversation_items(detail: &Value) -> Vec<Value> {
             "createdAt": tool["startedAt"], "kind": "tool",
         }))
     }).collect();
+    for turn in detail["turns"].as_array().cloned().unwrap_or_default() {
+        let Some(error) = turn_error(&turn) else { continue };
+        let text = match error["detail"].as_str() { Some(detail) => format!("{}
+{detail}", error["message"].as_str().unwrap_or("")), None => error["message"].as_str().unwrap_or("").to_owned() };
+        let at = turn["completedAt"].clone();
+        tools.push((stamp(&at), json!({"id": format!("{}-error", turn["id"].as_str().unwrap_or("turn")), "role": "error", "text": text, "createdAt": at, "kind": "error"})));
+    }
     tools.sort_by_key(|(at, _)| (at.is_none(), *at));
     let mut tools = tools.into_iter().peekable();
     let mut items = Vec::new();
@@ -685,6 +706,7 @@ fn metrics_of(st: &AppState, session_id: &str, last: usize) -> Vec<Value> {
             row["durationMs"] = json!((end - start).num_milliseconds().max(0));
         }
         if let Some(class) = turn["failureClass"].as_str() { row["failureClass"] = json!(class); }
+        if let Some(error) = turn_error(turn) { row["error"] = error; }
         if let Ok((input, output)) = st.db.turn_usage_tokens(id) {
             if let Some(input) = input { row["inputTokens"] = json!(input); }
             if let Some(output) = output { row["outputTokens"] = json!(output); }
@@ -724,7 +746,10 @@ async fn wait_for_turn(st: &AppState, args: &Value) -> ToolResult {
             let reply = watched.as_deref().and_then(|turn| st.db.turn_reply(&id, turn).ok().flatten()).or_else(|| st.db.latest_turn_reply(&id).ok().flatten());
             let mut done = json!({"done": true, "state": state});
             if let Some(reply) = reply { done["reply"] = json!(cap(&reply, 60_000)); }
-            if let Some(metrics) = metrics_of(st, &id, 1).pop() { done["metrics"] = metrics; }
+            if let Some(metrics) = metrics_of(st, &id, 1).pop() {
+                if let Some(error) = metrics.get("error") { done["error"] = error.clone(); }
+                done["metrics"] = metrics;
+            }
             return Ok(done);
         }
         if Instant::now() >= deadline { return Ok(json!({"done": false, "state": state, "timedOut": true})); }

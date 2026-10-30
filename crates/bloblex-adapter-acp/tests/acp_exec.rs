@@ -277,7 +277,7 @@ async fn session_setup_order_is_model_then_mode_then_effort_before_prompt() {
             "session/new".to_owned(),
             "session/set_config_option model=opencode-go/deepseek-v4.1-flash".to_owned(),
             "session/set_config_option mode=bloblex".to_owned(),
-            "session/set_config_option effort=high".to_owned(),
+            "session/set_config_option model=opencode-go/deepseek-v4.1-flash/high".to_owned(),
             "session/prompt".to_owned(),
         ]
     );
@@ -538,8 +538,8 @@ async fn effort_option_is_selected_by_thought_level_category_not_by_hard_coded_i
         .unwrap();
     let trace = rpc_trace(&read_record(&temp.record()));
     assert!(
-        trace.contains(&"session/set_config_option think=high".to_owned()),
-        "effort is sent under the provider's own option id, found by category: {trace:?}",
+        trace.contains(&"session/set_config_option model=opencode-go/deepseek-v4.1-flash/high".to_owned()),
+        "effort found by category is sent with the model as one value: {trace:?}",
     );
     let mut seen = Vec::new();
     while let Ok(event) = events.try_recv() { seen.push(event); }
@@ -577,6 +577,88 @@ async fn rejected_effort_value_is_a_typed_error_and_never_reaches_the_prompt() {
     assert_eq!(outcomes["thinking"].applied, Some(false));
     let trace = rpc_trace(&read_record(&temp.record()));
     assert!(trace.iter().all(|call| call != "session/prompt"), "a rejected effort stops before the prompt");
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn effort_is_set_again_when_opencode_echoes_a_stale_default_once() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--stale-effort".into(), "1".into()];
+    let exec = options(Some("opencode-go/deepseek-v4.1-flash"), Some("high"), Some(SENTINEL));
+    let (handle, mut events) = open_session(&adapter, args, exec.clone()).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-stale".into(), text: "hello".into(), exec_options: exec })
+        .await
+        .expect("the second try echoes high");
+    let trace = rpc_trace(&read_record(&temp.record()));
+    let combined = "session/set_config_option model=opencode-go/deepseek-v4.1-flash/high".to_owned();
+    assert_eq!(trace.iter().filter(|call| **call == combined).count(), 2, "{trace:?}");
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    let outcomes = take_outcomes(&seen);
+    assert_eq!(outcomes["thinking"].evidence_value.as_ref().and_then(|value| value.as_str()), Some("high"));
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn effort_that_never_sticks_fails_with_both_values_in_the_reason() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--stale-effort".into(), "99".into()];
+    let exec = options(Some("opencode-go/deepseek-v4.1-flash"), Some("high"), None);
+    let (handle, mut events) = open_session(&adapter, args, options(Some("opencode-go/deepseek-v4.1-flash"), None, None)).await;
+    let error = adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-never".into(), text: "hello".into(), exec_options: exec })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("OpenCode rejected the effort setting"), "{error}");
+    assert!(error.contains("\"default\"") && error.contains("high"), "{error}");
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    let reason = take_outcomes(&seen)["thinking"].reason.clone().unwrap_or_default();
+    assert!(reason.contains("\"default\"") && reason.contains("high"), "{reason}");
+    let trace = rpc_trace(&read_record(&temp.record()));
+    assert_eq!(trace.iter().filter(|call| call.ends_with("/high")).count(), 3, "three tries in all: {trace:?}");
+    assert!(trace.iter().all(|call| call != "session/prompt"));
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn effort_rpc_error_message_reaches_the_failure_reason() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into(), "--reject-effort".into(), "high".into()];
+    let exec = options(Some("opencode-go/deepseek-v4.1-flash"), Some("high"), None);
+    let (handle, mut events) = open_session(&adapter, args, options(Some("opencode-go/deepseek-v4.1-flash"), None, None)).await;
+    let error = adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-rpc".into(), text: "hello".into(), exec_options: exec })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("option value is not offered"), "{error}");
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() { seen.push(event); }
+    let reason = take_outcomes(&seen)["thinking"].reason.clone().unwrap_or_default();
+    assert!(reason.contains("option value is not offered"), "{reason}");
+    adapter.close_session(&handle).await.unwrap();
+}
+
+#[tokio::test]
+async fn default_effort_keeps_the_plain_effort_call() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let args = vec!["--record".into(), temp.record().to_string_lossy().into()];
+    let exec = options(Some("opencode-go/deepseek-v4.1-flash"), Some("default"), None);
+    let (handle, _events) = open_session(&adapter, args, exec.clone()).await;
+    adapter
+        .prompt(&handle, PromptRequest { attachments: Vec::new(), turn_id: "turn-default".into(), text: "hello".into(), exec_options: exec })
+        .await
+        .unwrap();
+    let trace = rpc_trace(&read_record(&temp.record()));
+    assert!(trace.contains(&"session/set_config_option effort=default".to_owned()), "{trace:?}");
+    assert!(trace.iter().all(|call| !call.ends_with("/default")), "{trace:?}");
     adapter.close_session(&handle).await.unwrap();
 }
 
@@ -808,7 +890,7 @@ async fn resume_uses_session_load_then_the_same_option_order() {
             "session/load".to_owned(),
             "session/set_config_option model=opencode-go/deepseek-v4.1-flash".to_owned(),
             "session/set_config_option mode=bloblex".to_owned(),
-            "session/set_config_option effort=max".to_owned(),
+            "session/set_config_option model=opencode-go/deepseek-v4.1-flash/max".to_owned(),
             "session/prompt".to_owned(),
         ]
     );
@@ -1174,7 +1256,7 @@ async fn opencode2_session_selects_the_model_before_its_effort() {
         .unwrap();
     let trace = rpc_trace(&read_record(&temp.record()));
     let model_at = trace.iter().position(|call| call == "session/set_config_option model=opencode-go/model-002").expect("the model is selected");
-    let effort_at = trace.iter().position(|call| call == "session/set_config_option effort=high").expect("the effort is selected");
+    let effort_at = trace.iter().position(|call| call == "session/set_config_option model=opencode-go/model-002/high").expect("the effort is selected");
     assert!(model_at < effort_at, "effort options depend on the model, so the model goes first: {trace:?}");
     adapter.close_session(&handle).await.unwrap();
 }

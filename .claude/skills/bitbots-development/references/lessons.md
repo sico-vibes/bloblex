@@ -2,6 +2,26 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-30 · ACP adapter · OpenCode effort race and the question tool
+
+- **"OpenCode rejected the effort setting" was a race inside OpenCode, not a Bitbots bug.**
+  - **When:** a bot with instructions (its own, or the team instructions every bot gets when there are several) makes Bitbots send model, then `mode=bloblex`, then `effort`.
+  - **Cause:** OpenCode's agent switch republishes the model without its variant. When that lands after the effort call, the reply echoes `default`. That happened in 3 of 4 logged runs; the evidence is in OpenCode's `packages/cli/src/acp/sessions.ts` 54–91 and `config-option.ts` 118–132.
+  - **Fix:** `select_effort` in `bloblex-adapter-acp/src/lib.rs` sends model and effort as one value, `provider/model/<effort>` (OpenCode's `parseModelSelection`), after the mode switch. It verifies the echo, and retries twice 200 ms apart.
+  - **Failure reasons** now carry the provider's error text, or "answered X instead of Y".
+  - **Don't** put the variant in the injected agent config: it is fixed at process start.
+  - **The combined value is OpenCode syntax.** Restrict it to OpenCode before another ACP provider is added.
+- **How it was found:**
+  - The shim `scratchpad\shim\opencode.cmd`, put first on a throwaway daemon's `PATH`, logs every ACP line.
+  - It only reproduced with instructions on and new conversations sent back to back (`mcp_smoke.py` with `SMOKE_INSTR=1 SMOKE_AGAIN=3`).
+  - Single-bot tests with no instructions never hit it.
+- **OpenCode 2's `question` tool needs ACP `elicitation`, which Bitbots doesn't advertise, so it always failed.**
+  - **Config:** the injected config sets `"permission": {"question": "deny"}`. A probe showed it wins over the build agent's built-in allow, and the tool is no longer offered.
+  - **Cards:** any `question` tool card that still arrives is dropped (`hides_question_card`).
+  - **Later:** supporting elicitation as a Bitbots question card.
+- **Tests:** the fake peer's `--stale-effort N` reproduces the race. When effort goes through the model option, tests assert `model=<m>/<effort>`, not `effort=<e>`.
+- **The MCP explains failures:** `wait_for_turn`, `turn_metrics` and `read_conversation` carry the turn's error (`external::turn_error`, secret-marker detail hidden).
+
 ## 2026-10-29 · Daemon and UI · Wave 14 (the Bitbots MCP)
 
 - **The debug daemon ran out of worker stack after the MCP work.** The dev app and the standalone daemon crashed on `daemon.shutdown` (and, before the route was boxed, on the first request) with "thread 'tokio-rt-worker' has overflowed its stack", exit `0xC00000FD`. The beta.40 debug build shut down cleanly, and the same build ran fine with `RUST_MIN_STACK=4194304`, so the code was correct but deeper prompt-path futures pushed debug frames past tokio's 2 MiB default. Boxing single arms (`external::rpc`, `queue_rpc`, `session_steer`) did not help. Fix: `main()` builds the runtime itself with `thread_stack_size(WORKER_STACK_BYTES)` (8 MiB), and the `ext.*` route and the queue's four prompt calls are `Box::pin`ned. To avoid it: after any change to the prompt path, run a standalone debug daemon through `daemon.health` and `daemon.shutdown` and check the exit code is 0. The cargo test gate cannot catch this, because it runs with `RUST_MIN_STACK=33554432`.

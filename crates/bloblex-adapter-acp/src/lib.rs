@@ -52,6 +52,7 @@ struct Conn {
     cancelled_turn: AtomicBool,
     turn_lifecycle: Mutex<()>,
     prompt_ack_pending: AtomicBool,
+    question_calls: Mutex<std::collections::HashSet<String>>,
     local_session_id: String,
     events: SessionEventSink,
     spawned_instructions: Option<String>,
@@ -284,6 +285,7 @@ impl AcpAdapter {
             cancelled_turn: AtomicBool::new(false),
             turn_lifecycle: Mutex::new(()),
             prompt_ack_pending: AtomicBool::new(false),
+            question_calls: Mutex::new(std::collections::HashSet::new()),
             local_session_id: local_session_id.to_owned(),
             events: SessionEventSink::new(events),
             spawned_instructions: secret,
@@ -431,6 +433,10 @@ impl AcpAdapter {
                         }
                         if params["update"]["sessionUpdate"].as_str() == Some("agent_turn_complete") {
                             session.turn_completed.store(true, Ordering::SeqCst);
+                        }
+                        if hides_question_card(&mut *session.question_calls.lock().await, &params["update"]) {
+                            if prompt_accepted { let _ = session.events.enqueue(AgentEvent::PromptAccepted); }
+                            continue;
                         }
                         let context_model = session.applied.lock().await.model.clone();
                         emit_update(&session.events, &params, context_model).await;
@@ -581,6 +587,7 @@ impl AcpAdapter {
             cancelled_turn: AtomicBool::new(false),
             turn_lifecycle: Mutex::new(()),
             prompt_ack_pending: AtomicBool::new(false),
+            question_calls: Mutex::new(std::collections::HashSet::new()),
             local_session_id: old.local_session_id.clone(),
             events: old.events.clone(),
             spawned_instructions: exec::normalize_instructions(&options.instructions),
@@ -775,34 +782,127 @@ impl AcpAdapter {
             Self::fail_setting(c, turn_id, outcome_key, json!(value), missing).await;
             return Err(AdapterError::Protocol(missing.into()));
         }
-        let result = match Self::request(
+        // OpenCode can publish a stale effort a moment after a mode switch, so
+        // an effort that does not echo back is set again a couple of times.
+        let attempts = if config_id == "effort" { 3 } else { 1 };
+        let mut detail = String::new();
+        for attempt in 0..attempts {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            let updated = match Self::set_option(c, provider_session_id, &resolved_id, value).await {
+                Ok(updated) => updated,
+                Err(message) => {
+                    detail = message;
+                    break;
+                }
+            };
+            let echoed = exec::config_option(&updated, &resolved_id).and_then(exec::current_value);
+            if echoed.as_deref() == Some(value) {
+                let mut applied = c.applied.lock().await;
+                match config_id {
+                    "model" => applied.model = echoed,
+                    "mode" => applied.mode = echoed,
+                    "effort" => applied.effort = echoed,
+                    _ => {}
+                }
+                return Ok(());
+            }
+            detail = Self::echo_detail(echoed.as_deref(), value);
+        }
+        let reason = format!("{rejected}: {detail}");
+        Self::fail_setting(c, turn_id, outcome_key, json!(value), &reason).await;
+        Err(AdapterError::Protocol(reason))
+    }
+
+    /// One `session/set_config_option`; stores and returns the refreshed
+    /// option list. The error is the provider's own message.
+    async fn set_option(c: &Conn, provider_session_id: &str, option_id: &str, value: &str) -> Result<Vec<Value>, String> {
+        let result = Self::request(
             c,
             "session/set_config_option",
-            json!({"sessionId": provider_session_id, "configId": resolved_id.clone(), "value": value}),
+            json!({"sessionId": provider_session_id, "configId": option_id, "value": value}),
         )
         .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                Self::fail_setting(c, turn_id, outcome_key, json!(value), rejected).await;
-                return Err(AdapterError::Protocol(rejected.into()));
-            }
-        };
+        .map_err(|error| Self::rpc_error_message(&error))?;
         let updated = exec::options_from_result(&result);
-        let echoed = exec::config_option(&updated, &resolved_id).and_then(exec::current_value);
-        *c.config_options.lock().await = updated;
-        if echoed.as_deref() != Some(value) {
-            Self::fail_setting(c, turn_id, outcome_key, json!(value), rejected).await;
-            return Err(AdapterError::Protocol(rejected.into()));
+        *c.config_options.lock().await = updated.clone();
+        Ok(updated)
+    }
+
+    fn rpc_error_message(error: &AdapterError) -> String {
+        let text = match error {
+            AdapterError::Protocol(raw) => serde_json::from_str::<Value>(raw)
+                .ok()
+                .and_then(|value| value["message"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| raw.clone()),
+            other => other.to_string(),
+        };
+        text.chars().take(200).collect()
+    }
+
+    fn echo_detail(echoed: Option<&str>, wanted: &str) -> String {
+        format!("OpenCode answered {} instead of {wanted}", echoed.map(|value| format!("\"{value}\"")).unwrap_or_else(|| "nothing".into()))
+    }
+
+    /// Effort goes in one call with the model (`provider/model/<effort>`),
+    /// because OpenCode's agent switch republishes the model without its
+    /// variant and would otherwise wipe an effort set on its own. Models
+    /// without an effort option, and the `default` effort, use plain `select`.
+    async fn select_effort(
+        c: &Conn,
+        provider_session_id: &str,
+        model: Option<&str>,
+        thinking: &str,
+        turn_id: Option<&str>,
+    ) -> Result<(), AdapterError> {
+        let (effort_id, model_id, offered, current_model) = {
+            let options = c.config_options.lock().await;
+            let effort_id = exec::resolve_option_id(&options, "effort");
+            let model_id = exec::resolve_option_id(&options, "model");
+            let offered = effort_id
+                .as_deref()
+                .and_then(|id| exec::config_option(&options, id))
+                .map(exec::option_values)
+                .unwrap_or_default();
+            let current_model = model_id.as_deref().and_then(|id| exec::config_option(&options, id)).and_then(exec::current_value);
+            (effort_id, model_id, offered, current_model)
+        };
+        let base = model.map(str::to_owned).or(current_model);
+        let (Some(effort_id), Some(model_id), Some(base)) = (effort_id, model_id, base) else {
+            return Self::select(c, provider_session_id, "effort", thinking, "thinking", exec::ERR_EFFORT_MISSING, exec::ERR_EFFORT_REJECTED, turn_id).await;
+        };
+        if thinking == "default" || !offered.contains(thinking) {
+            return Self::select(c, provider_session_id, "effort", thinking, "thinking", exec::ERR_EFFORT_MISSING, exec::ERR_EFFORT_REJECTED, turn_id).await;
         }
-        let mut applied = c.applied.lock().await;
-        match config_id {
-            "model" => applied.model = echoed,
-            "mode" => applied.mode = echoed,
-            "effort" => applied.effort = echoed,
-            _ => {}
+        let wire = format!("{base}/{thinking}");
+        let mut detail = String::new();
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            let updated = match Self::set_option(c, provider_session_id, &model_id, &wire).await {
+                Ok(updated) => updated,
+                Err(message) => {
+                    detail = message;
+                    break;
+                }
+            };
+            let echoed_effort = exec::config_option(&updated, &effort_id).and_then(exec::current_value);
+            if echoed_effort.as_deref() == Some(thinking) {
+                let echoed_model = exec::config_option(&updated, &model_id).and_then(exec::current_value);
+                let mut applied = c.applied.lock().await;
+                if echoed_model.is_some() {
+                    applied.model = echoed_model;
+                }
+                applied.effort = echoed_effort;
+                return Ok(());
+            }
+            detail = Self::echo_detail(echoed_effort.as_deref(), thinking);
         }
-        Ok(())
+        let reason = format!("{}: {detail}", exec::ERR_EFFORT_REJECTED);
+        Self::fail_setting(c, turn_id, "thinking", json!(thinking), &reason).await;
+        Err(AdapterError::Protocol(reason))
     }
 
     /// `session/new` or `session/load`, then model, then mode, then effort.
@@ -861,7 +961,9 @@ impl AcpAdapter {
             };
             Some(default_mode)
         } else { None };
+        let mut mode_changed = false;
         if let Some(mode) = wanted_mode.filter(|mode| applied_mode.as_deref() != Some(mode.as_str())) {
+            mode_changed = true;
             Self::select(
                 c,
                 provider_session_id,
@@ -875,18 +977,8 @@ impl AcpAdapter {
             .await?;
         }
         if let Some(thinking) = exec::nonempty(&options.thinking) {
-            if c.applied.lock().await.effort.as_deref() != Some(thinking) {
-                Self::select(
-                    c,
-                    provider_session_id,
-                    "effort",
-                    thinking,
-                    "thinking",
-                    exec::ERR_EFFORT_MISSING,
-                    exec::ERR_EFFORT_REJECTED,
-                    turn_id,
-                )
-                .await?;
+            if mode_changed || c.applied.lock().await.effort.as_deref() != Some(thinking) {
+                Self::select_effort(c, provider_session_id, exec::nonempty(&options.model), thinking, turn_id).await?;
             }
         }
         Ok(())
@@ -932,6 +1024,26 @@ impl AcpAdapter {
 fn failed_prompt_terminal(had_active_turn: bool) -> AdapterError {
     let message = "OpenCode prompt failed".to_owned();
     if had_active_turn { AdapterError::TurnErrorReported(message) } else { AdapterError::Protocol(message) }
+}
+
+/// OpenCode's `question` tool cannot work through Bitbots (it needs ACP
+/// elicitation) and is denied in the injected config, so its refused or failed
+/// card is dropped instead of shown as an error. The call id is remembered so
+/// the later updates of the same call are dropped too.
+fn hides_question_card(calls: &mut std::collections::HashSet<String>, update: &Value) -> bool {
+    let id = update["toolCallId"].as_str().unwrap_or("");
+    match update["sessionUpdate"].as_str() {
+        Some("tool_call") => {
+            let named = |key: &str| update[key].as_str().is_some_and(|value| value.eq_ignore_ascii_case("question"));
+            if named("title") || named("name") {
+                calls.insert(id.to_owned());
+                return true;
+            }
+            false
+        }
+        Some("tool_call_update") => calls.contains(id),
+        _ => false,
+    }
 }
 
 async fn emit_update(tx: &SessionEventSink, p: &Value, context_model: Option<String>) {
@@ -1416,6 +1528,15 @@ fn resume_rejected_evidence(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn question_tool_cards_are_hidden_with_their_updates() {
+        let mut calls = std::collections::HashSet::new();
+        assert!(hides_question_card(&mut calls, &json!({"sessionUpdate":"tool_call","toolCallId":"q1","name":"question","title":"question"})));
+        assert!(hides_question_card(&mut calls, &json!({"sessionUpdate":"tool_call_update","toolCallId":"q1","status":"failed"})));
+        assert!(!hides_question_card(&mut calls, &json!({"sessionUpdate":"tool_call","toolCallId":"r1","name":"read","title":"read"})));
+        assert!(!hides_question_card(&mut calls, &json!({"sessionUpdate":"tool_call_update","toolCallId":"r1","status":"completed"})));
+    }
 
     #[tokio::test]
     async fn images_are_encoded_as_acp_content_blocks_without_exposing_a_local_path() {

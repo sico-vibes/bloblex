@@ -1504,7 +1504,18 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
         }
         "project.update" => {
             let id = p["projectId"].as_str().unwrap_or("");
-            let (project, events) = st.db.project_update(id, p).map_err(agent_error)?;
+            // Overrides carry code (the setup script) and can widen a bot's mode, so only this
+            // desktop RPC writes them: remote devices are refused by tiers.json, and the Manager and
+            // the MCP never reach this arm with them.
+            let overrides = match p.get("overrides") {
+                None | Some(Value::Null) => None,
+                Some(value) => {
+                    let valid = bloblex_storage::validate_project_overrides(value).map_err(|_| derr("invalid_argument", "overrides must be {models, approvalMode, setupScript}: models map a provider to a model id of 1 to 200 characters, approvalMode is ask, auto, accept_edits, bypass or null, and the setup script is at most 4000 characters.", StatusCode::BAD_REQUEST))?;
+                    if valid["approvalMode"] == "bypass" && p["confirm"] != true { return Err(derr("invalid_argument", "Confirm Full access for this project first.", StatusCode::BAD_REQUEST)); }
+                    Some(valid)
+                }
+            };
+            let (project, events) = st.db.project_update_with_overrides(id, p, overrides.as_ref()).map_err(agent_error)?;
             st.broadcast_persisted(events);
             Ok(json!({"project": project}))
         }

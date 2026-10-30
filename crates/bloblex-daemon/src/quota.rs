@@ -220,6 +220,9 @@ pub enum PollFailure {
     NoCredentials,
     Unauthorized,
     NoSubscription,
+    /// The owner has not allowed Bitbots to read the coding agents' stored
+    /// sign-ins, so no credential file was opened at all.
+    ReadOff,
 }
 
 #[derive(Debug, PartialEq, Eq)]

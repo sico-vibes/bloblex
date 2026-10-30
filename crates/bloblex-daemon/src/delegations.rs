@@ -478,7 +478,7 @@ async fn retry_scheduled(st: &AppState, turn: Option<&str>) -> bool {
     let Some(turn) = turn else { return false };
     let decision = |data: &Value| data["retryDecision"]["decision"].as_str().map(str::to_owned);
     let mut current = decision(&st.db.turn_data(turn).unwrap_or(Value::Null));
-    if current.as_deref() != Some("retry") && st.db.settings().unwrap_or(Value::Null)["experimental.autoRetry"] == true {
+    if current.as_deref() != Some("retry") && crate::experiments::on(&st.db.settings().unwrap_or(Value::Null), "autoRetry") {
         for _ in 0..RETRY_DECISION_WAIT_STEPS {
             tokio::time::sleep(std::time::Duration::from_millis(RETRY_DECISION_WAIT_MS)).await;
             current = decision(&st.db.turn_data(turn).unwrap_or(Value::Null));

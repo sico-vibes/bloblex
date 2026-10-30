@@ -591,15 +591,57 @@ async fn disabling_the_mcp_turns_full_access_off() {
 }
 
 #[tokio::test]
+async fn accept_edits_is_accepted_by_create_and_update_bot_without_full_access() {
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    let project = temp_dir("accept-edits-project");
+    let (error, bot) = tool(st, "create_bot", json!({"name": "Editor", "runtimeId": "ext-rt", "model": "some-model", "projectPath": project.to_string_lossy(), "approvalMode": "accept_edits"})).await;
+    assert!(!error, "{bot}");
+    assert_eq!(bot["approvalMode"], "accept_edits");
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["approvalMode"], "ask");
+    let (error, updated) = tool(st, "update_bot", json!({"botId": c.agent, "approvalMode": "accept_edits"})).await;
+    assert!(!error, "{updated}");
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["approvalMode"], "accept_edits");
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "approvalMode": "yolo"})).await;
+    assert!(error && message.as_str().unwrap().contains("accept_edits"), "{message}");
+    let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
+async fn the_mcp_has_no_way_to_set_project_overrides() {
+    // Even at the Operator level with Full access on, no tool edits a project's overrides.
+    let c = fixture("operator", false).await;
+    let st = &c.st;
+    allow_full_access(st).await;
+    let listed = route(st, "ext.tools.list", &json!({})).await.unwrap().to_string();
+    assert!(!listed.contains("setupScript") && !listed.contains("overrides"), "no tool names them");
+    let names = tool_names(st).await;
+    assert!(!names.iter().any(|name| name.contains("project") && name != "list_projects"), "{names:?}");
+    for name in ["update_project", "project.update", "propose_project"] {
+        let (error, _) = tool(st, name, json!({"project": "x", "overrides": {"setupScript": "echo hi"}})).await;
+        assert!(error, "{name} is not a tool");
+    }
+    let (error, message) = tool(st, "update_bot", json!({"botId": c.agent, "name": "Sneaky", "overrides": {"setupScript": "echo hi"}})).await;
+    assert!(error, "{message}");
+    assert_eq!(st.db.agent_get(&c.agent).unwrap()["name"], "Scout", "nothing was written");
+    let project = st.db.project_create("Plain", Some(&c.dir.to_string_lossy())).unwrap().0["id"].as_str().unwrap().to_owned();
+    crate::dispatch(st, "project.update", json!({"projectId": project, "overrides": {"setupScript": "echo SECRET_SETUP"}})).await.unwrap();
+    let (_, listed) = tool(st, "list_projects", json!({})).await;
+    assert!(listed.to_string().contains("Plain") && !listed.to_string().contains("overrides") && !listed.to_string().contains("SECRET_SETUP"), "{listed}");
+    let _ = std::fs::remove_dir_all(&c.dir);
+}
+
+#[tokio::test]
 async fn tool_list_offers_bypass_only_while_allowed() {
     let c = fixture("operator", false).await;
     let st = &c.st;
     let closed = route(st, "ext.tools.list", &json!({})).await.unwrap();
-    for name in ["create_bot", "update_bot"] { assert_eq!(approval_enum(&closed, name), ["ask", "auto"], "{name}"); }
+    for name in ["create_bot", "update_bot"] { assert_eq!(approval_enum(&closed, name), ["ask", "auto", "accept_edits"], "{name}"); }
     allow_full_access(st).await;
     let open = route(st, "ext.tools.list", &json!({})).await.unwrap();
     for name in ["create_bot", "update_bot"] {
-        assert_eq!(approval_enum(&open, name), ["ask", "auto", "bypass"], "{name}");
+        assert_eq!(approval_enum(&open, name), ["ask", "auto", "accept_edits", "bypass"], "{name}");
         let tool = open["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).unwrap();
         assert!(tool["inputSchema"]["properties"]["approvalMode"]["description"].as_str().unwrap().contains("bypass is Full access: the bot acts without asking."));
     }

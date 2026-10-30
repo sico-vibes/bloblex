@@ -42,7 +42,7 @@ const MAX_SKILL_TOTAL_BYTES: u64 = 50 * 1024 * 1024;
 
 /// The exact settings keys a backup may carry. `experimental.*` boolean flags
 /// are allowed in addition to this list (see `exportable_setting`).
-const SETTING_ALLOWLIST: [&str; 32] = [
+const SETTING_ALLOWLIST: [&str; 34] = [
     "appearance.style",
     "appearance.accent",
     "appearance.density",
@@ -75,6 +75,9 @@ const SETTING_ALLOWLIST: [&str; 32] = [
     "claude.enableWorkflows",
     "conversations.autoTitle",
     "skills.enabled",
+    // Shortcuts are appearance preferences and travel like the rest.
+    "composer.sendShortcut",
+    "shortcuts.bindings",
 ];
 
 /// Previews awaiting `backup.import`. At most `PREVIEW_LIMIT`, each ten
@@ -145,6 +148,9 @@ fn exportable_setting(key: &str, value: &Value) -> bool {
         || lower.starts_with("internal.")
         || lower.starts_with("migration.")
         || lower.starts_with("remote.")
+        // Consent to read the coding agents' sign-ins never travels: the owner
+        // gives it again on the new machine.
+        || lower.starts_with("usage.")
         || lower.starts_with("speech.cloud.consent")
         || lower == "companion.positions"
     {
@@ -669,6 +675,7 @@ async fn import(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         let approval = match bot["approvalMode"].as_str() {
             Some("bypass") => json!("ask"),
             Some("auto") => json!("auto"),
+            Some("accept_edits") => json!("accept_edits"),
             Some("ask") => json!("ask"),
             _ => Value::Null,
         };
@@ -780,6 +787,8 @@ async fn import(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         keys.sort();
         for key in keys {
             let value = if key == "appearance.style" && matches!(incoming[key].as_str(), Some("legacy" | "pop" | "dot" | "bitbots")) { json!("haze") } else { incoming[key].clone() };
+            // A backup never grants Full access: a default of bypass comes back as ask.
+            let value = if key == "permissions.default_mode" && value == "bypass" { json!("ask") } else { value };
             if !exportable_setting(key, &value) {
                 continue;
             }

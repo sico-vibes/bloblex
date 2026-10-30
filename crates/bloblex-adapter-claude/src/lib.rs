@@ -1331,6 +1331,7 @@ mod tests {
             assert!(matches!(rx.recv().await, Some(AgentEvent::ToolStarted { title, raw, .. }) if title == expected && raw["input"] == input), "{name}");
         }
     }
+    #[test] fn accept_edits_launches_like_ask(){let ask=permission_args(bloblex_agent_core::ApprovalMode::Ask);let accept=permission_args(bloblex_agent_core::ApprovalMode::AcceptEdits);assert_eq!(accept,ask);assert!(!accept.contains(&"bypassPermissions"));assert!(!accept.contains(&"--allow-dangerously-skip-permissions"));assert_eq!(bloblex_agent_core::ApprovalMode::AcceptEdits.as_str(),"accept_edits");}
     #[test] fn permission_modes_have_typed_launch_flags_only_for_bypass(){let bypass=permission_args(bloblex_agent_core::ApprovalMode::Bypass);assert!(bypass.contains(&"bypassPermissions"));assert!(bypass.contains(&"--allow-dangerously-skip-permissions"));assert!(!bypass.contains(&"--permission-prompt-tool"));for mode in [bloblex_agent_core::ApprovalMode::Ask,bloblex_agent_core::ApprovalMode::Auto]{let args=permission_args(mode);assert!(args.contains(&"--permission-mode"));assert!(args.contains(&"default"));assert!(!args.contains(&"bypassPermissions"));assert!(!args.contains(&"--permission-prompt-tool"));}}
     #[test]
     fn control_request_parser_preserves_wire_id_and_input() {

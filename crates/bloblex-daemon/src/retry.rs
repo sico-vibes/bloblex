@@ -259,7 +259,7 @@ pub async fn after_failed_turn(st: &AppState, session_id: &str, turn_id: Option<
         st.emit("session.changed", row).await;
         return;
     }
-    if settings["experimental.autoRetry"] != true { return; }
+    if !crate::experiments::on(&settings, "autoRetry") { return; }
     if !st.db.watchdog_claim_turn(turn_id).unwrap_or(false) { return; }
     let acknowledged = data["delivery"].as_str() == Some("acknowledged");
     let attempt = data["attempt"].as_u64().unwrap_or(0).saturating_add(1) as u32;
@@ -490,7 +490,7 @@ pub async fn cancel_rpc(st: &AppState, p: &Value) -> Result<Value, DispatchError
 /// Drop retries that missed their window while the daemon was not running.
 pub async fn reconcile_restart(st: &AppState) {
     let settings = st.db.settings().unwrap_or(Value::Null);
-    if settings["experimental.autoRetry"] != true {
+    if !crate::experiments::on(&settings, "autoRetry") {
         // A retry created while the feature was on must not fire after it has
         // been turned off: the off state promises no notices and no events, so
         // drop it silently rather than waking the conversation.

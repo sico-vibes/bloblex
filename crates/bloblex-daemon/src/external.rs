@@ -401,7 +401,7 @@ fn catalog() -> Vec<(Tier, Value)> {
         entry(Chat, "fan_out", "Sends one message to several bots at once, each in its own new conversation, so the answers can be compared. Returns at once with a conversation per bot; use wait_for_turn on each for its reply.", schema(json!({"botIds": {"type": "array", "minItems": 2, "maxItems": 6, "items": {"type": "string"}, "description": "2 to 6 different bots."}, "text": id("The message, up to 100,000 characters."), "projectId": id("The project for every conversation, from list_projects. Without it each bot opens in its usual project."), "worktrees": {"type": "boolean", "description": "Give each conversation its own git worktree (the Operator level only; the default below it is false)."}}), &["botIds", "text"])),
         entry(Chat, "steer", "Sends extra guidance to the turn that is running now, without stopping it.", schema(json!({"sessionId": id("The conversation."), "text": id("The guidance.")}), &["sessionId", "text"])),
         entry(Chat, "stop_turn", "Stops the turn that is running in a conversation.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
-        entry(Operator, "create_bot", "Creates a bot. Use list_runtimes for the runtime and model; the bot works in projectPath. Its permission mode is ask unless you pass auto.", schema(json!({"name": id("The bot's name, up to 60 characters."), "runtimeId": id("From list_runtimes."), "model": id("A model id from list_runtimes."), "effort": id("An effort the model offers."), "projectPath": id("The folder the bot works in."), "role": id("A short role, up to 40 characters."), "approvalMode": {"type": "string", "enum": ["ask", "auto"], "description": "How the bot asks before acting (default ask)."}}), &["name", "runtimeId", "model", "projectPath"])),
+        entry(Operator, "create_bot", "Creates a bot. Use list_runtimes for the runtime and model; the bot works in projectPath. Its permission mode is ask unless you pass auto.", schema(json!({"name": id("The bot's name, up to 60 characters."), "runtimeId": id("From list_runtimes."), "model": id("A model id from list_runtimes."), "effort": id("An effort the model offers."), "projectPath": id("The folder the bot works in."), "role": id("A short role, up to 40 characters."), "approvalMode": {"type": "string", "enum": ["ask", "auto", "accept_edits"], "description": "How the bot asks before acting (default ask). accept_edits allows file edits and reads in the project and asks for everything else."}}), &["name", "runtimeId", "model", "projectPath"])),
         entry(Operator, "update_bot", "Changes a bot's settings. Pass only what changes. Use list_runtimes for runtimes, models and efforts. A locked bot can't be changed.", schema(json!({
             "botId": id("The bot, from list_bots."),
             "name": {"type": "string", "maxLength": 60, "description": "The bot's name."},
@@ -413,7 +413,7 @@ fn catalog() -> Vec<(Tier, Value)> {
             "model": id("A model id from list_runtimes."),
             "effort": id("An effort the model offers."),
             "serviceTier": {"type": ["string", "null"], "description": "A speed tier the model offers, or null for the default."},
-            "approvalMode": {"type": "string", "enum": ["ask", "auto"], "description": "How the bot asks before acting."},
+            "approvalMode": {"type": "string", "enum": ["ask", "auto", "accept_edits"], "description": "How the bot asks before acting. accept_edits allows file edits and reads in the project and asks for everything else."},
             "projectPath": {"type": ["string", "null"], "description": "The folder the bot works in, or null for no default project."},
             "tags": {"type": "array", "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 24}, "description": "Routing tags; they replace the current set."},
             "hidden": {"type": "boolean", "description": "Hide the bot from the sidebar."},
@@ -429,7 +429,7 @@ fn tool_list(tier: Tier, full_access: bool) -> Vec<Value> {
     catalog().into_iter().filter(|(needs, _)| *needs <= tier).map(|(_, mut tool)| {
         if full_access && matches!(tool["name"].as_str(), Some("create_bot" | "update_bot")) {
             let mode = &mut tool["inputSchema"]["properties"]["approvalMode"];
-            mode["enum"] = json!(["ask", "auto", "bypass"]);
+            mode["enum"] = json!(["ask", "auto", "accept_edits", "bypass"]);
             mode["description"] = json!(format!("{} bypass is Full access: the bot acts without asking.", mode["description"].as_str().unwrap_or("")));
         }
         if tool["name"] == "send_message" && tier == Tier::Operator {
@@ -1004,10 +1004,10 @@ async fn stop_turn(st: &AppState, args: &Value) -> ToolResult {
 /// An approval mode the MCP may set: `bypass` (Full access) only while the owner's switch is on.
 fn check_mode(st: &AppState, mode: &str) -> Result<(), String> {
     match mode {
-        "ask" | "auto" => Ok(()),
+        "ask" | "auto" | "accept_edits" => Ok(()),
         "bypass" if full_access_allowed(st) => Ok(()),
         "bypass" => Err("Full access needs the owner's switch in Bitbots › Settings › Connections.".to_owned()),
-        _ => Err("approvalMode must be ask or auto.".to_owned()),
+        _ => Err("approvalMode must be ask, auto or accept_edits.".to_owned()),
     }
 }
 

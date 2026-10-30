@@ -7,9 +7,9 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ApprovalMode { #[default] Ask, Auto, Bypass }
+pub enum ApprovalMode { #[default] Ask, Auto, AcceptEdits, Bypass }
 impl ApprovalMode {
-    pub fn as_str(self) -> &'static str { match self { Self::Ask => "ask", Self::Auto => "auto", Self::Bypass => "bypass" } }
+    pub fn as_str(self) -> &'static str { match self { Self::Ask => "ask", Self::Auto => "auto", Self::AcceptEdits => "accept_edits", Self::Bypass => "bypass" } }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

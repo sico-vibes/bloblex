@@ -258,6 +258,7 @@ export function renderTierTableMarkdown(): string {
 // | tools[]/turns[]/files[] detail                   | removed by default; `includeToolOutput` restores tool detail   |
 // | tools[].title                                     | replaced with a generic title by default; restored with tool output |
 // | providerSessionId                                | removed                                                        |
+// | overrides (a project's setup script and mode)   | removed                                                        |
 // | worktree (assignments, session links)            | removed                                                        |
 // | workspace.path, workspacePath                    | last two path segments only                                    |
 // | keys matching the SENSITIVE_KEY pattern          | removed                                                        |
@@ -348,6 +349,8 @@ function fieldPolicy(path: readonly string[]): FieldPolicy {
   const key = path[path.length - 1]
   switch (key) {
     case 'providerSessionId':
+      return 'drop'
+    case 'overrides': // a project's setup script and permission mode never leave the host
       return 'drop'
     case 'customEnv':
       return 'customEnv'

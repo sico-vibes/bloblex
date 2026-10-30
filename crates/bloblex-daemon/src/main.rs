@@ -72,6 +72,7 @@ mod commands;
 mod doctor;
 // FIX39 P10: linked git worktrees so parallel code tasks in one repo cannot clash.
 mod worktree;
+mod project_setup;
 mod workspace;
 // FIX45: the actual repository changes of a conversation's project folder.
 mod repository;
@@ -685,6 +686,7 @@ fn quota_failure_code(failure: PollFailure) -> &'static str {
         PollFailure::NoCredentials => "no_credentials",
         PollFailure::Unauthorized => "unauthorized",
         PollFailure::NoSubscription => "no_subscription",
+        PollFailure::ReadOff => "read_off",
     }
 }
 
@@ -749,6 +751,12 @@ async fn poll_provider_quotas(st: &AppState) {
     if let Some(runtime) = runtimes.into_iter().find(|runtime| runtime["provider"] == "codex" && runtime["status"] == "online") {
         poll_codex_quota(st, runtime, QUOTA_REQUEST_TIMEOUT).await;
     }
+    poll_local_provider_quotas(st).await;
+}
+
+/// Claude's and OpenCode's bars: the two providers whose usage comes from the
+/// coding agent's own stored sign-in. Codex is not one of them.
+async fn poll_local_provider_quotas(st: &AppState) {
     let runtimes = st.runtimes.read().await.clone();
     if let Some(runtime) = runtimes.iter().find(|runtime| runtime["provider"] == "claude") {
         if let Some(runtime_id) = runtime["id"].as_str() {
@@ -758,6 +766,44 @@ async fn poll_provider_quotas(st: &AppState) {
     if let Some(runtime) = runtimes.iter().find(|runtime| runtime["provider"] == "opencode") {
         if let Some(runtime_id) = runtime["id"].as_str() {
             poll_local_quota(st, "opencode", runtime_id, quota_sources::fetch_opencode_go_quota, QUOTA_REQUEST_TIMEOUT).await;
+        }
+    }
+}
+
+/// The owner's switch for reading the coding agents' stored sign-ins
+/// (`usage.readCliSignIns`, off unless it is an explicit `true`).
+fn usage_read_cli_sign_ins(st: &AppState) -> bool {
+    st.db.settings().ok().is_some_and(|settings| settings["usage.readCliSignIns"] == true)
+}
+
+/// The read is off (or was just turned off): report `read_off` where a missing
+/// credential would be reported, and keep no snapshot, so no stale bar shows and
+/// the retry policy sees an unknown reset instead of probing.
+async fn persist_read_off(st: &AppState, provider: &str, runtime_id: &str) {
+    let attempted = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    if let Err(error) = st.db.clear_quota_snapshot(provider, runtime_id, &attempted, quota_failure_code(PollFailure::ReadOff)) {
+        tracing::warn!("{provider} quota snapshot could not be cleared: {error}");
+        return;
+    }
+    emit_quota_snapshot(st).await;
+}
+
+/// A runtime id for a local-sign-in provider, when one is installed.
+async fn local_runtime_id(st: &AppState, provider: &str) -> Option<String> {
+    st.runtimes.read().await.iter().find(|runtime| runtime["provider"] == provider).and_then(|runtime| runtime["id"].as_str().map(str::to_owned))
+}
+
+/// The switch moved: turning it on polls soon after (no restart), turning it off
+/// drops the bars it produced at once.
+async fn apply_usage_read_switch(st: &AppState, on: bool) {
+    if on {
+        let state = st.clone();
+        tokio::spawn(async move { poll_local_provider_quotas(&state).await; });
+        return;
+    }
+    for provider in ["claude", "opencode"] {
+        if let Some(runtime_id) = local_runtime_id(st, provider).await {
+            persist_read_off(st, provider, &runtime_id).await;
         }
     }
 }
@@ -797,6 +843,14 @@ where
     F: FnOnce(String, String) -> Fut,
     Fut: std::future::Future<Output = Result<quota::ProviderQuota, quota_sources::SourceFailure>>,
 {
+    // The one gate every local read passes through: `poll_provider_quotas`,
+    // `quota.refresh`, the retry policy and the switch itself all arrive here, so
+    // with the switch off no path can open a credential file or the credential
+    // database. `fetch` is never called; nothing is read.
+    if !usage_read_cli_sign_ins(st) {
+        persist_read_off(st, provider, runtime_id).await;
+        return;
+    }
     let runtime_id = runtime_id.to_owned();
     let normalize_runtime_id = runtime_id.clone();
     let provider_name = provider.to_owned();
@@ -1113,7 +1167,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 st.emit("session.changed", session.clone()).await;
                 return Ok(json!({"session":session,"cancelled":true}));
             }
-            if st.db.settings().unwrap_or(Value::Null)["experimental.undo"] != true { return Err(derr("conflict", "Undo is not enabled.", StatusCode::CONFLICT)); }
+            if !experiments::on(&st.db.settings().unwrap_or(Value::Null), "undo") { return Err(derr("conflict", "Undo is not enabled.", StatusCode::CONFLICT)); }
             if matches!(row["state"].as_str(), Some("starting" | "working" | "cancelling" | "waiting_permission")) { return Err(derr("conflict", "Cannot delete an active conversation.", StatusCode::CONFLICT)); }
             if let Some(pending) = st.db.pending_session_delete(id).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))? { return Ok(pending); }
             let deadline = Utc::now().timestamp_millis() + 8000;
@@ -1462,7 +1516,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 return Err(derr("invalid_argument", "use external.enable", StatusCode::BAD_REQUEST));
             }
             let value = validate_setting(k, &p["value"])?;
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="task.concurrency.max"||k=="task.globalPaused"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce";
+            if k == "permissions.default_mode" && value == "bypass" && p["confirm"] != true { return Err(derr("invalid_argument", "Confirm making Full access the default first.", StatusCode::BAD_REQUEST)); }
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="task.concurrency.max"||k=="task.globalPaused"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce"||k=="usage.readCliSignIns"||k=="composer.sendShortcut"||k=="shortcuts.bindings";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1471,6 +1526,11 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 )
             })?;
             st.broadcast_persisted(events);
+            // The usage-bar switch takes effect at once: on polls soon after, off
+            // clears what it produced (no restart).
+            if k == "usage.readCliSignIns" {
+                apply_usage_read_switch(st, value.as_bool().unwrap_or(false)).await;
+            }
             Ok(json!({"saved":true}))
         }
         "pricing.list" | "pricing.override" | "subscription.list" | "subscription.save" => Err(derr("unsupported", "monetary valuation and subscription controls have been retired; historical records are preserved", StatusCode::NOT_FOUND)),
@@ -1532,12 +1592,15 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
     }
     if k == "retry.maxWaitSecs" && value.as_u64().is_none_or(|secs| secs > 86_400) { return Err(derr("invalid_argument", "retry.maxWaitSecs requires an integer between 0 and 86400", StatusCode::BAD_REQUEST)); }
     if k == "claude.enableWorkflows" && !value.is_boolean() { return Err(derr("invalid_argument", "claude.enableWorkflows requires a JSON boolean", StatusCode::BAD_REQUEST)); }
-    if k == "permissions.default_mode" && !value.as_str().is_some_and(|v| ["ask", "auto"].contains(&v)) { return Err(derr("invalid_argument", "permissions.default_mode must be ask or auto", StatusCode::BAD_REQUEST)); }
+    if k == "permissions.default_mode" && !value.as_str().is_some_and(|v| ["ask", "auto", "accept_edits", "bypass"].contains(&v)) { return Err(derr("invalid_argument", "permissions.default_mode must be ask, auto, accept_edits or bypass", StatusCode::BAD_REQUEST)); }
     if k == "automations.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "automations.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "delegation.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "delegation.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "companion.focusMode" && !value.is_boolean() { return Err(derr("invalid_argument", "companion.focusMode requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "companion.positions" && !valid_companion_positions(value) { return Err(derr("invalid_argument", "companion.positions must map at most 8 display names to {x,y} numbers", StatusCode::BAD_REQUEST)); }
     if k == "questions.expirySecs" && !value.as_i64().is_some_and(|secs| (1_800..=604_800).contains(&secs)) { return Err(derr("invalid_argument", "questions.expirySecs requires an integer between 1800 and 604800", StatusCode::BAD_REQUEST)); }
+    if k == "usage.readCliSignIns" && !value.is_boolean() { return Err(derr("invalid_argument", "usage.readCliSignIns requires a JSON boolean", StatusCode::BAD_REQUEST)); }
+    if k == "composer.sendShortcut" && !valid_send_shortcut(value) { return Err(derr("invalid_argument", "composer.sendShortcut must be enter, ctrl+enter or shift+enter", StatusCode::BAD_REQUEST)); }
+    if k == "shortcuts.bindings" && !valid_shortcut_bindings(value) { return Err(derr("invalid_argument", "shortcuts.bindings must map at most 40 action ids to a printable ASCII shortcut of up to 40 characters, or null", StatusCode::BAD_REQUEST)); }
     if k == "automations.maxConcurrent" && !value.as_u64().is_some_and(|count| (1..=3).contains(&count)) { return Err(derr("invalid_argument", "automations.maxConcurrent requires an integer between 1 and 3", StatusCode::BAD_REQUEST)); }
     if k == "task.concurrency.max" && !value.as_u64().is_some_and(|count| (1..=3).contains(&count)) { return Err(derr("invalid_argument", "task.concurrency.max requires an integer between 1 and 3", StatusCode::BAD_REQUEST)); }
     if k == "task.globalPaused" && !value.is_boolean() { return Err(derr("invalid_argument", "task.globalPaused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
@@ -1553,6 +1616,24 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
 /// A `#rrggbb` colour, as accepted for `appearance.accent`.
 fn is_accent_hex(value: &str) -> bool {
     value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// `composer.sendShortcut`: the three accepted choices for what sends a prompt.
+fn valid_send_shortcut(value: &Value) -> bool {
+    value.as_str().is_some_and(|choice| ["enter", "ctrl+enter", "shift+enter"].contains(&choice))
+}
+
+/// `shortcuts.bindings`: at most 40 action ids (1 to 60 of `[a-zA-Z0-9.-]`), each
+/// mapped to a shortcut of up to 40 printable ASCII characters or `null` for
+/// "no shortcut". Anything else is refused rather than guessed at.
+fn valid_shortcut_bindings(value: &Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    if object.len() > 40 { return false; }
+    object.iter().all(|(action, shortcut)| {
+        (1..=60).contains(&action.len())
+            && action.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-')
+            && (shortcut.is_null() || shortcut.as_str().is_some_and(|text| text.len() <= 40 && text.bytes().all(|byte| (0x20..=0x7e).contains(&byte))))
+    })
 }
 
 /// `companion.positions`: at most 8 display-name keys, each `{ x: number, y: number }`.
@@ -1631,12 +1712,15 @@ pub(crate) fn global_concurrency_limit(st: &AppState) -> i64 {
 }
 fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,DispatchError>{
     let default=st.db.default_approval_mode().map_err(agent_error)?;
+    // Phase 1: the conversation's project may set a permission mode. Order: conversation pin
+    // (below), the project's mode, the bot's mode, the default.
+    let project_mode=session["projectId"].as_str().and_then(|id|st.db.project_get(id).ok()).and_then(|project|project["overrides"]["approvalMode"].as_str().map(str::to_owned));
     let mut options = if let Some(agent_id)=session["agentId"].as_str() {
         let a=st.db.agent_get(agent_id).map_err(agent_error)?;
         let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
-        let mode=a["approvalMode"].as_str().unwrap_or(&default);
+        let mode=project_mode.as_deref().or(a["approvalMode"].as_str()).unwrap_or(&default);
         ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),enable_workflows:session["provider"]=="claude"&&st.db.settings().map(|settings|claude_workflows_enabled(&settings)).unwrap_or(true),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
-    } else { ExecOptions{approval_mode:parse_mode(&default),max_concurrency:4,..ExecOptions::default()} };
+    } else { ExecOptions{approval_mode:parse_mode(project_mode.as_deref().unwrap_or(&default)),max_concurrency:4,..ExecOptions::default()} };
     if let Some(lock) = session["modelLock"].as_object() {
         // Presence of the lock object is significant: explicit null means the
         // session intentionally uses its provider default and must not follow
@@ -1727,12 +1811,21 @@ async fn resolve_session_model_lock(
     options.thinking = lock["thinking"].as_str().map(str::to_owned);
     (options, lock)
 }
+/// Phase 1: the catalog entry of the model a project names for `provider`, or `None` when the
+/// project has none or the provider's cached catalog does not offer it (never an error).
+async fn project_model_override(st: &AppState, runtime: &Value, provider: &str, project_id: Option<&str>) -> Option<Value> {
+    let project = st.db.project_get(project_id?).ok()?;
+    let wanted = project["overrides"]["models"][provider].as_str().filter(|id| !id.is_empty())?.to_owned();
+    let served = catalog::get(st, runtime, None, None, catalog::Mode::CachedOnly).await.ok().flatten()?;
+    if served.value["validated"] != true || served.value["fallback"] == true { return None; }
+    served.value["models"].as_array()?.iter().find(|model| model["id"].as_str() == Some(wanted.as_str())).cloned()
+}
 /// Bitbots' own MCP tools (list_blobs, list_conversations, message_blob) are app-owned and safe.
 fn is_team_tool_permission(raw: &Value) -> bool {
     let text = raw.to_string();
     ["mcp__bloblex__", "bloblex_list_blobs", "bloblex_message_blob", "bloblex__list_blobs", "bloblex__message_blob", "bloblex_list_conversations", "bloblex__list_conversations", "bloblex_memory_", "bloblex__memory_", "bloblex_list_skills", "bloblex__list_skills", "bloblex_load_skill", "bloblex__load_skill", "bloblex_read_skill_file", "bloblex__read_skill_file", "bloblex_list_projects", "bloblex__list_projects", "bloblex_update_blob", "bloblex__update_blob"].iter().any(|needle| text.contains(needle))
 }
-fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
+fn parse_mode(s:&str)->ApprovalMode{match s{"auto"=>ApprovalMode::Auto,"accept_edits"=>ApprovalMode::AcceptEdits,"bypass"=>ApprovalMode::Bypass,_=>ApprovalMode::Ask}}
 fn provider_mode(provider:&str)->&'static str{match provider{"claude"=>"bypassPermissions","codex"=>"never",_=>"daemon_allow_all"}}
 fn normalized_permission(provider:&str,raw:&Value)->(String,Value){
     let name=raw["request"]["tool_name"].as_str().or_else(||raw["params"]["toolCall"]["kind"].as_str()).or_else(||raw["toolCall"]["kind"].as_str()).unwrap_or("");
@@ -2285,9 +2378,28 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
     // exec_options_for_session intentionally accepts a session shaped value.
     // Keep the agent id in that contract rather than passing agent_get's
     // differently shaped `{ id, ... }` response.
-    let options_session=json!({"agentId":agent_id,"provider":provider});
+    // The conversation's project is worked out first: its overrides (mode, model) apply from the start.
+    let explicit_none = matches!(p.get("projectId"), Some(Value::Null));
+    let folder_project = st.db.project_id_for_path(&project.to_string_lossy()).ok().flatten();
+    let project_id = explicit_project.as_ref().and_then(|chosen| chosen["id"].as_str().map(str::to_owned))
+        .or(folder_project.clone())
+        .or_else(|| if explicit_none { None } else { agent_id.as_deref().and_then(|id| st.db.agent_get(id).ok()).and_then(|agent| agent["projectId"].as_str().map(str::to_owned)) });
+    let options_session=json!({"agentId":agent_id,"provider":provider,"projectId":project_id});
     let base_options=exec_options_for_session(st,&options_session)?;
     let (mut exec_options,mut model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
+    // Phase 1: the project's model for this bot's provider, when that provider's catalog offers it.
+    // An explicit `model` in the call wins, and unattended work keeps the bot's own model.
+    if agent_id.is_some() && !is_unattended(&p["link"]) && p.get("model").is_none_or(Value::is_null) {
+        if let Some(offered) = project_model_override(st, &runtime, &provider, project_id.as_deref()).await {
+            let model = offered["id"].as_str().unwrap_or("").to_owned();
+            let supported = offered["supportedThinking"].as_array().cloned().unwrap_or_default();
+            let kept = exec_options.thinking.clone().filter(|effort| supported.iter().any(|item| item.as_str() == Some(effort.as_str())));
+            exec_options.thinking = kept.or_else(|| offered["defaultThinking"].as_str().map(str::to_owned));
+            exec_options.model = Some(model.clone());
+            model_lock["model"] = json!(model);
+            model_lock["thinking"] = json!(exec_options.thinking);
+        }
+    }
     // Automation sessions must never inherit bypass/ask from the blob or a
     // global default. Pin the clamped mode into the lock and the launch options.
     if is_unattended(&p["link"]) {
@@ -2305,11 +2417,6 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
     // never used. If the folder given is itself a registered project, the
     // conversation is in that project anyway (the read side infers it from the
     // folder), so the instructions use it, but nothing is stamped.
-    let explicit_none = matches!(p.get("projectId"), Some(Value::Null));
-    let folder_project = st.db.project_id_for_path(&project.to_string_lossy()).ok().flatten();
-    let project_id = explicit_project.as_ref().and_then(|chosen| chosen["id"].as_str().map(str::to_owned))
-        .or(folder_project.clone())
-        .or_else(|| if explicit_none { None } else { agent_id.as_deref().and_then(|id| st.db.agent_get(id).ok()).and_then(|agent| agent["projectId"].as_str().map(str::to_owned)) });
     team::attach(st, &id, agent_id.as_deref(), &p["link"], Some(project.as_path()), project_id.as_deref(), &mut exec_options);
     if let Some((setting, error)) = preflight_exec_options(st,&runtime,&provider,&exec_options).await {
         st.emit("exec.options.rejected", json!({"sessionId":id,"agentId":agent_id,"runtimeId":runtime_id,"setting":setting,"code":error.1.code,"reason":error.1.message})).await;
@@ -2335,6 +2442,8 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
     // Stamp the conversation's project. A null stamp is left absent and inferred later.
     // Explicit null stamps nothing (a null stamp reads back as no project).
     st.db.merge_session_data(&id, &json!({"projectId": if explicit_none { None } else { project_id.clone() }})).map_err(agent_error)?;
+    // Phase 1: a conversation with its own worktree in a project with a setup script runs it once, before its first turn.
+    if project_setup::wanted(st, project_id.as_deref(), &p["link"], &project) { st.db.merge_session_data(&id, &json!({"setupPending": true})).map_err(agent_error)?; }
     // A lazy conversation stops here: no provider is spawned. The first prompt
     // starts it, and activation takes the fresh-context branch silently.
     if p["lazy"] == true {
@@ -3095,8 +3204,8 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     let approval_mode = match p.get("approvalMode") {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "bypass") => Some(Some(value.clone())),
-        _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, bypass or null", StatusCode::BAD_REQUEST)),
+        Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "accept_edits" | "bypass") => Some(Some(value.clone())),
+        _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, accept_edits, bypass or null", StatusCode::BAD_REQUEST)),
     };
     let facts = session_model_facts(st, &row, sid, model.as_deref()).await?;
     if facts.turn_active {
@@ -3173,7 +3282,7 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
             Some(Some(mode)) => { options.approval_mode = parse_mode(&mode); lock["approvalMode"] = json!(mode); }
             Some(None) => {
                 if let Some(map) = lock.as_object_mut() { map.remove("approvalMode"); }
-                options.approval_mode = exec_options_for_session(st, &json!({"agentId": row["agentId"]}))?.approval_mode;
+                options.approval_mode = exec_options_for_session(st, &json!({"agentId": row["agentId"], "projectId": row["projectId"]}))?.approval_mode;
             }
             None => {}
         }
@@ -3258,8 +3367,8 @@ async fn set_session_permissions(st: &AppState, p: Value) -> Result<Value, Dispa
     let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     let approval = match p.get("approvalMode") {
         Some(Value::Null) => None,
-        Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "bypass") => Some(value.clone()),
-        _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, bypass or null", StatusCode::BAD_REQUEST)),
+        Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "accept_edits" | "bypass") => Some(value.clone()),
+        _ => return Err(derr("invalid_argument", "approvalMode must be ask, auto, accept_edits, bypass or null", StatusCode::BAD_REQUEST)),
     };
     // An automation session's permission mode is fixed by the schedule.
     if is_unattended(&row["link"]) {
@@ -3560,7 +3669,7 @@ struct TurnDriver {
 fn auto_titles_enabled(settings: &Value) -> bool {
     match settings.get("conversations.autoTitle").and_then(Value::as_bool) {
         Some(value) => value,
-        None => settings.get("experimental.autoTitles").and_then(Value::as_bool).unwrap_or(true),
+        None => experiments::on(settings, "autoTitles"),
     }
 }
 
@@ -3870,6 +3979,11 @@ async fn note_prompt_delivered(st: &AppState, sid: &str) {
 async fn run_turn(state: AppState, driver: TurnDriver) {
     let st = &state;
     let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, command_directive, annotation_block, exec_options, provider, desired_instruction_hash } = driver;
+    // 0. The project's setup script, once, in this conversation's own worktree. A failure never stops the turn; the agent is told.
+    let setup_failure = match project_setup::before_first_turn(st, &sid, &turn).await {
+        project_setup::Setup::Cancelled => { finish_turn_cancelled(st, &sid, &turn).await; return; }
+        project_setup::Setup::Proceed(sentence) => sentence.map(|sentence| format!("{sentence}\n\n")).unwrap_or_default(),
+    };
     // 1. Activate the provider (resume a saved session, or start fresh).
     if let Err(error) = activate_session(st, &sid, Owner::Turn(turn.clone())).await {
         finish_activation_failure(st, &sid, &turn, &error).await;
@@ -4008,7 +4122,7 @@ async fn run_turn(state: AppState, driver: TurnDriver) {
         let reply_context = reply_snapshot.as_ref().map(reply_prompt_context).unwrap_or_default();
         let command_context = command_directive.as_deref().unwrap_or("");
         format!(
-            "{annotation_block}{text}{handover}{recap}{manager}{memory}{skills}{reference_context}{reply_context}{command}",
+            "{setup_failure}{annotation_block}{text}{handover}{recap}{manager}{memory}{skills}{reference_context}{reply_context}{command}",
             handover = handover_context.as_deref().unwrap_or(""),
             recap = recap_context.as_deref().unwrap_or(""),
             manager = manager_context.as_deref().unwrap_or(""),
@@ -4633,7 +4747,8 @@ async fn forward_events_with_timeouts(
             } => {
                 let id = Uuid::new_v4().to_string();
                 let session=st.db.session_detail(&sid).unwrap_or(Value::Null);
-                let default=st.db.default_approval_mode().unwrap_or_else(|_|"ask".into());
+                // A default of bypass is never the fallback when the options cannot be read.
+                let default=st.db.default_approval_mode().ok().filter(|mode|mode!="bypass").unwrap_or_else(||"ask".into());
                 let (mode,plan_mode)=exec_options_for_session(&st,&session).map(|options|(options.approval_mode.as_str().to_owned(),options.plan_mode)).unwrap_or((default,false));
                 let turn_id=turn.clone();
                 let (kind,normalized)=normalized_permission(&provider,&raw);
@@ -4678,6 +4793,9 @@ async fn forward_events_with_timeouts(
                 else if mode=="bypass" { (base_summary,Some(("policy:bypass".to_owned(),"BYPASS".to_owned()))) }
                 else if mode=="auto" || is_automation {
                     let decision=(mode=="auto"&&classified.allowed).then(||("policy:auto".to_owned(),classified.category.to_owned()));(classified.summary,decision)
+                } else if mode=="accept_edits" {
+                    // Only a file edit or read the classifier places inside the project; every command asks.
+                    if classified.allowed&&matches!(classified.category,"EDIT"|"READ") { let category=classified.category.to_owned();(classified.summary,Some(("policy:accept_edits".to_owned(),category))) } else {(base_summary,None)}
                 } else {(base_summary,None)};
                 let auto_approved = decision.is_some();
                 if inserted.is_ok() && session["state"]=="working" && st.active_turns.lock().await.contains_key(&sid) {
@@ -5968,6 +6086,8 @@ mod phase2a_tests {
         let (st, _) = state();
         st.db.create_session("undo-session", "rt-test", "codex", ".", "Saved").unwrap();
         st.db.update_session_state("undo-session", "idle").unwrap();
+        // Undo is on by default since 30 October 2026; this test pins both states.
+        st.db.set_setting("experimental.undo", &json!(false)).unwrap();
         assert_eq!(dispatch(&st, "session.delete.schedule", json!({"sessionId":"undo-session"})).await.unwrap_err().1.code, "conflict");
         st.db.set_setting("experimental.undo", &json!(true)).unwrap();
         let scheduled = dispatch(&st, "session.delete.schedule", json!({"sessionId":"undo-session"})).await.unwrap();
@@ -6308,6 +6428,249 @@ mod phase2a_tests {
         assert!(dispatch(&st, "file.revert", json!({"sessionId":"revert-rpc","fileChangeId":id})).await.unwrap_err().1.message.contains("already reverted"));
         assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "new\n");
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    // ── Phase 1, Lane B (30 October 2026) ───────────────────────────────────
+    // The usage-bar sign-in read, the useful experiments, shortcut settings and
+    // the settings shims.
+
+    /// A quota snapshot as a fetch returns it, so a test can prove which path ran
+    /// without a network request or a real credential file.
+    fn fetched_quota(provider: &str, runtime_id: &str, fetched_at: &str) -> quota::ProviderQuota {
+        quota::ProviderQuota {
+            provider: provider.into(),
+            runtime_id: runtime_id.into(),
+            fetched_at: fetched_at.into(),
+            ordinary_usage_allowed: None,
+            limits: vec![quota::QuotaLimit {
+                label: "5-hour".into(),
+                primary: Some(quota::QuotaWindow { used_percent: 12, remaining_percent: 88, resets_at: None, window_duration_mins: Some(300) }),
+                secondary: None,
+            }],
+        }
+    }
+
+    fn stored_quota(st: &AppState, provider: &str) -> Value {
+        st.db.quota_snapshots().unwrap().into_iter().find(|row| row["provider"] == provider).unwrap_or(Value::Null)
+    }
+
+    /// The local runtimes the sign-in read would look at.
+    async fn local_runtimes(st: &AppState) {
+        *st.runtimes.write().await = vec![
+            json!({"id":"rt-claude","provider":"claude","status":"online"}),
+            json!({"id":"rt-open","provider":"opencode","status":"online"}),
+        ];
+    }
+
+    #[tokio::test]
+    async fn sign_in_read_is_off_by_default_and_reads_nothing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (st, _) = state();
+        assert!(st.db.settings().unwrap().get("usage.readCliSignIns").is_none(), "a fresh install has not allowed the sign-in read");
+        let reads = Arc::new(AtomicUsize::new(0));
+        let seen = reads.clone();
+        poll_local_quota(&st, "claude", "rt-claude", move |runtime_id: String, fetched_at: String| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            async move { Ok::<_, quota_sources::SourceFailure>(fetched_quota("claude", &runtime_id, &fetched_at)) }
+        }, std::time::Duration::from_millis(50)).await;
+        // The fetch is the only code that opens `.credentials.json` or the
+        // credential database, so "it never ran" is the read that must not happen.
+        assert_eq!(reads.load(Ordering::SeqCst), 0, "with the switch off the fetch never runs, so no sign-in is read");
+        let row = stored_quota(&st, "claude");
+        assert_eq!(row["lastError"], "read_off");
+        assert_eq!(row["snapshot"], Value::Null, "no bar is cached while the read is off");
+        assert_eq!(row["fetchedAt"], Value::Null);
+        assert_eq!(dispatch(&st, "quota.list", json!({})).await.unwrap()["quotas"][0]["lastError"], "read_off");
+
+        // The same call with the switch on does run the fetch: without this half a
+        // gate that never polls would pass the check above.
+        dispatch(&st, "settings.set", json!({"key":"usage.readCliSignIns","value":true})).await.unwrap();
+        let seen = reads.clone();
+        poll_local_quota(&st, "claude", "rt-claude", move |runtime_id: String, fetched_at: String| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            async move { Ok::<_, quota_sources::SourceFailure>(fetched_quota("claude", &runtime_id, &fetched_at)) }
+        }, std::time::Duration::from_millis(50)).await;
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "turned on, the read runs again");
+        assert_eq!(stored_quota(&st, "claude")["snapshot"]["limits"][0]["primary"]["usedPercent"], 12);
+    }
+
+    #[tokio::test]
+    async fn turning_the_read_on_polls_and_off_clears() {
+        let (st, mut events) = state();
+        let snapshot = serde_json::to_value(fetched_quota("claude", "rt-claude", "2026-10-30T00:00:00Z")).unwrap();
+        st.db.save_quota_snapshot("claude", "rt-claude", &snapshot, "2026-10-30T00:00:00Z").unwrap();
+        st.db.save_quota_snapshot("opencode", "rt-open", &snapshot, "2026-10-30T00:00:00Z").unwrap();
+        local_runtimes(&st).await;
+
+        // Off: the cached bars are cleared at once, without a restart.
+        dispatch(&st, "settings.set", json!({"key":"usage.readCliSignIns","value":false})).await.unwrap();
+        for provider in ["claude", "opencode"] {
+            let row = stored_quota(&st, provider);
+            assert_eq!(row["snapshot"], Value::Null, "{provider}: turning the switch off drops its cached bar at once");
+            assert_eq!(row["lastError"], "read_off");
+        }
+        let mut announced = false;
+        while let Ok(event) = events.try_recv() {
+            if event.event_type == "quota.updated" && event.payload["quota"]["snapshot"].is_null() { announced = true; }
+        }
+        assert!(announced, "the cleared bar is broadcast, so no stale one stays on screen");
+
+        // On: the switch is read at each poll rather than at startup, so the very
+        // next poll (what the switch schedules) reads again. No local runtime is
+        // installed for the scheduled poll, so nothing here can open a real
+        // sign-in; the injected poll below is the read.
+        *st.runtimes.write().await = Vec::new();
+        dispatch(&st, "settings.set", json!({"key":"usage.readCliSignIns","value":true})).await.unwrap();
+        let read = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = read.clone();
+        poll_local_quota(&st, "claude", "rt-claude", move |runtime_id: String, fetched_at: String| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move { Ok::<_, quota_sources::SourceFailure>(fetched_quota("claude", &runtime_id, &fetched_at)) }
+        }, std::time::Duration::from_millis(50)).await;
+        assert_eq!(read.load(std::sync::atomic::Ordering::SeqCst), 1, "with the switch on the next poll reads");
+        assert_eq!(stored_quota(&st, "claude")["snapshot"]["limits"][0]["primary"]["usedPercent"], 12, "and its bar comes back");
+    }
+
+    #[tokio::test]
+    async fn refresh_provider_quota_respects_the_switch() {
+        let (st, _) = state();
+        local_runtimes(&st).await;
+        let snapshot = serde_json::to_value(fetched_quota("claude", "rt-claude", "2026-10-30T00:00:00Z")).unwrap();
+        st.db.save_quota_snapshot("claude", "rt-claude", &snapshot, "2026-10-30T00:00:00Z").unwrap();
+        // The retry policy's bounded refresh reaches the same gate.
+        refresh_provider_quota(&st, "claude", std::time::Duration::from_millis(200)).await;
+        refresh_provider_quota(&st, "opencode", std::time::Duration::from_millis(200)).await;
+        let claude = stored_quota(&st, "claude");
+        assert_eq!(claude["lastError"], "read_off", "the refresh reports the switch, not a missing credential");
+        assert_eq!(claude["snapshot"], Value::Null, "the refresh clears the bar it cannot replace");
+        assert_eq!(stored_quota(&st, "opencode")["lastError"], "read_off");
+        // Codex is not a sign-in read, so the switch does not silence it.
+        refresh_provider_quota(&st, "codex", std::time::Duration::from_millis(200)).await;
+        assert_eq!(stored_quota(&st, "codex"), Value::Null, "no Codex runtime is online here, so nothing ran");
+    }
+
+    #[tokio::test]
+    async fn backup_never_carries_the_sign_in_read() {
+        let (source, _) = state();
+        dispatch(&source, "settings.set", json!({"key":"usage.readCliSignIns","value":true})).await.unwrap();
+        dispatch(&source, "settings.set", json!({"key":"composer.sendShortcut","value":"ctrl+enter"})).await.unwrap();
+        dispatch(&source, "settings.set", json!({"key":"shortcuts.bindings","value":{"app.commandPalette":"Ctrl+K","app.search":null}})).await.unwrap();
+        let settings = dispatch(&source, "backup.export", json!({})).await.unwrap()["document"]["contents"]["settings"].clone();
+        assert!(settings.get("usage.readCliSignIns").is_none(), "consent to read a sign-in never travels");
+        assert_eq!(settings["composer.sendShortcut"], "ctrl+enter", "shortcuts travel like other appearance settings");
+        assert_eq!(settings["shortcuts.bindings"], json!({"app.commandPalette":"Ctrl+K","app.search":null}));
+
+        // A backup cannot grant it either: the key is outside the allowlist.
+        let (target, _) = state();
+        let document = backup_document(json!({"bots": [], "memory": [], "skills": [], "automations": [], "settings": {"usage.readCliSignIns": true}}));
+        let preview = preview_of(&target, document).await;
+        assert!(preview["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap_or("").contains("outside the backup allowlist")));
+        import_of(&target, &preview, json!({"default":"rename"})).await.unwrap();
+        assert!(target.db.settings().unwrap().get("usage.readCliSignIns").is_none(), "a restored backup never turns the sign-in read on");
+    }
+
+    #[test]
+    fn a_fresh_install_has_the_useful_experiments_on() {
+        let empty = json!({});
+        for name in ["memory", "autoTitles", "autoRetry", "undo"] {
+            assert!(experiments::on(&empty, name), "{name} is on when its switch was never touched");
+        }
+        assert!(experiments::on(&json!({"experimental.memory": null}), "memory"), "a null value is not an off switch");
+        let (st, _) = state();
+        assert!(memory::enabled(&st), "memory tools are on for a fresh install");
+        assert!(auto_titles_enabled(&st.db.settings().unwrap()), "auto titles are on for a fresh install");
+        assert!(experiments::on(&st.db.settings().unwrap(), "autoRetry"), "automatic retry is on for a fresh install");
+        assert!(experiments::on(&st.db.settings().unwrap(), "undo"), "Undo is on for a fresh install");
+    }
+
+    #[tokio::test]
+    async fn a_switch_turned_off_stays_off() {
+        let (st, _) = state();
+        for name in ["memory", "autoTitles", "autoRetry", "undo"] {
+            dispatch(&st, "settings.set", json!({"key":format!("experimental.{name}"),"value":false})).await.unwrap();
+            assert!(!experiments::on(&st.db.settings().unwrap(), name), "{name} stays off");
+        }
+        assert!(!memory::enabled(&st));
+        assert!(!auto_titles_enabled(&st.db.settings().unwrap()));
+        st.db.create_session("undo-off", "rt-test", "codex", ".", "Undo off").unwrap();
+        st.db.update_session_state("undo-off", "idle").unwrap();
+        assert_eq!(dispatch(&st, "session.delete.schedule", json!({"sessionId":"undo-off"})).await.unwrap_err().1.code, "conflict", "Undo off is the plain refusal");
+        // A boolean is still the only accepted value.
+        assert_eq!(dispatch(&st, "settings.set", json!({"key":"experimental.memory","value":"false"})).await.unwrap_err().1.code, "invalid_argument");
+    }
+
+    #[tokio::test]
+    async fn memory_tools_follow_the_new_default() {
+        let (st, _) = state();
+        let agent = memory_agent(&st, "Default memory blob");
+        let sid = "memory-default-session";
+        memory_session(&st, &agent, sid);
+        assert!(tool_names(&team::mcp_rpc(&st, sid, "mcp.tools.list", &json!({})).await.unwrap()).contains(&"memory_write".to_owned()), "memory tools are offered without touching the switch");
+        st.db.set_setting("experimental.memory", &json!(false)).unwrap();
+        assert!(!tool_names(&team::mcp_rpc(&st, sid, "mcp.tools.list", &json!({})).await.unwrap()).contains(&"memory_write".to_owned()), "and gone when the owner turns them off");
+        assert_eq!(team::mcp_rpc(&st, sid, "mcp.tools.call", &json!({"name":"memory_search","arguments":{"query":"x"}})).await.unwrap()["isError"], true);
+    }
+
+    /// An overloaded failure with an acknowledged delivery schedules a retry on a
+    /// fresh install, and does not when the owner turned the switch off.
+    #[tokio::test]
+    async fn auto_retry_follows_the_new_default() {
+        let (st, _) = state();
+        st.db.create_session("retry-default","rt-test","codex",".","Retry").unwrap();
+        st.db.update_session_state("retry-default","idle").unwrap();
+        seed_failed_turn(&st, "retry-default", "retry-default-turn", None, None);
+        retry::after_failed_turn(&st, "retry-default", Some("retry-default-turn")).await;
+        assert_eq!(st.db.queue_list("retry-default").unwrap().len(), 1, "a fresh install retries once by itself");
+        assert_eq!(st.db.turn_data("retry-default-turn").unwrap()["retryDecision"]["decision"], "retry");
+
+        st.db.set_setting("experimental.autoRetry", &json!(false)).unwrap();
+        st.db.create_session("retry-off","rt-test","codex",".","Retry").unwrap();
+        st.db.update_session_state("retry-off","idle").unwrap();
+        seed_failed_turn(&st, "retry-off", "retry-off-turn", None, None);
+        retry::after_failed_turn(&st, "retry-off", Some("retry-off-turn")).await;
+        assert!(st.db.queue_list("retry-off").unwrap().is_empty(), "turned off, nothing is scheduled");
+        assert!(st.db.turn_data("retry-off-turn").unwrap()["retryDecision"].is_null(), "the off state records no decision at all");
+        assert!(st.db.session_detail("retry-off").unwrap()["messages"].as_array().unwrap().is_empty(), "and it stays silent");
+    }
+
+    #[tokio::test]
+    async fn send_shortcut_accepts_only_the_three_choices() {
+        let (st, _) = state();
+        for choice in ["enter", "ctrl+enter", "shift+enter"] {
+            dispatch(&st, "settings.set", json!({"key":"composer.sendShortcut","value":choice})).await.unwrap();
+            assert_eq!(st.db.settings().unwrap()["composer.sendShortcut"], choice);
+        }
+        for refused in [json!("return"), json!("Enter"), json!("ctrl+shift+enter"), json!(""), json!(true), json!(1)] {
+            assert_eq!(dispatch(&st, "settings.set", json!({"key":"composer.sendShortcut","value":refused.clone()})).await.unwrap_err().1.code, "invalid_argument", "{refused}");
+        }
+        assert_eq!(st.db.settings().unwrap()["composer.sendShortcut"], "shift+enter", "a refused value changes nothing");
+        assert!(st.db.settings().unwrap().get("composer.sendShortcut").is_some());
+    }
+
+    #[tokio::test]
+    async fn shortcut_bindings_are_bounded_and_validated() {
+        let (st, _) = state();
+        dispatch(&st, "settings.set", json!({"key":"shortcuts.bindings","value":{"app.commandPalette":"Ctrl+K","app.newChat":null,"a.b-c":""}})).await.unwrap();
+        assert_eq!(st.db.settings().unwrap()["shortcuts.bindings"], json!({"app.commandPalette":"Ctrl+K","app.newChat":null,"a.b-c":""}));
+        let forty = (0..40).map(|index| (format!("action.{index}"), json!("Ctrl+Alt+K"))).collect::<serde_json::Map<_, _>>();
+        dispatch(&st, "settings.set", json!({"key":"shortcuts.bindings","value":Value::Object(forty.clone())})).await.unwrap();
+        let mut too_many = forty.clone();
+        too_many.insert("action.40".into(), json!("Ctrl+K"));
+        for refused in [
+            Value::Object(too_many),
+            json!({"has space":"Ctrl+K"}),
+            json!({"has/slash":"Ctrl+K"}),
+            json!({"": "Ctrl+K"}),
+            json!({format!("a{}", "x".repeat(60)):"Ctrl+K"}),
+            json!({"ok":"Ctrl+\u{0007}"}),
+            json!({"ok":"é"}),
+            json!({"ok":format!("Ctrl+{}", "K".repeat(40))}),
+            json!({"ok":7}),
+            json!(["Ctrl+K"]),
+            json!("Ctrl+K"),
+        ] {
+            assert_eq!(dispatch(&st, "settings.set", json!({"key":"shortcuts.bindings","value":refused.clone()})).await.unwrap_err().1.code, "invalid_argument", "{refused}");
+        }
     }
 
     pub(crate) fn state()->(AppState,broadcast::Receiver<EventEnvelope>){ state_with(Storage::open_in_memory().unwrap()) }
@@ -10271,6 +10634,9 @@ mod phase2a_tests {
     #[tokio::test]
     async fn disabled_automatic_retry_stays_silent() {
         let (mut st, mut events) = state();
+        // Automatic retry is on by default since 30 October 2026; this test pins
+        // the off state explicitly.
+        st.db.set_setting("experimental.autoRetry", &json!(false)).unwrap();
         let adapter = Arc::new(QueueAdapter::default());
         install_queue_adapter(&mut st, &adapter);
         let sid = "retry-disabled";
@@ -10280,7 +10646,7 @@ mod phase2a_tests {
         tx.send(AgentEvent::RecoveryHint { kind: bloblex_agent_core::RecoveryHintKind::Overloaded, retry_after_secs: None }).await.unwrap();
         tx.send(AgentEvent::Error { message: "overloaded".into() }).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        assert!(st.db.queue_list(sid).unwrap().is_empty(), "the feature is off by default");
+        assert!(st.db.queue_list(sid).unwrap().is_empty(), "with the switch off nothing is scheduled");
         assert!(!drain_for(&mut events, |event| event.event_type == "turn.retry_scheduled").await);
         assert!(st.db.session_detail(sid).unwrap()["messages"].as_array().unwrap().iter().all(|message| message["meta"]["kind"] != "auto_retry"));
     }
@@ -10431,6 +10797,9 @@ mod phase2a_tests {
     #[tokio::test]
     async fn restart_with_the_feature_off_drops_pending_retries_silently() {
         let (st, _) = state();
+        // Automatic retry is on by default since 30 October 2026; this test pins
+        // the off state explicitly.
+        st.db.set_setting("experimental.autoRetry", &json!(false)).unwrap();
         let sid = "retry-restart-off";
         st.db.create_session(sid, "rt-test", "codex", ".", "Retry").unwrap();
         st.db.update_session_state(sid, "idle").unwrap();
@@ -10767,6 +11136,9 @@ mod phase2a_tests {
         automations::sweep(&st).await;
         assert!(st.db.automation_runs_list(proposed[0]["id"].as_str().unwrap(),10,None).unwrap().is_empty(),"a proposed automation never runs on its own");
         // An automation-linked session gets the read-only skill tools and nothing else.
+        // Memory is on by default since 30 October 2026 (automation runs keep those
+        // tools), so this list is pinned with the memory switch off.
+        st.db.set_setting("experimental.memory", &json!(false)).unwrap();
         st.db.create_session("guard-auto","rt-test","codex",".","Auto").unwrap();
         st.db.set_session_link("guard-auto",&json!({"kind":"automation","automationId":"x","runId":"y","approvalMode":"auto"})).unwrap();
         let auto_tools=tool_names(&team::mcp_rpc(&st,"guard-auto","mcp.tools.list",&json!({})).await.unwrap());
@@ -10916,7 +11288,10 @@ mod phase2a_tests {
         let agent = memory_agent(&st, "Tool blob");
         let sid = "memory-tool-session";
         memory_session(&st, &agent, sid);
-        assert!(!tool_names(&team::mcp_rpc(&st, sid, "mcp.tools.list", &json!({})).await.unwrap()).contains(&"memory_search".to_owned()), "off by default");
+        // Memory is on by default since 30 October 2026; this test pins the off
+        // state explicitly, then turns it on.
+        st.db.set_setting("experimental.memory", &json!(false)).unwrap();
+        assert!(!tool_names(&team::mcp_rpc(&st, sid, "mcp.tools.list", &json!({})).await.unwrap()).contains(&"memory_search".to_owned()), "not offered while the switch is off");
         assert_eq!(team::mcp_rpc(&st, sid, "mcp.tools.call", &json!({"name":"memory_search","arguments":{"query":"x"}})).await.unwrap()["isError"], true);
         st.db.set_setting("experimental.memory", &json!(true)).unwrap();
         assert!(tool_names(&team::mcp_rpc(&st, sid, "mcp.tools.list", &json!({})).await.unwrap()).contains(&"memory_write".to_owned()));
@@ -10984,6 +11359,9 @@ mod phase2a_tests {
         let opened = dispatch(&st, "agent.conversation", json!({"agentId":agent_id})).await.unwrap();
         let sid = opened["session"]["id"].as_str().unwrap().to_owned();
         let instructions_before = team::runtime_instructions(&st, &st.db.agent_get(&agent_id).unwrap(), &json!({"kind":"main"}), std::path::Path::new("."));
+        // Memory is on by default since 30 October 2026; this test pins the off
+        // state explicitly, then turns it on.
+        st.db.set_setting("experimental.memory", &json!(false)).unwrap();
         dispatch(&st, "session.prompt", json!({"sessionId":sid,"text":"first"})).await.unwrap();
         wait_for_messages(&st, &sid, |messages| messages.iter().any(|message| message["role"] == "assistant")).await;
         assert!(!adapter.prompts.lock().unwrap().iter().any(|text| text.contains("<bloblex_memory>")), "no injection while off");
@@ -12325,6 +12703,9 @@ mod phase2a_tests {
 
     // Phase 1B: fan-out, limit-reset sends, the stash, annotations, scaffolding and the problem report.
     include!("phase1b_tests.rs");
+
+    // Phase 1 (lane A): approval modes and per-project overrides.
+    include!("phase1_tests.rs");
 
     #[tokio::test]
     async fn team_update_project_move_does_not_archive() {

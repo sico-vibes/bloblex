@@ -280,7 +280,7 @@ fn migrate_agent_outfit_ids(c: &mut Connection, path: Option<&Path>, backup_done
             archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            approval_mode TEXT CHECK(approval_mode IS NULL OR approval_mode IN ('ask','auto','bypass')),
+            approval_mode TEXT CHECK(approval_mode IS NULL OR approval_mode IN ('ask','auto','accept_edits','bypass')),
             outfit TEXT NOT NULL DEFAULT 'auto' CHECK(outfit IN ('auto','none','party-hat','beanie','crown','sunglasses','round-glasses','bow','scarf','witch-hat','santa-hat','pumpkin','bunny-ears'))
         );
         INSERT INTO agents_v9 SELECT id,name,name_key,description,instructions,color,runtime_id,model,thinking,service_tier,custom_args,custom_env,max_concurrency,default_project,sort_order,archived,created_at,updated_at,approval_mode,outfit FROM agents;
@@ -306,6 +306,52 @@ fn migrate_agent_outfit_ids(c: &mut Connection, path: Option<&Path>, backup_done
     result?;
     if !schema_v9_valid(c)? { return Err(StorageError::InvalidAgent); }
     Ok(())
+}
+
+const AGENT_MODE_CHECK_OLD: &str = "approval_mode IN ('ask','auto','bypass')";
+const AGENT_MODE_CHECK_NEW: &str = "approval_mode IN ('ask','auto','accept_edits','bypass')";
+
+/// Phase 1: `agents.approval_mode` accepts `accept_edits`. SQLite cannot alter a CHECK, so the
+/// table is rebuilt from its own stored DDL (it has grown columns since version 9, so a fixed
+/// column list would lose them): verified backup first, foreign keys off, one transaction, the
+/// same rows, columns and indexes. Idempotent; it runs on every open and does nothing once the
+/// constraint is current. Not a numbered migration, so the ledger and `user_version` are untouched.
+/// New databases and ones still migrating through version 4 or 9 already get the new CHECK from those
+/// steps; this is for a database that is past them with the old shape (the owner's), and it is the
+/// only place a rebuild costs a backup.
+fn ensure_agent_accept_edits(c: &mut Connection, path: Option<&Path>) -> Result<(), StorageError> {
+    let ddl: Option<String> = c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'", [], |r| r.get(0)).optional()?;
+    let Some(ddl) = ddl else { return Ok(()); };
+    if ddl.contains("'accept_edits'") { return Ok(()); }
+    // A CHECK this code does not recognise is left alone: the app still opens, and only saving
+    // `accept_edits` on a bot fails (a plain constraint error). Nothing here may block opening.
+    if !ddl.contains(AGENT_MODE_CHECK_OLD) { return Ok(()); }
+    let Some(columns_at) = ddl.find('(') else { return Ok(()); };
+    let rebuilt = format!("CREATE TABLE agents_accept_edits {}", ddl[columns_at..].replace(AGENT_MODE_CHECK_OLD, AGENT_MODE_CHECK_NEW));
+    if let Some(database_path) = path {
+        let ledger: i64 = c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+        verified_backup(c, database_path, ledger)?;
+    }
+    c.pragma_update(None, "foreign_keys", "OFF")?;
+    let result = (|| -> Result<(), StorageError> {
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let objects: Vec<String> = {
+            let mut q = tx.prepare("SELECT sql FROM sqlite_master WHERE type IN ('index','trigger') AND tbl_name='agents' AND sql IS NOT NULL ORDER BY name")?;
+            let rows = q.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let before: i64 = tx.query_row("SELECT count(*) FROM agents", [], |r| r.get(0))?;
+        tx.execute_batch("DROP TABLE IF EXISTS agents_accept_edits;")?;
+        tx.execute_batch(&rebuilt)?;
+        tx.execute_batch("INSERT INTO agents_accept_edits SELECT * FROM agents; DROP TABLE agents; ALTER TABLE agents_accept_edits RENAME TO agents;")?;
+        for sql in &objects { tx.execute_batch(sql)?; }
+        let after: i64 = tx.query_row("SELECT count(*) FROM agents", [], |r| r.get(0))?;
+        if before != after || tx.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get::<_, i64>(0))? != 0 { return Err(StorageError::InvalidAgent); }
+        tx.commit()?;
+        Ok(())
+    })();
+    c.pragma_update(None, "foreign_keys", "ON")?;
+    result
 }
 
 fn schema_v10_valid(c: &Connection) -> Result<bool, StorageError> {
@@ -457,6 +503,9 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
     if !has_project_description { c.execute("ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT ''", [])?; }
     let has_project_tags: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='tags')", [], |r| r.get(0))?;
     if !has_project_tags { c.execute("ALTER TABLE projects ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'", [])?; }
+    // Phase 1: per-project overrides (models, approval mode, setup script). Additive; desktop-only.
+    let has_project_overrides: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='overrides_json')", [], |r| r.get(0))?;
+    if !has_project_overrides { c.execute("ALTER TABLE projects ADD COLUMN overrides_json TEXT NOT NULL DEFAULT '{}'", [])?; }
     // At most one built-in Manager, enforced by a partial unique index rather
     // than by convention: a second `system_role='manager'` row cannot exist.
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_manager ON agents(system_role) WHERE system_role='manager'", [])?;
@@ -1710,7 +1759,7 @@ fn migrate_approval_modes(c:&mut Connection,path:Option<&Path>,backup_done:bool)
     if let Some(p)=path{if !backup_done{verified_backup(c,p,3)?}}
     let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let has_agent:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='approval_mode')",[],|r|r.get(0))?;
-    if !has_agent{tx.execute("ALTER TABLE agents ADD COLUMN approval_mode TEXT CHECK(approval_mode IS NULL OR approval_mode IN ('ask','auto','bypass'))",[])?;}
+    if !has_agent{tx.execute("ALTER TABLE agents ADD COLUMN approval_mode TEXT CHECK(approval_mode IS NULL OR approval_mode IN ('ask','auto','accept_edits','bypass'))",[])?;}
     let has_resolved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('permission_requests') WHERE name='resolved_by')",[],|r|r.get(0))?;
     if !has_resolved{tx.execute("ALTER TABLE permission_requests ADD COLUMN resolved_by TEXT",[])?;}
     tx.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('permissions.default_mode','\"ask\"')",[])?;
@@ -1727,7 +1776,7 @@ fn migrate_approval_modes(c:&mut Connection,path:Option<&Path>,backup_done:bool)
 /// `settings.set` and the backup importer, so a restored value is held to
 /// exactly the same rules as one the user typed.
 fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
-    if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if k=="permissions.default_mode" && !v.as_str().is_some_and(|s|["ask","auto","accept_edits","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if k=="notifications.enabled" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if matches!(k,"experimental.autoRetry" | "experimental.resumeAfterUsageLimits") && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="retry.maxWaitSecs" && v.as_u64().is_none_or(|secs| secs > 86_400){return Err(StorageError::InvalidAgent)}
@@ -1753,6 +1802,82 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="companion.positions" && !valid_companion_positions(v){return Err(StorageError::InvalidAgent)}
     if k=="profile.about" && v.as_str().is_none_or(|text| text.trim().chars().count() > 1500){return Err(StorageError::InvalidAgent)}
     if k=="conversations.autoTitle" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="usage.readCliSignIns" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
+    if k=="composer.sendShortcut" && !valid_send_shortcut(v){return Err(StorageError::InvalidAgent)}
+    if k=="shortcuts.bindings" && !valid_shortcut_bindings(v){return Err(StorageError::InvalidAgent)}
+    Ok(())
+}
+
+/// `composer.sendShortcut`: the three accepted choices for what sends a prompt.
+fn valid_send_shortcut(v:&Value)->bool{
+    v.as_str().is_some_and(|choice|["enter","ctrl+enter","shift+enter"].contains(&choice))
+}
+
+/// `shortcuts.bindings`: at most 40 action ids (1 to 60 of `[a-zA-Z0-9.-]`), each
+/// mapped to a shortcut of up to 40 printable ASCII characters or `null` for
+/// "no shortcut". The daemon and the storage validator hold a value to exactly
+/// the same rule.
+fn valid_shortcut_bindings(v:&Value)->bool{
+    let Some(object)=v.as_object() else{return false};
+    if object.len()>40{return false}
+    object.iter().all(|(action,shortcut)|{
+        (1..=60).contains(&action.len())
+            && action.bytes().all(|byte|byte.is_ascii_alphanumeric()||byte==b'.'||byte==b'-')
+            && (shortcut.is_null()||shortcut.as_str().is_some_and(|text|text.len()<=40&&text.bytes().all(|byte|(0x20..=0x7e).contains(&byte))))
+    })
+}
+
+/// One old setting key and the key it moved to, with an optional mapping of its
+/// value (`None` from the map drops the old value rather than moving it).
+struct SettingShim {
+    old: &'static str,
+    new: &'static str,
+    map: Option<fn(&Value) -> Option<Value>>,
+}
+
+/// Setting keys that were renamed, moved once like the retired looks are. It runs
+/// at every `Storage::open` and in backup import, and does nothing when there is
+/// nothing to move.
+///
+/// Searched on 30 October 2026, as the Phase 1 brief asked: `git log -S` over the
+/// candidates, and a scan of every revision of `crates/bloblex-daemon/src/main.rs`
+/// (90 commits), this file (76) and the UI's `settings.set` calls (183). No dotted
+/// setting key has ever disappeared from the daemon or storage sources, so no key
+/// has been renamed and the table is empty. The test-only entries below exercise
+/// the mechanism until a real rename exists.
+const SETTING_SHIMS: &[SettingShim] = &[];
+
+/// Test-only renames so `an_old_setting_moves_to_its_new_key` and its siblings
+/// check the mechanism rather than an empty loop.
+#[cfg(test)]
+const TEST_ONLY_SETTING_SHIMS: &[SettingShim] = &[
+    SettingShim { old: "test.oldKey", new: "test.newKey", map: None },
+    SettingShim { old: "test.oldCount", new: "test.newCount", map: Some(double_test_count) },
+];
+
+#[cfg(test)]
+fn double_test_count(value: &Value) -> Option<Value> {
+    value.as_i64().map(|count| json!(count * 2))
+}
+
+fn setting_shims() -> Vec<&'static SettingShim> {
+    #[allow(unused_mut)]
+    let mut shims = SETTING_SHIMS.iter().collect::<Vec<_>>();
+    #[cfg(test)]
+    shims.extend(TEST_ONLY_SETTING_SHIMS.iter());
+    shims
+}
+
+/// Moves one old setting key: the new key gets the mapped old value only when it
+/// has none (an existing new value wins), and the old key always goes.
+fn move_setting(tx: &Transaction<'_>, shim: &SettingShim) -> Result<(), StorageError> {
+    let Some(old) = tx.query_row("SELECT value FROM settings WHERE key=?1", [shim.old], |r| r.get::<_, String>(0)).optional()?.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) else { return Ok(()) };
+    let moved = match shim.map { Some(map) => map(&old), None => Some(old) };
+    if let Some(value) = moved {
+        let taken: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [shim.new], |r| r.get(0))?;
+        if !taken { tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2)", params![shim.new, value.to_string()])?; }
+    }
+    tx.execute("DELETE FROM settings WHERE key=?1", [shim.old])?;
     Ok(())
 }
 
@@ -1767,7 +1892,7 @@ fn write_setting(tx:&Transaction<'_>,k:&str,v:&Value)->Result<Vec<Value>,Storage
         let enabled=v.as_bool().ok_or(StorageError::InvalidAgent)?;
         let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
         if !same { events.push(push_settings_event(tx,k,enabled)?); }
-    } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("task.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") {
+    } else if k.starts_with("experimental.") || k.starts_with("companion.") || k.starts_with("speech.") || k.starts_with("automations.") || k.starts_with("task.") || k.starts_with("memory.") || k.starts_with("appearance.") || k.starts_with("hints.") || k.starts_with("onboarding.") || k.starts_with("conversations.") || k.starts_with("usage.") || k.starts_with("composer.") || k.starts_with("shortcuts.") {
         // Window-level preferences: the main window and the companion both follow them live.
         let same=previous.as_deref().and_then(|old|serde_json::from_str::<Value>(old).ok()).as_ref()==Some(v);
         if !same {
@@ -2000,10 +2125,24 @@ impl Storage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let path = path.as_ref();
         let conn = Connection::open(path)?;
-        Self::migrate(conn, Some(path))?.normalize_removed_theme()
+        Self::migrate(conn, Some(path))?.normalize_removed_theme()?.apply_setting_shims()
     }
     pub fn open_in_memory() -> Result<Self, StorageError> {
-        Self::migrate(Connection::open_in_memory()?, None)?.normalize_removed_theme()
+        Self::migrate(Connection::open_in_memory()?, None)?.normalize_removed_theme()?.apply_setting_shims()
+    }
+    /// Moves every renamed setting key once, in one transaction, and does nothing
+    /// when there is nothing to move.
+    fn apply_setting_shims(self) -> Result<Self, StorageError> {
+        let shims = setting_shims();
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let present = shims.iter().any(|shim| c.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1)", [shim.old], |r| r.get::<_, bool>(0)).unwrap_or(false));
+        if present {
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for shim in &shims { move_setting(&tx, shim)?; }
+            tx.commit()?;
+        }
+        drop(c);
+        Ok(self)
     }
     fn normalize_removed_theme(self) -> Result<Self, StorageError> {
         { let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -2021,6 +2160,7 @@ impl Storage {
     /// database from an earlier version failed with `no such table: tasks` (FIX43).
     fn migrate(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         let storage = Self::migrate_versions(conn, path)?;
+        { let mut c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_agent_accept_edits(&mut c, path)?; }
         { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; phase1b::ensure_phase1b_schema(&c)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
         Ok(storage)
     }
@@ -2280,6 +2420,18 @@ impl Storage {
         )?;
         Ok(())
     }
+    /// The owner has not allowed the sign-in read, so this provider keeps no
+    /// snapshot: drop any cached bar and record why it is missing, so nothing
+    /// stale shows and the reason is `read_off`.
+    pub fn clear_quota_snapshot(&self, provider: &str, runtime_id: &str, attempted_at: &str, error_code: &str) -> Result<(), StorageError> {
+        if error_code != "read_off" { return Err(StorageError::InvalidAnalytics); }
+        let conn = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        conn.execute(
+            "INSERT INTO quota_snapshots(provider,runtime_id,snapshot_json,fetched_at,last_attempt_at,failure_count,retry_after,last_error) VALUES(?1,?2,NULL,NULL,?3,0,NULL,?4) ON CONFLICT(provider) DO UPDATE SET runtime_id=excluded.runtime_id,snapshot_json=NULL,fetched_at=NULL,last_attempt_at=excluded.last_attempt_at,failure_count=0,retry_after=NULL,last_error=excluded.last_error",
+            params![provider, runtime_id, attempted_at, error_code],
+        )?;
+        Ok(())
+    }
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         {
@@ -2311,7 +2463,15 @@ impl Storage {
         tx.commit()?;
         Ok((project, vec![event]))
     }
+    /// Every project field except the overrides: those carry code (the setup script) and can widen
+    /// what a bot may do, so only `project_update_with_overrides` writes them and it refuses them here.
     pub fn project_update(&self, id: &str, input: &Value) -> Result<(Value, Vec<Value>), StorageError> {
+        if input.get("overrides").is_some() { return Err(StorageError::InvalidAgent); }
+        self.project_update_with_overrides(id, input, None)
+    }
+    /// `overrides`, when given, replaces the whole object after validation (see `validate_project_overrides`).
+    pub fn project_update_with_overrides(&self, id: &str, input: &Value, overrides: Option<&Value>) -> Result<(Value, Vec<Value>), StorageError> {
+        let overrides = overrides.map(validate_project_overrides).transpose()?;
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [id], |r| r.get(0))?;
@@ -2338,6 +2498,9 @@ impl Storage {
         }
         if let Some(order) = input.get("sortOrder") {
             tx.execute("UPDATE projects SET sort_order=?2 WHERE id=?1", params![id, order.as_i64().ok_or(StorageError::InvalidAgent)?])?;
+        }
+        if let Some(overrides) = &overrides {
+            tx.execute("UPDATE projects SET overrides_json=?2,updated_at=?3 WHERE id=?1", params![id, overrides.to_string(), now])?;
         }
         let project = project_rows(&tx)?.into_iter().find(|project| project["id"] == id).ok_or(StorageError::AgentNotFound)?;
         let event = push_team_event(&tx, "project.changed", &json!({"action":"updated","project":project}))?;
@@ -3399,8 +3562,8 @@ impl Storage {
     pub fn sessions(&self) -> Result<Vec<Value>, StorageError> { self.session_list(false) }
     pub fn session_list(&self, include_archived: bool) -> Result<Vec<Value>, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until,COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')) FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
-        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?,"projectId":r.get::<_,Option<String>>(16)?,"projectName":r.get::<_,Option<String>>(17)?,"fanoutId":r.get::<_,Option<String>>(18)?})))?;
+        let mut s=c.prepare("SELECT id,runtime_id,provider,provider_session_id,project_path,COALESCE(title_override,title),state,resumable,created_at,updated_at,agent_id,archived,model_lock_json,json_extract(data,'$.link'),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),limited_until,COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),(SELECT CASE WHEN json_valid(q.overrides_json) THEN json_extract(q.overrides_json,'$.approvalMode') END FROM projects q WHERE q.id=COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path))) FROM sessions WHERE (?1 OR archived=0) ORDER BY updated_at DESC")?;
+        let iter=s.query_map([include_archived],|r|Ok(json!({"id":r.get::<_,String>(0)?,"runtimeId":r.get::<_,String>(1)?,"provider":r.get::<_,String>(2)?,"providerSessionId":r.get::<_,Option<String>>(3)?,"projectPath":r.get::<_,String>(4)?,"title":r.get::<_,String>(5)?,"state":r.get::<_,String>(6)?,"resumable":r.get::<_,bool>(7)?,"createdAt":r.get::<_,String>(8)?,"updatedAt":r.get::<_,String>(9)?,"agentId":r.get::<_,Option<String>>(10)?,"archived":r.get::<_,bool>(11)?,"modelLock":r.get::<_,Option<String>>(12)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"link":r.get::<_,Option<String>>(13)?.and_then(|value|serde_json::from_str::<Value>(&value).ok()),"workspaceLabel":r.get::<_,String>(14)?,"limitedUntil":r.get::<_,Option<String>>(15)?,"projectId":r.get::<_,Option<String>>(16)?,"projectName":r.get::<_,Option<String>>(17)?,"fanoutId":r.get::<_,Option<String>>(18)?,"projectApprovalMode":r.get::<_,Option<String>>(19)?})))?;
         iter.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
     }
@@ -3463,6 +3626,12 @@ impl Storage {
     }
     /// Whether a conversation was created lazily and has not started its
     /// provider yet (`data.lazyStart`, cleared once the provider installs).
+    /// Clears a new conversation's "run the project's setup script" flag and says whether it was set.
+    /// One statement, so the script can never be taken twice.
+    pub fn session_take_setup_pending(&self, id: &str) -> Result<bool, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute("UPDATE sessions SET data=json_remove(data,'$.setupPending') WHERE id=?1 AND json_extract(data,'$.setupPending')=1", [id])? > 0)
+    }
     pub fn session_lazy_start(&self, id: &str) -> Result<bool, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let flag: Option<i64> = c.query_row("SELECT json_extract(data,'$.lazyStart') FROM sessions WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten();
@@ -6106,7 +6275,7 @@ impl Storage {
         Ok(())
     }
     pub fn resolve_permission_policy(&self,id:&str,resolved_by:&str,choice:&str)->Result<(),StorageError>{
-        if !["policy:auto","policy:bypass","policy:automation"].contains(&resolved_by) && !resolved_by.starts_with("policy:rule:") {return Err(StorageError::InvalidAgent)}
+        if !["policy:auto","policy:accept_edits","policy:bypass","policy:automation"].contains(&resolved_by) && !resolved_by.starts_with("policy:rule:") {return Err(StorageError::InvalidAgent)}
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         let changed=c.execute("UPDATE permission_requests SET status='resolved',resolved_by=?2,data=json_set(data,'$.status','resolved','$.choice',?3,'$.resolvedBy',?2) WHERE id=?1 AND status='resolving'",params![id,resolved_by,choice])?;
         if changed!=1{return Err(StorageError::AgentConflict)} Ok(())
@@ -6237,7 +6406,7 @@ impl Storage {
     pub fn default_approval_mode(&self)->Result<String,StorageError>{
         let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
         let raw:String=c.query_row("SELECT value FROM settings WHERE key='permissions.default_mode'",[],|r|r.get(0)).optional()?.unwrap_or("\"ask\"".into());
-        let mode:String=serde_json::from_str(&raw)?; if !["ask","auto"].contains(&mode.as_str()){return Err(StorageError::InvalidAgent)} Ok(mode)
+        let mode:String=serde_json::from_str(&raw)?; if !["ask","auto","accept_edits","bypass"].contains(&mode.as_str()){return Err(StorageError::InvalidAgent)} Ok(mode)
     }
     pub fn session_detail(&self, id: &str) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -6648,7 +6817,7 @@ impl Storage {
         self.session_detail_parts(c, id, true)
     }
     fn session_detail_parts(&self, c: &Connection, id: &str, full: bool) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'projectApprovalMode',(SELECT CASE WHEN json_valid(q.overrides_json) THEN json_extract(q.overrides_json,'$.approvalMode') END FROM projects q WHERE q.id=COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path))),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
         let mut v: Value =
             serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
         let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
@@ -7134,6 +7303,9 @@ impl Storage {
                 Err(_) => settings_skipped += 1,
             }
         }
+        // A restored old key lands under its new name, through the same table the
+        // database open uses.
+        for shim in setting_shims() { move_setting(&tx, shim)?; }
 
         tx.commit()?;
         Ok(json!({
@@ -7235,7 +7407,7 @@ const SESSION_MESSAGES_SQL: &str = "SELECT json_object('id',id,'turnId',turn_id,
 
 fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let json: Option<String> = c.query_row(
-        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
+        "SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'projectApprovalMode',(SELECT CASE WHEN json_valid(q.overrides_json) THEN json_extract(q.overrides_json,'$.approvalMode') END FROM projects q WHERE q.id=COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path))),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",
         [id],
         |r| r.get(0),
     ).optional()?;
@@ -7512,7 +7684,7 @@ fn validate_agent_fields(v:&Value,create:bool)->Result<(),StorageError>{
     for key in ["name","runtimeId","description","instructions","color"] {if v.get(key).is_some_and(|x|!x.is_string()){return Err(StorageError::InvalidAgent)}}
     if v.get("customArgs").is_some_and(|x|!x.is_array()||!x.as_array().unwrap().is_empty())||v.get("customEnv").is_some_and(|x|!x.is_object()||!x.as_object().unwrap().values().all(Value::is_string))||v.get("maxConcurrency").is_some_and(|x|!x.as_i64().is_some_and(|n|(1..=50).contains(&n))){return Err(StorageError::InvalidAgent)}
     for key in ["model","thinking","serviceTier","defaultProject","approvalMode"] { if v.get(key).is_some_and(|x|!x.is_null()&&!x.is_string()){return Err(StorageError::InvalidAgent)} }
-    if v.get("approvalMode").and_then(Value::as_str).is_some_and(|s| !["ask","auto","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
+    if v.get("approvalMode").and_then(Value::as_str).is_some_and(|s| !["ask","auto","accept_edits","bypass"].contains(&s)){return Err(StorageError::InvalidAgent)}
     if v.get("notificationLevel").is_some_and(|x| !x.is_null() && !x.as_str().is_some_and(|s| ["all","input","muted"].contains(&s))){return Err(StorageError::InvalidAgent)}
     if v.get("outfit").is_some_and(|value| !value.as_str().is_some_and(|s| ["auto","none","party-hat","beanie","crown","sunglasses","round-glasses","bow","scarf","witch-hat","santa-hat","pumpkin","bunny-ears"].contains(&s))) { return Err(StorageError::InvalidAgent); }
     if v.get("role").is_some_and(|x| !x.is_null() && x.as_str().is_none_or(|r| r.trim().chars().count() > 40)) { return Err(StorageError::InvalidAgent); }
@@ -7656,7 +7828,49 @@ pub fn file_detail(path: &str, raw: &Value) -> Value {
 fn runtime_exists(c:&Connection,id:&str)->Result<bool,StorageError>{Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM runtimes WHERE id=?1)",[id],|r|r.get(0))?)}
 fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),StorageError>{let n:i64=c.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0 AND (?2 IS NULL OR id!=?2)",params![key,except],|r|r.get(0))?;if n>0{Err(StorageError::AgentConflict)}else{Ok(())}}
 fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
-    query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")
+    let mut rows = query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'overrides',json(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")?;
+    // The DTO always carries all three keys, whatever an older row or a hand edit left behind.
+    for row in &mut rows { row["overrides"] = validate_project_overrides(&row["overrides"]).unwrap_or_else(|_| empty_project_overrides()); }
+    Ok(rows)
+}
+fn empty_project_overrides() -> Value { json!({"models": {}, "approvalMode": null, "setupScript": null}) }
+/// The per-project overrides, validated and normalised. Anything but `models`, `approvalMode` and
+/// `setupScript` is refused. `models` maps a provider name to a model id (1 to 200 characters);
+/// `approvalMode` is a mode or null; `setupScript` is up to 4,000 characters, and a blank one is null.
+/// The Full access confirmation for `bypass` is the caller's (it belongs to the request, not the data).
+pub fn validate_project_overrides(v: &Value) -> Result<Value, StorageError> {
+    let map = v.as_object().ok_or(StorageError::InvalidAgent)?;
+    if map.keys().any(|key| !["models", "approvalMode", "setupScript"].contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
+    let mut out = empty_project_overrides();
+    match map.get("models") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(models)) => {
+            if models.len() > 16 { return Err(StorageError::InvalidAgent); }
+            let mut clean = serde_json::Map::new();
+            for (provider, model) in models {
+                let id = model.as_str().ok_or(StorageError::InvalidAgent)?;
+                let valid_provider = (1..=40).contains(&provider.len()) && provider.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+                if !valid_provider || !(1..=200).contains(&id.chars().count()) || id.contains('\0') || id.trim() != id { return Err(StorageError::InvalidAgent); }
+                clean.insert(provider.clone(), json!(id));
+            }
+            out["models"] = Value::Object(clean);
+        }
+        Some(_) => return Err(StorageError::InvalidAgent),
+    }
+    match map.get("approvalMode") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(mode)) if ["ask", "auto", "accept_edits", "bypass"].contains(&mode.as_str()) => out["approvalMode"] = json!(mode),
+        Some(_) => return Err(StorageError::InvalidAgent),
+    }
+    match map.get("setupScript") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(script)) => {
+            if script.chars().count() > 4_000 || script.contains('\0') { return Err(StorageError::InvalidAgent); }
+            if !script.trim().is_empty() { out["setupScript"] = json!(script); }
+        }
+        Some(_) => return Err(StorageError::InvalidAgent),
+    }
+    Ok(out)
 }
 fn profile_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
     query_jsons(c, "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE ?1=?1 ORDER BY locked DESC, category, key", "")
@@ -7849,6 +8063,65 @@ mod pricing_override_removal_tests {
         }
     }
 
+    /// Phase 1, Lane B (30 October 2026): renamed setting keys move once, at every
+    /// open and on import. No real key has ever been renamed, so these use the
+    /// test-only entries in `TEST_ONLY_SETTING_SHIMS`.
+    #[test]
+    fn an_old_setting_moves_to_its_new_key() {
+        let root = std::env::temp_dir().join(format!("bloblex-setting-shims-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("db.sqlite");
+        {
+            let db = Storage::open(&path).unwrap();
+            db.conn.lock().unwrap().execute("INSERT INTO settings(key,value) VALUES('test.oldKey',?1)", [json!("kept").to_string()]).unwrap();
+            db.conn.lock().unwrap().execute_batch("INSERT INTO settings(key,value) VALUES('test.oldCount','7')").unwrap();
+        }
+        // Reopening runs the shims, as every open does.
+        let db = Storage::open(&path).unwrap();
+        let settings = db.settings().unwrap();
+        assert_eq!(settings["test.newKey"], "kept");
+        assert!(settings.get("test.oldKey").is_none(), "the old key goes");
+        assert_eq!(settings["test.newCount"], 14, "the value mapping runs while moving");
+        assert!(settings.get("test.oldCount").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_new_value_wins_when_both_exist() {
+        let db = Storage::open_in_memory().unwrap();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO settings(key,value) VALUES('test.oldKey','\"old\"'),('test.newKey','\"new\"')").unwrap();
+        let db = db.apply_setting_shims().unwrap();
+        let settings = db.settings().unwrap();
+        assert_eq!(settings["test.newKey"], "new", "an existing new value wins");
+        assert!(settings.get("test.oldKey").is_none(), "and the old key still goes");
+    }
+
+    #[test]
+    fn the_shim_is_idempotent() {
+        let db = Storage::open_in_memory().unwrap();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO settings(key,value) VALUES('test.oldCount','7')").unwrap();
+        let db = db.apply_setting_shims().unwrap();
+        assert_eq!(db.settings().unwrap()["test.newCount"], 14);
+        let db = db.apply_setting_shims().unwrap();
+        let settings = db.settings().unwrap();
+        assert_eq!(settings["test.newCount"], 14, "a second run does not map the value twice");
+        assert!(settings.get("test.oldCount").is_none());
+        // Nothing to move is not an error and changes nothing.
+        let before = settings.clone();
+        let db = db.apply_setting_shims().unwrap();
+        assert_eq!(db.settings().unwrap(), before);
+    }
+
+    #[test]
+    fn backup_import_uses_the_shims() {
+        let db = Storage::open_in_memory().unwrap();
+        let outcome = db.backup_import(&json!({"settings": [{"key":"test.oldKey","value":"restored"}]})).unwrap();
+        assert_eq!(outcome["settings"], 1);
+        let settings = db.settings().unwrap();
+        assert_eq!(settings["test.newKey"], "restored", "a restored old key lands under its new name");
+        assert!(settings.get("test.oldKey").is_none(), "and the old key is not stored");
+    }
+
     #[test]
     fn retired_robot_art_and_pixel_icons_migrate_and_are_rewritten_on_write() {
         let db = Storage::open_in_memory().unwrap();
@@ -7907,6 +8180,25 @@ mod tests {
         for glass in ["solid", "balanced", "clear"] { assert!(validate_setting_value("appearance.glass", &json!(glass)).is_ok()); }
         for key in ["appearance.font", "appearance.monoFont"] { for font in ["", "space-grotesk", "jersey-10"] { assert!(validate_setting_value(key, &json!(font)).is_ok()); } }
         for (key, value) in [("appearance.style", json!("unknown")), ("appearance.wallpaper", json!("nope")), ("appearance.glass", json!("opaque")), ("appearance.font", json!("Font Name")), ("appearance.monoFont", json!("_bad")), ("appearance.font", json!("x".repeat(41)))] { assert!(validate_setting_value(key, &value).is_err(), "{key}: {value}"); }
+    }
+    /// Phase 1, Lane B: the storage validator holds the new keys to the same rule
+    /// the daemon does, because a backup restore goes through it.
+    #[test]
+    fn shortcut_and_sign_in_settings_validate() {
+        for choice in ["enter", "ctrl+enter", "shift+enter"] { assert!(validate_setting_value("composer.sendShortcut", &json!(choice)).is_ok()); }
+        for choice in [json!("return"), json!("Enter"), json!(""), json!(1)] { assert!(validate_setting_value("composer.sendShortcut", &choice).is_err(), "{choice}"); }
+        assert!(validate_setting_value("shortcuts.bindings", &json!({"app.commandPalette":"Ctrl+K","app.search":null})).is_ok());
+        assert!(validate_setting_value("shortcuts.bindings", &json!({})).is_ok());
+        for refused in [json!({"has space":"Ctrl+K"}), json!({"":"Ctrl+K"}), json!({"ok":7}), json!({"ok":"é"}), json!("Ctrl+K"), json!([])] {
+            assert!(validate_setting_value("shortcuts.bindings", &refused).is_err(), "{refused}");
+        }
+        let forty = (0..40).map(|index| (format!("action.{index}"), json!("Ctrl+Alt+K"))).collect::<serde_json::Map<_, _>>();
+        assert!(validate_setting_value("shortcuts.bindings", &Value::Object(forty.clone())).is_ok());
+        let mut too_many = forty;
+        too_many.insert("action.40".into(), json!("Ctrl+K"));
+        assert!(validate_setting_value("shortcuts.bindings", &Value::Object(too_many)).is_err());
+        assert!(validate_setting_value("usage.readCliSignIns", &json!(true)).is_ok());
+        for refused in [json!("true"), json!(1), json!(null)] { assert!(validate_setting_value("usage.readCliSignIns", &refused).is_err()); }
     }
     fn remove_session_controls_migration(c: &Connection) {
         c.execute_batch("DROP TABLE IF EXISTS message_reactions; DROP INDEX IF EXISTS idx_messages_session_id_id; ALTER TABLE sessions DROP COLUMN model_lock_json; DROP TABLE IF EXISTS quota_snapshots; DELETE FROM schema_migrations WHERE version IN (6,7,8,9,10,11,12); PRAGMA user_version=5; ALTER TABLE sessions DROP COLUMN archived; ALTER TABLE sessions DROP COLUMN title_override; ALTER TABLE agents DROP COLUMN outfit; DROP TABLE user_pricing_rules; CREATE TABLE user_pricing_rules(id TEXT PRIMARY KEY,provider TEXT NOT NULL,model TEXT NOT NULL,aliases TEXT NOT NULL,input_rate INTEGER,output_rate INTEGER,cache_read_rate INTEGER,cache_write_rate INTEGER,currency TEXT NOT NULL,effective_from TEXT NOT NULL,effective_to TEXT,source_url TEXT,data TEXT NOT NULL);").unwrap();
@@ -8339,8 +8631,80 @@ mod tests {
         {let c=Connection::open(&path).unwrap();c.pragma_update(None,"user_version",3).unwrap();}assert!(matches!(Storage::open(&path),Err(StorageError::InvalidAgent)));let _=fs::remove_dir_all(dir);
     }
     #[test]
+    fn approval_mode_check_migrates_an_old_database(){
+        let dir=std::env::temp_dir().join(format!("bloblex-accept-edits-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");
+        let (agent_id,columns_before);
+        {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-ae","provider":"codex"})).unwrap();let (agent,_)=db.agent_create(&json!({"name":"Keeper","runtimeId":"rt-ae","approvalMode":"bypass","instructions":"stay"})).unwrap();agent_id=agent["id"].as_str().unwrap().to_owned();db.agent_create(&json!({"name":"Plain","runtimeId":"rt-ae"})).unwrap();db.create_session_for_agent("s-ae","rt-ae","codex","C:/project","Keeper",Some(&agent_id)).unwrap();}
+        {let c=Connection::open(&path).unwrap();
+            // Put the table back in the old shape: the old CHECK, and an extra index the rebuild must keep.
+            let ddl:String=c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'",[],|r|r.get(0)).unwrap();
+            assert!(ddl.contains("'accept_edits'"),"a fresh database already has the new check");
+            let old=ddl.replace(AGENT_MODE_CHECK_NEW,AGENT_MODE_CHECK_OLD);let start=old.find('(').unwrap();
+            let indexes:Vec<String>={let mut q=c.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='agents' AND sql IS NOT NULL").unwrap();let rows=q.query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();rows};
+            c.pragma_update(None,"foreign_keys","OFF").unwrap();
+            c.execute_batch(&format!("CREATE TABLE agents_old {}; INSERT INTO agents_old SELECT * FROM agents; DROP TABLE agents; ALTER TABLE agents_old RENAME TO agents; CREATE INDEX idx_agents_probe ON agents(name_key);",&old[start..])).unwrap();
+            for sql in &indexes{c.execute_batch(sql).unwrap();}
+            assert!(!c.query_row::<String,_,_>("SELECT sql FROM sqlite_master WHERE name='agents'",[],|r|r.get(0)).unwrap().contains("'accept_edits'"));
+            assert!(c.execute("UPDATE agents SET approval_mode='accept_edits' WHERE id=?1",[&agent_id]).is_err(),"the old shape refuses the new mode");
+            columns_before=c.prepare("SELECT name FROM pragma_table_info('agents') ORDER BY cid").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        }
+        let rows_before={let c=Connection::open(&path).unwrap();c.query_row("SELECT count(*) FROM agents",[],|r|r.get::<_,i64>(0)).unwrap()};
+        let backups=|d:&Path|fs::read_dir(d.join("backups")).map(|r|r.count()).unwrap_or(0);let backups_before=backups(&dir);
+        {let db=Storage::open(&path).unwrap();
+            assert!(backups(&dir)>backups_before,"the rebuild takes a verified backup first");
+            let kept=db.agent_get(&agent_id).unwrap();assert_eq!(kept["approvalMode"],"bypass");assert_eq!(kept["instructions"],"stay");
+            let (updated,_)=db.agent_update(&agent_id,&json!({"approvalMode":"accept_edits"})).unwrap();assert_eq!(updated["approvalMode"],"accept_edits");
+            assert!(db.agent_create(&json!({"name":"Fresh","runtimeId":"rt-ae","approvalMode":"accept_edits"})).is_ok());
+            assert_eq!(db.session_detail("s-ae").unwrap()["agentId"],json!(agent_id));
+            db.set_setting("permissions.default_mode",&json!("accept_edits")).unwrap();assert_eq!(db.default_approval_mode().unwrap(),"accept_edits");}
+        {let c=Connection::open(&path).unwrap();
+            assert_eq!(c.query_row("SELECT count(*) FROM agents",[],|r|r.get::<_,i64>(0)).unwrap(),rows_before+1);
+            let columns_after=c.prepare("SELECT name FROM pragma_table_info('agents') ORDER BY cid").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();assert_eq!(columns_after,columns_before);
+            assert_eq!(c.query_row("SELECT count(*) FROM sqlite_master WHERE name='idx_agents_probe'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+            assert_eq!(c.query_row("SELECT count(*) FROM pragma_foreign_key_check",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+            assert_eq!(c.query_row("PRAGMA integrity_check",[],|r|r.get::<_,String>(0)).unwrap(),"ok");
+            assert_eq!(c.query_row("PRAGMA user_version",[],|r|r.get::<_,i64>(0)).unwrap(),12);}
+        let after_first=backups(&dir);drop(Storage::open(&path).unwrap());assert_eq!(backups(&dir),after_first,"a current database is not rebuilt or backed up again");
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn project_overrides_column_is_added_to_an_old_database_and_defaults_cleanly(){
+        let dir=std::env::temp_dir().join(format!("bloblex-overrides-col-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");
+        let id;
+        {let db=Storage::open(&path).unwrap();let (project,_)=db.project_create("Old",Some("C:/old")).unwrap();id=project["id"].as_str().unwrap().to_owned();}
+        {let c=Connection::open(&path).unwrap();c.execute_batch("ALTER TABLE projects DROP COLUMN overrides_json;").unwrap();}
+        {let db=Storage::open(&path).unwrap();let project=db.project_get(&id).unwrap();assert_eq!(project["name"],"Old");assert_eq!(project["overrides"],json!({"models":{},"approvalMode":null,"setupScript":null}));
+            let (updated,_)=db.project_update_with_overrides(&id,&json!({}),Some(&json!({"setupScript":"echo hi","models":{"codex":"m"}}))).unwrap();assert_eq!(updated["overrides"]["setupScript"],"echo hi");
+            // A damaged cell reads back as the defaults rather than failing the project list.
+            db.conn.lock().unwrap().execute("UPDATE projects SET overrides_json='not json'",[]).unwrap();assert_eq!(db.project_get(&id).unwrap()["overrides"],json!({"models":{},"approvalMode":null,"setupScript":null}));}
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn an_unrecognised_agents_check_does_not_block_opening(){
+        let dir=std::env::temp_dir().join(format!("bloblex-odd-check-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");
+        let agent_id;
+        {let db=Storage::open(&path).unwrap();db.upsert_runtime(&json!({"id":"rt-odd","provider":"codex"})).unwrap();agent_id=db.agent_create(&json!({"name":"Odd","runtimeId":"rt-odd"})).unwrap().0["id"].as_str().unwrap().to_owned();}
+        let odd="approval_mode IN ('ask','auto','bypass','plan')";
+        {let c=Connection::open(&path).unwrap();
+            let ddl:String=c.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'",[],|r|r.get(0)).unwrap();
+            let changed=ddl.replace(AGENT_MODE_CHECK_NEW,odd);let start=changed.find('(').unwrap();
+            let indexes:Vec<String>={let mut q=c.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='agents' AND sql IS NOT NULL").unwrap();let rows=q.query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();rows};
+            c.pragma_update(None,"foreign_keys","OFF").unwrap();
+            c.execute_batch(&format!("CREATE TABLE agents_odd {}; INSERT INTO agents_odd SELECT * FROM agents; DROP TABLE agents; ALTER TABLE agents_odd RENAME TO agents;",&changed[start..])).unwrap();
+            for sql in &indexes{c.execute_batch(sql).unwrap();}}
+        for _ in 0..2{
+            let db=Storage::open(&path).expect("an unrecognised check must not stop the database opening");
+            assert_eq!(db.agent_get(&agent_id).unwrap()["name"],"Odd");
+            assert!(db.agent_update(&agent_id,&json!({"approvalMode":"accept_edits"})).is_err(),"only saving the new mode fails");
+            assert!(db.agent_update(&agent_id,&json!({"approvalMode":"auto"})).is_ok());
+            let ddl:String=db.conn.lock().unwrap().query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'",[],|r|r.get(0)).unwrap();
+            assert!(ddl.contains(odd)&&!ddl.contains("'accept_edits'"),"the table was left alone");
+        }
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test]
     fn automatic_permission_resolution_is_conditional_and_persists_policy_source(){
-        let db=Storage::open_in_memory().unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");assert!(matches!(db.set_setting("permissions.default_mode",&json!("bypass")),Err(StorageError::InvalidAgent)));db.upsert_runtime(&json!({"id":"rt-policy","provider":"codex"})).unwrap();db.create_session_for_agent("s-policy","rt-policy","codex",".","Policy",None).unwrap();db.insert_permission("p-policy","s-policy","provider-request","Check",None,&["allow".into(),"deny".into()],&json!({}),&json!({})).unwrap();assert_eq!(db.begin_permission_reply("p-policy","allow").unwrap().unwrap().1,"provider-request");db.finish_permission_policy_reply("p-policy",true,"policy:auto","allow").unwrap();assert_eq!(db.permission_resolved_by("p-policy").unwrap().as_deref(),Some("policy:auto"));assert!(db.begin_permission_reply("p-policy","allow").unwrap().is_none());
+        let db=Storage::open_in_memory().unwrap();assert_eq!(db.default_approval_mode().unwrap(),"ask");assert!(matches!(db.set_setting("permissions.default_mode",&json!("yolo")),Err(StorageError::InvalidAgent)));db.upsert_runtime(&json!({"id":"rt-policy","provider":"codex"})).unwrap();db.create_session_for_agent("s-policy","rt-policy","codex",".","Policy",None).unwrap();db.insert_permission("p-policy","s-policy","provider-request","Check",None,&["allow".into(),"deny".into()],&json!({}),&json!({})).unwrap();assert_eq!(db.begin_permission_reply("p-policy","allow").unwrap().unwrap().1,"provider-request");db.finish_permission_policy_reply("p-policy",true,"policy:auto","allow").unwrap();assert_eq!(db.permission_resolved_by("p-policy").unwrap().as_deref(),Some("policy:auto"));assert!(db.begin_permission_reply("p-policy","allow").unwrap().is_none());
     }
     #[test]
     fn migration_5_backup_failure_keeps_v4_schema_untouched(){

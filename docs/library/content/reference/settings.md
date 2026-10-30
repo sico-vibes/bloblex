@@ -1,8 +1,8 @@
 # Settings
 
 > **What this is:** every settings key, what it controls, its allowed values, and where it is validated.
-> **Status:** current; checked against `validate_setting` in the daemon, `validate_setting_value` in storage, and the settings index on 19 October 2026; the task settings and the look values checked on 22 October 2026
-> **Last updated:** 2026-10-22
+> **Status:** current; checked against `validate_setting` in the daemon, `validate_setting_value` in storage, and the settings index on 19 October 2026; the task settings and the look values checked on 22 October 2026; the shortcuts, the sign-in read and the experiment defaults added on 30 October 2026
+> **Last updated:** 2026-10-30
 
 ## Purpose
 
@@ -88,9 +88,25 @@ Validation: all of these are in the daemon validator except `composer.busySendMo
 
 Each is a boolean stored as `experimental.<name>`:
 
-`changeReview`, `messageActions`, `search`, `autoTitles`, `undo`, `shortcuts`, `resumeAfterUsageLimits` (default on), `autoRetry` (default off), `memory`, `approvalBadge`, `sidebarModel`, `botLock`.
+`changeReview`, `messageActions`, `search`, `autoTitles`, `undo`, `shortcuts`, `resumeAfterUsageLimits` (default on), `autoRetry`, `memory`, `approvalBadge`, `sidebarModel`, `botLock`.
+
+Since 30 October 2026 the daemon reads `autoTitles`, `undo`, `autoRetry` and `memory` through one rule (`experiments::on` in `crates/bloblex-daemon/src/experiments.rs`): absent means on, and only an explicit `false` turns one off, so a fresh install has the useful experiments and a switch the owner turned off stays off. `resumeAfterUsageLimits` already worked that way. `changeReview`, `messageActions` and `search` are read only by the interface, which sets its own defaults.
 
 Additional experimental keys used by the interface: `experimental.usageTips`, `experimental.usageTipDismissals`, `experimental.activityDetails`, `experimental.runtimeLogos`, `experimental.usageBar`, `experimental.bitbots`. The first two are validated in storage; the rest are UI preferences.
+
+### Shortcuts and the usage bars (30 October 2026)
+
+| Key | Values | Default | What it does |
+| --- | --- | --- | --- |
+| `composer.sendShortcut` | `enter`, `ctrl+enter`, `shift+enter` | `enter` (absent means `enter`) | What sends a prompt. |
+| `shortcuts.bindings` | object, at most 40 entries | — | Action id (1 to 60 of `a-z`, `A-Z`, `0-9`, `.`, `-`) to a shortcut of up to 40 printable ASCII characters, or `null` for "no shortcut". |
+| `usage.readCliSignIns` | boolean | off (absent means off) | Consent for the daemon to read the coding agents' own stored sign-ins, read only, to show Claude and OpenCode usage bars. While it is off nothing opens those files and the bar reports `read_off`. It is never in a backup. |
+
+Validation: all three are in the daemon validator and in the storage validator. The two shortcut keys travel in a backup like the appearance settings; the consent for the sign-in read never does. The interface builds the shortcut behaviour; the daemon only validates and stores the values.
+
+### Renamed keys
+
+`SETTING_SHIMS` in `crates/bloblex-storage/src/lib.rs` moves an old setting key to its new name once, at every database open and on backup import. It is empty: as of 30 October 2026 no setting key has ever been renamed.
 
 ### Tasks (22 October 2026)
 

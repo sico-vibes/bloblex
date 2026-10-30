@@ -8,9 +8,11 @@
 //! and scope rules), the catalog builder and the MCP tool handlers. The storage
 //! crate owns the schema, CRUD, versioning, FTS and visibility filters.
 //!
-//! The whole feature is off by default behind `experimental.memory`. With it
-//! off no memory tools are listed and nothing is injected, but the `memory.*`
-//! RPCs still read for review and still accept user writes.
+//! The whole feature is behind `experimental.memory`: on since 30 October 2026
+//! when the switch was never touched, and off only when the owner set it to
+//! `false` (see `experiments::on`). With it off no memory tools are listed and
+//! nothing is injected, but the `memory.*` RPCs still read for review and still
+//! accept user writes.
 
 use crate::{derr, AppState, DispatchError};
 use axum::http::StatusCode;
@@ -58,7 +60,7 @@ impl Memory {
 }
 
 pub fn enabled(st: &AppState) -> bool {
-    st.db.settings().ok().is_some_and(|settings| settings["experimental.memory"] == true)
+    st.db.settings().ok().is_some_and(|settings| crate::experiments::on(&settings, "memory"))
 }
 
 fn shared_agent_writes(st: &AppState) -> bool {

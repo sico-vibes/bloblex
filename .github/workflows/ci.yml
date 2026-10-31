@@ -41,6 +41,14 @@ jobs:
           # an apostrophe; nothing here needs it.
           workspaces: '.'
 
+      # The runner's default temp folder uses a short name (RUNNER~1), and git reports the long one,
+      # which many tests compare with.
+      - name: Use a temp folder with a long name
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
       - name: Install npm dependencies
         run: npm ci
 

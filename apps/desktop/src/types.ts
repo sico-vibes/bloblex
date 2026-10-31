@@ -166,6 +166,8 @@ export interface Runtime extends JsonRecord {
 
 export interface Agent extends JsonRecord {
   id: string
+  /** Phase 8: the bot this one works under, for a sub-bot. Sub-bots stay off the roster and nest under their parent. */
+  parentAgentId?: string | null
   name: string
   description: string
   instructions: string

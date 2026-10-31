@@ -84,7 +84,26 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 
 /// A case- and separator-insensitive folder key, stable as an id across restarts.
 fn key(path: &Path) -> String {
-    crate::worktree::normalize(path)
+    crate::worktree::normalize(&long_form(path))
+}
+
+/// The folder's real name. Windows can spell one folder two ways (`RUNNER~1` and `runneradmin`), and
+/// git always reports the long one, so comparing text alone could call a live copy abandoned. A path
+/// that's gone keeps its last part on its parent's real name.
+fn long_form(path: &Path) -> PathBuf {
+    match std::fs::canonicalize(path) {
+        Ok(real) => {
+            let text = real.to_string_lossy();
+            match text.strip_prefix(r"\\?\") {
+                Some(plain) if !plain.starts_with("UNC") => PathBuf::from(plain),
+                _ => real.clone(),
+            }
+        }
+        Err(_) => match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => long_form(parent).join(name),
+            _ => path.to_path_buf(),
+        },
+    }
 }
 
 /// A short, stable id for one copy: an FNV-1a hash of its normalised path, so a phone and the desktop
@@ -439,6 +458,23 @@ mod tests {
         st.db.update_session_state("busy-session", "working").unwrap();
         assert!(items(&st).await.is_empty(), "a turn is still using that folder");
         cleanup(&repo, &family);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_short_and_a_long_name_are_the_same_folder() {
+        let dir = std::env::temp_dir().join(format!("bitbots long folder name {}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = format!("for %I in (\"{}\") do @echo %~sI", dir.display());
+        let output = Command::new("cmd").args(["/c", &script]).output().unwrap();
+        let short = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        // Some volumes have short names turned off, and then there's nothing to compare.
+        if short != dir && short.is_dir() {
+            assert_eq!(key(&short), key(&dir));
+        }
+        let gone = dir.join("not there yet");
+        assert_eq!(key(&gone), format!("{}/not there yet", key(&dir)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]

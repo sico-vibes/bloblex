@@ -1,0 +1,37 @@
+/* Phase 8: sub-bots. */
+.subbot-rows { display: grid; gap: 1px; margin: 1px 0 4px 18px; padding-left: 6px; border-left: 1px solid var(--line); }
+.subbot-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 4px 6px; color: var(--text-2); text-align: left; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.subbot-row:hover:not(:disabled) { background: var(--surface-hover); }
+.subbot-row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.subbot-row[aria-current="true"] { background: var(--surface-selected, var(--surface-hover)); }
+.subbot-row-copy { flex: 1; min-width: 0; display: grid; }
+.subbot-row-copy strong, .subbot-row-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subbot-row-copy strong { color: var(--text-1); font-size: var(--fs-xs); font-weight: 500; }
+.subbot-row-copy small { color: var(--text-3); font-size: var(--fs-2xs); }
+.subbot-row.failed .subbot-row-copy small { color: var(--danger-ink); }
+.subbot-art-fallback { flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--text-2); font-size: 10px; border-radius: 5px; background: var(--surface-hover); }
+
+.subbot-fleet { display: grid; gap: 4px; margin: 0 auto 8px; width: min(760px, calc(100% - 32px)); padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.subbot-fleet header { display: flex; align-items: center; gap: 8px; }
+.fleet-toggle { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 0; color: var(--text-1); text-align: left; border: 0; background: transparent; cursor: pointer; }
+.fleet-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.fleet-toggle strong { font-size: var(--fs-sm); font-weight: 500; }
+.fleet-toggle small { color: var(--text-3); font-size: var(--fs-2xs); }
+.subbot-fleet ul { display: grid; gap: 2px; max-height: 180px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.fleet-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.fleet-row-copy { flex: 1; min-width: 0; display: grid; }
+.fleet-row-name { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.fleet-row-name strong { flex: none; max-width: 60%; overflow: hidden; color: var(--text-1); font-size: var(--fs-xs); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-row-name small { overflow: hidden; color: var(--text-3); font: var(--fs-2xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.fleet-row-line { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.fleet-row.failed .fleet-row-line { color: var(--danger-ink); }
+
+.subbot-composer { display: grid; gap: 6px; margin: 0 auto 12px; width: min(760px, calc(100% - 32px)); }
+.subbot-composer textarea { width: 100%; resize: vertical; }
+.subbot-composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.subbot-composer-actions .new-project-error { flex: 1; min-width: 0; }
+.subbot-composer-actions .primary-button { display: inline-flex; align-items: center; gap: 4px; }
+
+.subbot-count { flex: none; color: var(--text-3); font-size: var(--fs-2xs); }
+.companion-fleet button { padding: 0; color: inherit; font: inherit; border: 0; background: transparent; cursor: pointer; }
+.companion-fleet button:focus-visible { outline: none; box-shadow: var(--focus-ring); }

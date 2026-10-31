@@ -18,6 +18,7 @@ import { conversationPreview, isManager, mainSessionFor, managerOf, rosterAgents
 import { friendlyErrorText } from './errorCopy'
 import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
+import { SubbotRows } from './SubbotViews'
 import { SIDEBAR_SORTS, groupBotsByProject, sortBots, storeSidebarGrouping, storeSidebarSort, storedSidebarGrouping, storedSidebarSort } from './sidebarOrder'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
@@ -174,7 +175,10 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, needsYou, machines }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, needsYou, machines, onOpenSubbot, selectedSessionId }: {
+  /** Phase 8: opens a sub-bot's conversation. */
+  onOpenSubbot?: (sessionId: string) => void
+  selectedSessionId?: string | null
   /** Phase 4: other machines' bots, under their names. */
   machines?: ReactNode
   /** Waiting approvals and questions across every bot (see NeedsYou). */
@@ -224,7 +228,9 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const roster = useMemo(() => rosterAgents(agents, showHidden), [agents, showHidden])
   const manager = managerOf(agents)
   const pinned = pinnedIds.map((id) => agents.find((agent) => agent.id === id && !agent.archived && (showHidden || !agent.hidden))).filter((agent): agent is Agent => !!agent)
-  const hiddenCount = agents.filter((agent) => !agent.archived && agent.hidden).length
+  const hiddenCount = agents.filter((agent) => !agent.archived && agent.hidden && !agent.parentAgentId).length
+  const hasSubbots = (id: string) => agents.some((agent) => agent.parentAgentId === id && !agent.archived)
+  const withSubbots = (agent: Agent) => hasSubbots(agent.id) && onOpenSubbot ? <div key={agent.id}>{renderRow(agent)}<SubbotRows parent={agent} onOpen={onOpenSubbot} selectedSessionId={selectedSessionId} /></div> : renderRow(agent)
   const [sort, setSort] = useState(storedSidebarSort)
   const [grouped, setGrouped] = useState(storedSidebarGrouping)
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null)
@@ -399,11 +405,11 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     {needsYou}
     <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={Nouns}>
       {manager && <section className="team-group manager-group" aria-label="Manager">
-        <div className="team-group-rows">{renderRow(manager)}</div>
+        <div className="team-group-rows">{withSubbots(manager)}</div>
       </section>}
       {pinned.length > 0 && <section className="team-group" aria-label="Pinned">
         <div className="team-group-head static"><Pin size={13} aria-hidden="true" /><span>Pinned</span></div>
-        <div className="team-group-rows">{pinned.map(renderRow)}</div>
+        <div className="team-group-rows">{pinned.map(withSubbots)}</div>
       </section>}
       <section className="team-group" aria-label={Nouns}>
         <div className="team-group-head static">
@@ -411,8 +417,8 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
           <span className="team-group-actions"><button type="button" className="icon-button tiny" aria-label={`Sort ${nouns}`} title={`Sort ${nouns}`} aria-haspopup="menu" onClick={(event) => { menuTrigger.current = event.currentTarget; const rect = event.currentTarget.getBoundingClientRect(); setSortMenu({ x: rect.left, y: rect.bottom + 4 }) }}><ArrowDownUp size={13} /></button><button type="button" className="icon-button tiny" aria-label={`New ${noun}`} title={`New ${noun}`} onClick={() => actions.onCreate(null)}><Plus size={14} /></button></span>
         </div>
         {groups
-          ? groups.map((group) => <div key={group.id} role="group" aria-label={group.name}><div className="team-subgroup-head">{group.name}</div><div className="team-group-rows">{group.agents.map(renderRow)}</div></div>)
-          : <div className="team-group-rows" role="group">{rows.map(renderRow)}</div>}
+          ? groups.map((group) => <div key={group.id} role="group" aria-label={group.name}><div className="team-subgroup-head">{group.name}</div><div className="team-group-rows">{group.agents.map(withSubbots)}</div></div>)
+          : <div className="team-group-rows" role="group">{rows.map(withSubbots)}</div>}
       </section>
       {agents.filter((agent) => !agent.archived).length === 0 && <p className="team-group-empty">No {nouns} yet. Create one to start chatting.</p>}
       </div>

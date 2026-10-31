@@ -301,7 +301,7 @@ function currentSnapshot(): Snapshot {
   return {
     sequence,
     runtimes,
-    agents: search.has('empty') ? [] : agents.map((agent) => ({ ...agent, customArgs: [...agent.customArgs], customEnv: { ...agent.customEnv } })),
+    agents: search.has('empty') ? [] : (search.get('subbots') ? [...agents, { ...agents[0], id: 'sub-1', name: 'Pricing research', hidden: true, parentAgentId: 'agent-codex' } as Agent] : agents).map((agent) => ({ ...agent, customArgs: [...agent.customArgs], customEnv: { ...agent.customEnv } })),
     sessions: sessions.filter((session) => !session.archived).map((session) => ({ ...session })),
     permissions: fixturePreset() === 'message-links'
       ? []
@@ -376,6 +376,11 @@ export const previewMode = true
 const repositoryDiff = (name: string, added: string[], removed: string[]) => [`diff --git a/${name} b/${name}`, `--- a/${name}`, `+++ b/${name}`, `@@ -1,${removed.length + 2} +1,${added.length + 2} @@`, ' import { render } from "./render"', ...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`), ' export {}'].join('\n')
 const fixtureStaged = new Map<string, string>()
 const withStaged = <T extends { files: Array<Record<string, unknown>> }>(answer: T): T => ({ ...answer, files: answer.files.map((file) => ({ ...file, staged: fixtureStaged.get(String(file.repositoryPath)) ?? 'none' })) })
+// Phase 8: `?subbots=1` gives Codex a fleet.
+function fixtureSubbots() {
+  const row = (agentId: string, name: string, model: string, status: string, doingNow: string | null, error: string | null = null) => ({ agentId, parentAgentId: 'agent-codex', originSessionId: 'session-codex', name, role: 'Research', provider: 'claude', model, thinking: null, sessionId: 'session-claude-2', delegationId: `delegation-${agentId}`, status, doingNow, startedAt: null, finishedAt: null, error })
+  return [row('sub-1', 'Pricing research', 'claude-haiku-5-5', 'running', 'Reading pricing.md'), row('sub-2', 'Competitors', 'claude-haiku-5-5', 'running', 'Running a search'), row('sub-3', 'Reviews', 'claude-haiku-5-5', 'queued', null), row('sub-4', 'Licences', 'claude-haiku-5-5', 'failed', null, 'The usage limit was reached.')]
+}
 // Phase 5: accounts, custom models and secrets. `?secretrequest=1` shows a bot asking for one.
 let fixtureAccounts: Array<{ id: string; provider: string; name: string; signedIn: boolean; label: string | null; plan: string | null; bots: number }> = [{ id: 'preview-account-1', provider: 'claude', name: 'Work', signedIn: true, label: 'work@example.com', plan: 'max', bots: 2 }]
 let fixtureCustomModels: Array<{ id: string; provider: string; modelId: string; label: string; efforts: string[] }> = []
@@ -506,6 +511,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'automation.webhook.enable' || method === 'automation.webhook.rotate') return { url: 'https://example.ts.net/api/hook/' + String(params.id), secret: 'preview-secret-shown-once', webhook: { enabled: true, includeBody: false } } as T
   if (method === 'automation.webhook.update') return { webhook: { enabled: true, includeBody: params.includeBody === true } } as T
   if (method === 'automation.webhook.disable') return { webhook: { enabled: false, includeBody: false } } as T
+  if (method === 'subbot.list') return { subbots: flags().get('subbots') && (params.sessionId === 'session-codex' || params.agentId === 'agent-codex') ? fixtureSubbots() : [] } as T
   if (method === 'account.list') return { accounts: fixtureAccounts } as T
   if (method === 'account.create') { const account = { id: `preview-account-${fixtureAccounts.length + 1}`, provider: String(params.provider), name: String(params.name), signedIn: false, label: null, plan: null, bots: 0 }; fixtureAccounts = [...fixtureAccounts, account]; return { account } as T }
   if (method === 'account.rename') { fixtureAccounts = fixtureAccounts.map((item) => item.id === params.id ? { ...item, name: String(params.name) } : item); return { ok: true } as T }

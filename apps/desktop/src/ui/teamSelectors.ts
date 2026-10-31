@@ -135,7 +135,7 @@ export function groupAgentsByProject(agents: readonly Agent[], projects: readonl
 
 /** Phase 1A: bots are no longer filed under projects. The roster is one list in the daemon's order; the Manager is pinned separately. */
 export function rosterAgents(agents: readonly Agent[], showHidden = false): Agent[] {
-  return agents.filter((agent) => !agent.archived && !isManager(agent) && (showHidden || agent.hidden !== true))
+  return agents.filter((agent) => !agent.archived && !isManager(agent) && !agent.parentAgentId && (showHidden || agent.hidden !== true))
 }
 
 /** The project a conversation works in: its stamp, else a project whose folder is the conversation's folder. */

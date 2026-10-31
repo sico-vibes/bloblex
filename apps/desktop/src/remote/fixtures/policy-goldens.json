@@ -1339,6 +1339,56 @@
           }
         ]
       }
+    },
+    {
+      "name": "runtime-list-account",
+      "method": "runtime.list",
+      "options": {},
+      "input": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "provider": "claude",
+            "account": {
+              "label": "owner@example.com",
+              "plan": "pro",
+              "source": "claude auth status"
+            },
+            "executablePath": "C:\\Tools\\claude.exe",
+            "launchArgs": [
+              "--profile",
+              "work"
+            ]
+          },
+          {
+            "id": "rt_2",
+            "provider": "opencode",
+            "account": null
+          }
+        ]
+      },
+      "expect": {
+        "runtimes": [
+          {
+            "id": "rt_1",
+            "provider": "claude",
+            "account": {
+              "label": "owner@example.com",
+              "plan": "pro",
+              "source": "claude auth status"
+            },
+            "executablePath": "claude.exe",
+            "launchArgs": {
+              "argCount": 2
+            }
+          },
+          {
+            "id": "rt_2",
+            "provider": "opencode",
+            "account": null
+          }
+        ]
+      }
     }
   ],
   "snapshots": [

@@ -16,6 +16,10 @@ use tokio::{
     time::{timeout, Duration},
 };
 
+// Phase 5: who is signed in, read from the CLIs' own account output.
+mod account;
+pub use account::{from_claude_status, from_codex_account_read, from_opencode_auth_list, read as read_account, AccountInfo};
+
 /// Sign-in probe budget for Claude and Codex.
 const SIGN_IN_TIMEOUT_SECS: u64 = 5;
 /// OpenCode 2 answers commands through a background service, so a cold
@@ -40,6 +44,10 @@ pub struct DiscoveredRuntime {
     pub version: Option<String>,
     pub auth_state: AuthState,
     pub gateway_auth_states: BTreeMap<String, AuthState>,
+    /// Phase 5: `{label, plan, source}`, or `null` when the CLI does not say.
+    /// A row saved before this field existed reads as `null`.
+    #[serde(default)]
+    pub account: Option<AccountInfo>,
     pub status: String,
     pub capabilities: BTreeMap<String, bool>,
     #[serde(default)]
@@ -243,14 +251,16 @@ fn safe_version(output: &str) -> Option<String> {
     Some(version.to_owned())
 }
 
-async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: &[(String, String)]) -> Option<DiscoveredRuntime> {
+/// One provider's probes. Public so the account tests can drive a fake CLI
+/// through the exact discovery path.
+pub async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: &[(String, String)]) -> Option<DiscoveredRuntime> {
     let resolved = resolved?;
     let mut runtime = DiscoveredRuntime {
         id: format!("rt_{id}_{}", short_hash(&resolved.executable.to_string_lossy())),
         host_id: "host_windows_local".into(), provider: id.into(), display_name: provider_display_name(id).into(),
         protocol_family: match id { "codex" => ProtocolFamily::CodexAppServer, p if is_acp_provider(p) => ProtocolFamily::Acp, _ => ProtocolFamily::ClaudeStream },
         executable_path: resolved.executable.to_string_lossy().into_owned(), launch_args: resolved.args.clone(),
-        version: None, auth_state: AuthState::Unknown, gateway_auth_states: BTreeMap::new(),
+        version: None, auth_state: AuthState::Unknown, gateway_auth_states: BTreeMap::new(), account: None,
         status: "error".into(), capabilities: BTreeMap::new(), probe_error: None, probe_step: None,
     };
     let mut version_args = resolved.args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -277,13 +287,23 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: 
         return Some(runtime);
     }
     runtime.status = "online".into();
-    let (auth_state, gateway_auth_states, auth_error) = auth_status(id, &resolved.executable, &resolved.args, environment).await;
-    runtime.auth_state = auth_state;
-    runtime.gateway_auth_states = gateway_auth_states;
-    if let Some(error) = auth_error {
+    let sign_in = auth_status(id, &resolved.executable, &resolved.args, environment).await;
+    runtime.auth_state = sign_in.state;
+    runtime.gateway_auth_states = sign_in.gateways;
+    if let Some(error) = sign_in.error {
         runtime.probe_step = Some("Sign-in check".into());
         runtime.probe_error = Some(error.into());
     }
+    // Phase 5: who is signed in. Claude and OpenCode have already printed
+    // their answer above, so it is parsed from that text rather than asking a
+    // second time; Codex's app server is the only extra process, inside its own
+    // 10 s budget. A failure leaves `null`.
+    runtime.account = match id {
+        "claude" => sign_in.output.as_deref().and_then(account::from_claude_status),
+        "opencode" => sign_in.output.as_deref().and_then(account::from_opencode_auth_list),
+        "codex" => account::read("codex", &resolved.executable, &resolved.args, &[]).await,
+        _ => None,
+    };
     for key in ["newSession", "resume", "cancel", "permissions", "usage", "files"] {
         // A table provider runs the same ACP adapter as OpenCode, so it has the
         // same honest capabilities: sessions, turns, tools, approvals and the
@@ -302,7 +322,22 @@ pub fn provider_display_name(provider: &str) -> &'static str {
     if let Some(row) = acp_provider(provider) { return row.display_name; }
     match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" }
 }
-async fn auth_status(provider: &str, exe: &Path, args: &[String], environment: &[(String, String)]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+/// What one provider's sign-in probe learned: its state, its gateway rows, a
+/// fixed failure text, and the raw output the account read reuses.
+pub(crate) struct SignIn {
+    state: AuthState,
+    gateways: BTreeMap<String, AuthState>,
+    error: Option<&'static str>,
+    output: Option<String>,
+}
+
+impl SignIn {
+    fn new(state: AuthState, gateways: BTreeMap<String, AuthState>, error: Option<&'static str>) -> Self {
+        Self { state, gateways, error, output: None }
+    }
+}
+
+async fn auth_status(provider: &str, exe: &Path, args: &[String], environment: &[(String, String)]) -> SignIn {
     if provider == "opencode" {
         return opencode_auth_status(exe, args, environment).await;
     }
@@ -310,57 +345,62 @@ async fn auth_status(provider: &str, exe: &Path, args: &[String], environment: &
     match provider {
         "claude" => av.extend(["auth", "status"]),
         "codex" => av.extend(["login", "status"]),
-        _ => return (AuthState::Unknown, BTreeMap::new(), None),
+        _ => return SignIn::new(AuthState::Unknown, BTreeMap::new(), None),
     };
-    let out = match safe_status_output(exe, &av).await { Ok((_, text)) => text, Err(error) => return (AuthState::Unknown, BTreeMap::new(), Some(error)) };
-    if provider == "claude" {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
-            return (match v["loggedIn"].as_bool() {
-                Some(true) => AuthState::Authenticated,
-                Some(false) => AuthState::Unauthenticated,
-                None => AuthState::Unknown,
-            }, BTreeMap::new(), None);
+    let out = match safe_status_output(exe, &av).await {
+        Ok((_, text)) => text,
+        Err(error) => return SignIn::new(AuthState::Unknown, BTreeMap::new(), Some(error)),
+    };
+    let parsed = if provider == "claude" { serde_json::from_str::<serde_json::Value>(&out).ok() } else { None };
+    let state = match parsed {
+        Some(value) => match value["loggedIn"].as_bool() {
+            Some(true) => AuthState::Authenticated,
+            Some(false) => AuthState::Unauthenticated,
+            None => AuthState::Unknown,
+        },
+        None => {
+            let l = out.to_ascii_lowercase();
+            if l.contains("not logged in") || l.contains("not authenticated") {
+                AuthState::Unauthenticated
+            } else if l.contains("logged in using") || l.contains("logged in") {
+                AuthState::Authenticated
+            } else {
+                AuthState::Unknown
+            }
         }
-    }
-    let l = out.to_ascii_lowercase();
-    if l.contains("not logged in") || l.contains("not authenticated") {
-        (AuthState::Unauthenticated, BTreeMap::new(), None)
-    } else if l.contains("logged in using") || l.contains("logged in") {
-        (AuthState::Authenticated, BTreeMap::new(), None)
-    } else {
-        (AuthState::Unknown, BTreeMap::new(), None)
-    }
+    };
+    SignIn { state, gateways: BTreeMap::new(), error: None, output: Some(out) }
 }
 /// OpenCode sign-in. A CLI-free stored-credential check runs first and is the
 /// source of truth for "a credential is stored"; only when it finds nothing
 /// does the CLI get asked. OpenCode 2 answers through a background service, so
 /// the whole phase is capped at 15 s.
-async fn opencode_auth_status(exe: &Path, args: &[String], environment: &[(String, String)]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+async fn opencode_auth_status(exe: &Path, args: &[String], environment: &[(String, String)]) -> SignIn {
     // A stored credential proves a credential is stored, never that it is
     // valid; the label stays "signed in" as it does today for `stored`.
     if let Some(states) = opencode_stored_gateways(environment) {
-        return (aggregate_auth_states(&states), states, None);
+        return SignIn::new(aggregate_auth_states(&states), states, None);
     }
     let limit = Duration::from_secs(OPENCODE_SIGN_IN_TIMEOUT_SECS);
     match timeout(limit, opencode_auth_status_from_cli(exe, args)).await {
         Ok(result) => result,
-        Err(_) => (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked.")),
+        Err(_) => SignIn::new(AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked.")),
     }
 }
-async fn opencode_auth_status_from_cli(exe: &Path, args: &[String]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
+async fn opencode_auth_status_from_cli(exe: &Path, args: &[String]) -> SignIn {
     let limit = Duration::from_secs(OPENCODE_SIGN_IN_TIMEOUT_SECS);
     let mut av = args.iter().map(String::as_str).collect::<Vec<_>>();
     av.extend(["auth", "list"]);
     if let Ok((true, output)) = safe_status_output_within(exe, &av, limit).await {
         if let Some(states) = parse_opencode_auth_list(&output) {
-            return (aggregate_auth_states(&states), states, None);
+            return SignIn { state: aggregate_auth_states(&states), gateways: states, error: None, output: Some(output) };
         }
         // A successful `auth list` that printed integration rows we could
         // not classify is still evidence that the command ran; report the
         // unknown state quietly instead of a checked-and-failed probe. The
         // row text itself never leaves this function.
         if opencode_auth_list_has_recognized_rows(&output) {
-            return (AuthState::Unknown, BTreeMap::new(), None);
+            return SignIn { state: AuthState::Unknown, gateways: BTreeMap::new(), error: None, output: Some(output) };
         }
     }
     // v1 `models --verbose` still exposes gateway JSON. A non-zero exit
@@ -370,7 +410,7 @@ async fn opencode_auth_status_from_cli(exe: &Path, args: &[String]) -> (AuthStat
     if let Ok((true, output)) = safe_status_output_within(exe, &verbose_args, limit).await {
         let states = opencode_model_gateways(&output);
         if !states.is_empty() {
-            return (aggregate_auth_states(&states), states, None);
+            return SignIn::new(aggregate_auth_states(&states), states, None);
         }
     }
     // v2 `models` (no flags) prints one `provider/model` per line. A
@@ -381,10 +421,10 @@ async fn opencode_auth_status_from_cli(exe: &Path, args: &[String]) -> (AuthStat
     model_args.push("models");
     if let Ok((true, output)) = safe_status_output_within(exe, &model_args, limit).await {
         if opencode_plain_model_listing_names_a_gateway(&output) {
-            return (AuthState::Unknown, BTreeMap::new(), None);
+            return SignIn::new(AuthState::Unknown, BTreeMap::new(), None);
         }
     }
-    (AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked."))
+    SignIn::new(AuthState::Unknown, BTreeMap::new(), Some("Sign-in status could not be checked."))
 }
 /// The four environment variables the OpenCode data-dir rules honour, in the
 /// same shape the daemon's quota reader uses. Nothing else is read.
@@ -931,7 +971,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_v2_auth_list_row_signs_in_on_the_calling_path() {
         let command = auth_fixture("OpenCode Console  Default                     stored");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
+        let SignIn { state, gateways, error, .. } = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Authenticated));
         assert_eq!(gateways.len(), 1);
         assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
@@ -940,7 +980,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_v2_auth_list_unknown_status_is_a_quiet_unknown() {
         let command = auth_fixture("OpenCode Console  Default  mystery-state");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
+        let SignIn { state, gateways, error, .. } = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Unknown));
         assert!(gateways.is_empty());
         assert!(error.is_none());
@@ -956,7 +996,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_go_plain_models_is_a_quiet_unknown_not_a_sign_in() {
         let command = auth_fixture("opencode-go/glm-5.2");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
+        let SignIn { state, gateways, error, .. } = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Unknown), "a model listing is not proof of sign-in");
         assert!(gateways.is_empty());
         assert!(error.is_none());
@@ -964,7 +1004,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_zen_only_plain_models_is_a_quiet_unknown() {
         let command = auth_fixture("opencode/big-pickle");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
+        let SignIn { state, gateways, error, .. } = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Unknown));
         assert!(gateways.is_empty());
         assert!(error.is_none());
@@ -1056,7 +1096,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 30".into()],
         };
         let result = timeout(Duration::from_secs(2), auth_status("opencode", &command.executable, &command.args, &environment)).await;
-        let (state, gateways, error) = result.expect("a stored credential must not wait on a slow CLI");
+        let SignIn { state, gateways, error, .. } = result.expect("a stored credential must not wait on a slow CLI");
         assert!(matches!(state, AuthState::Authenticated));
         assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
         assert!(error.is_none());
@@ -1065,7 +1105,7 @@ mod tests {
     #[tokio::test]
     async fn opencode_presence_check_without_a_credential_falls_through_to_the_cli() {
         let command = auth_fixture("OpenCode Console  Default  stored");
-        let (state, gateways, error) = auth_status("opencode", &command.executable, &command.args, &[]).await;
+        let SignIn { state, gateways, error, .. } = auth_status("opencode", &command.executable, &command.args, &[]).await;
         assert!(matches!(state, AuthState::Authenticated));
         assert!(matches!(gateways.get("opencode"), Some(AuthState::Authenticated)));
         assert!(error.is_none());

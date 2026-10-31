@@ -387,6 +387,8 @@ async fn export(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         "memory": memory,
         "skills": skills,
         "automations": automations,
+        // Phase 5: custom model names hold no secret, so a backup carries them.
+        "customModels": st.db.custom_model_all().unwrap_or_default(),
         "settings": settings,
     });
     let mut document = build_document(contents)?;
@@ -653,6 +655,16 @@ async fn import(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let projects = st.db.project_list().map_err(agent_error)?;
     let empty = Vec::new();
     let bots = contents["bots"].as_array().unwrap_or(&empty);
+
+    // Phase 5: a custom model holds no secret and is just a name, so a restore
+    // puts back any the host does not already have (same provider and id).
+    for model in contents["customModels"].as_array().unwrap_or(&empty) {
+        let (Some(provider), Some(model_id)) = (model["provider"].as_str(), model["modelId"].as_str()) else { continue };
+        let already = st.db.custom_model_list(provider).map_err(agent_error)?.iter().any(|row| row["modelId"] == model_id);
+        if already { continue; }
+        let efforts = model["efforts"].as_array().map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
+        let _ = st.db.custom_model_save(None, provider, model_id, model["label"].as_str(), &efforts);
+    }
 
     // Bots.
     let mut plan_bots = Vec::new();

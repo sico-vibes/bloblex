@@ -37,6 +37,8 @@ use std::sync::Mutex as StdMutex;
 use uuid::Uuid;
 
 mod catalog;
+mod accounts;
+mod custom_models;
 mod diagnostics;
 mod fanout;
 mod issue_report;
@@ -1039,6 +1041,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let refs = match fields.get("envRefs") { None => None, Some(value) => Some(secrets::parse_refs(value)?) };
             fields.as_object_mut().unwrap().remove("envRefs");
             let runtime_id = fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or("")).to_owned();
+            // Phase 5: the account must exist and belong to this bot's provider.
+            if let Some(account) = fields["accountId"].as_str() {
+                accounts::check_bot_account(st, Some(account), Some(&runtime_id)).await?;
+            }
             let mut effective = existing.clone();
             if let (Some(dst), Some(src)) = (effective.as_object_mut(), fields.as_object()) { for (key, value) in src { dst.insert(key.clone(), value.clone()); } }
             if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned() {
@@ -1563,6 +1569,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 )
             })
             .map(|_| json!({"deleted":true})),
+        // Phase 5: named account folders.
+        m if m.starts_with("account.") => accounts::dispatch(st, m, &p).await,
+        // Phase 5: the owner's own model names.
+        m if m.starts_with("model.custom.") => custom_models::dispatch(st, m, &p).await,
         "settings.get" => st.db.settings().map_err(|e| {
             derr(
                 "internal",
@@ -1815,7 +1825,16 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
     let project_mode=session["projectId"].as_str().and_then(|id|st.db.project_get(id).ok()).and_then(|project|crate::shared_settings::effective_overrides(st,&project)["approvalMode"].as_str().map(str::to_owned));
     let mut options = if let Some(agent_id)=session["agentId"].as_str() {
         let a=st.db.agent_get(agent_id).map_err(agent_error)?;
-        let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
+        let mut env: std::collections::BTreeMap<String,String>=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
+        // Phase 5: a bot on a named account gets that account's environment, so
+        // its provider process reads that folder. `options.env` is part of the
+        // shared-process key in the Codex and ACP adapters, so two bots on
+        // different accounts never share one process.
+        if let Some(account)=a["accountId"].as_str().and_then(|id|st.db.account_get(id).ok().flatten()){
+            if let (Some(provider),Some(dir))=(account["provider"].as_str(),st.team.data_dir.lock().ok().and_then(|d|d.clone())){
+                if let Some(folder)=accounts::account_folder(&dir,account["id"].as_str().unwrap_or("")){for (name,value) in accounts::account_environment(provider,&folder){env.insert(name,value);}}
+            }
+        }
         let mode=project_mode.as_deref().or(a["approvalMode"].as_str()).unwrap_or(&default);
         ExecOptions{plan_mode:false,mcp_servers:Vec::new(),approval_mode:parse_mode(mode),model:a["model"].as_str().map(str::to_owned),thinking:a["thinking"].as_str().map(str::to_owned),service_tier:a["serviceTier"].as_str().map(str::to_owned),enable_workflows:session["provider"]=="claude"&&st.db.settings().map(|settings|claude_workflows_enabled(&settings)).unwrap_or(true),instructions:a["instructions"].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned),extra_args:a["customArgs"].as_array().map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),env,max_concurrency:a["maxConcurrency"].as_u64().unwrap_or(1) as u32}
     } else { ExecOptions{approval_mode:parse_mode(project_mode.as_deref().unwrap_or(&default)),max_concurrency:4,..ExecOptions::default()} };
@@ -2111,6 +2130,8 @@ async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError
     catalog["stale"] = json!(served.stale);
     catalog["cachedAt"] = json!(served.cached_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     if p.get("sessionId").is_none() { migrate_legacy_agent_models(st, id, &catalog).await?; }
+    // Phase 5: the owner's own model names join the catalog, after its own.
+    custom_models::append_to(st, &mut catalog, runtime["provider"].as_str().unwrap_or(""));
     Ok(catalog)
 }
 async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) -> Result<(), DispatchError> {
@@ -2144,6 +2165,10 @@ async fn agent_create_from_rpc(st: &AppState, mut fields: Value) -> Result<Value
         object.entry("approvalMode").or_insert_with(|| json!("bypass"));
     }
     let runtime_id = fields["runtimeId"].as_str().ok_or_else(|| derr("invalid_argument", "runtimeId is required", StatusCode::BAD_REQUEST))?.to_owned();
+    // Phase 5: the account must exist and belong to this bot's provider.
+    if let Some(account) = fields["accountId"].as_str() {
+        accounts::check_bot_account(st, Some(account), Some(&runtime_id)).await?;
+    }
     if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id.as_str()).cloned() {
         if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
             let catalog = served.value;

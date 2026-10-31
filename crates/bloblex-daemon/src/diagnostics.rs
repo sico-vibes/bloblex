@@ -401,6 +401,13 @@ fn readme() -> String {
 
 async fn environment(st: &AppState) -> Value {
     let runtimes = st.runtimes.read().await;
+    environment_document(&runtimes)
+}
+
+/// The provider facts the export may carry: name, version and status. Who is
+/// signed in — an email, on Phase 5's `account` field — is never diagnostics
+/// material, so it is not copied here.
+fn environment_document(runtimes: &[Value]) -> Value {
     let agents: Vec<Value> = runtimes
         .iter()
         .map(|runtime| {
@@ -590,6 +597,32 @@ mod tests {
         assert!(out.contains("120") && out.contains("40") && out.contains("90"), "usage counters survive: {out}");
         assert!(!out.contains("SECRETACCESS"), "{out}");
         assert!(!out.contains("abc123def456"), "a commit hash is not a secret but is also not allowlisted: {out}");
+    }
+
+    /// Phase 5: an email is not diagnostics material. The export's environment
+    /// document lists only each provider's name, version and status, and the
+    /// event copy drops everything outside its allowlist, so the account on a
+    /// runtime row reaches neither file.
+    #[test]
+    fn the_account_stays_out_of_a_diagnostics_bundle() {
+        let runtimes = vec![json!({
+            "id": "rt_claude_1",
+            "provider": "claude",
+            "displayName": "Claude Code",
+            "version": "2.1.314",
+            "status": "online",
+            "authState": "authenticated",
+            "account": {"label": "owner@example.com", "plan": "pro", "source": "claude auth status"},
+        })];
+        let out = environment_document(&runtimes).to_string();
+        assert!(!out.contains("owner@example.com"), "the sign-in label must not be exported: {out}");
+        assert!(!out.contains('@'), "{out}");
+        assert!(!out.contains("claude auth status"), "the source names a command, not diagnostics material: {out}");
+        assert!(out.contains("2.1.314"), "the version is diagnostics material: {out}");
+        let event = json!({"type": "runtime.changed", "payload": {"runtimes": runtimes}});
+        let scrubbed = scrub_events(&event).to_string();
+        assert!(!scrubbed.contains("owner@example.com"), "an event copy must not carry the account: {scrubbed}");
+        assert!(!scrubbed.contains('@'), "{scrubbed}");
     }
 
     #[test]

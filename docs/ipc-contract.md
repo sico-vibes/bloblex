@@ -614,3 +614,38 @@ The call **waits** for the owner for up to 50 seconds (the team bridge's limit i
 - On an answer the value goes to `<data>/one-use/<id>`, created empty, restricted to the current user, and only then written. The tool result names that path and nothing else. The file is deleted when the turn ends, and the folder is emptied at startup. The conversation gets the notice "You gave Rae NAME for this turn."
 - The bot can read the file, and what it does with the value is up to it.
 
+
+## Phase 5: accounts (31 October 2026)
+
+**Who is signed in.** Every `runtime.list` row gains `account: {label, plan, source} | null`: who the provider's CLI says is signed in, read only from that CLI's own output during runtime discovery, with a 10-second limit that kills the process. `label` is an email or account name (`null` when the CLI does not say), `plan` is the plan name (`null` when it does not say), and `source` is fixed text naming the command: `claude auth status`, `codex app-server account/read`, or `opencode auth list`. A failed, timed-out or unrecognised answer is `account: null`, and a row saved before this field reads as `null`. No token or credential file is opened for it: the usage-bar exception in `AGENTS.md` does not cover this field.
+
+- **Claude Code:** `claude auth status` prints one JSON object; `label` is `email` and `plan` is `subscriptionType` (real example: `pro`), taken only when `loggedIn` is `true`.
+- **Codex:** the app server's `account/read` (initialize, then `account/read`, skipping the `account/updated` notification it sends first). A ChatGPT account gives `email` and `planType` (real example: `plus`); an API-key or hosted account answers with both fields `null`.
+- **OpenCode:** `opencode auth list` lists integrations (`OpenCode Go  API key  stored`) and names no person, so both fields are `null`. A person is only reported when a row carries an explicit `email`/`account`/`username` field, or an email-shaped value; a `label` field is the credential kind and is never used.
+
+`account` is sent to paired devices at `viewer` (the owner sees it on a phone too) and is pinned by the `runtime-list-account` golden in `apps/desktop/src/remote/fixtures/policy-goldens.json`.
+
+### Several accounts per provider (31 October 2026)
+
+An account is a named config folder for one provider. The default account is the CLI's own folder: it has no row, cannot be deleted, and is what a bot uses when its `accountId` is `null`. Table `accounts(id, provider, name, created_at)` in `crates/bloblex-storage/src/phase5.rs`; the folder is `<data>/accounts/<id>`, created user-only, and every path is built by `accounts::account_folder`, so a delete can only ever remove a folder inside `<data>/accounts`. The environment table is one function: Claude `CLAUDE_CONFIG_DIR`, Codex `CODEX_HOME`, OpenCode `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, all pointing at the account's own folder. Nothing here reads a token or a credential file.
+
+- **`account.list {}`** gives `{accounts: [{id, provider, name, signedIn, label, plan, bots}]}`. It **never runs a CLI**: `label`, `plan` and `signedIn` come from memory, last written by `account.check` (or the check after `account.create`), and an account not yet checked is `signedIn: false` with both fields `null`. `bots` is how many bots point at it.
+- **`account.create {provider, name}`** gives `{account}`. `provider` must be `claude`, `codex` or `opencode`; `name` is 1 to 60 characters. It creates the folder, sets it user-only, and runs one check so the first `list` has an answer.
+- **`account.rename {id, name}`** renames the row only; the folder keeps its id.
+- **`account.delete {id, confirm}`**: no `confirm: true` is `invalid_argument`; a turn running on one of its bots is `conflict` and keeps the folder; otherwise the bots go back to the default account and the folder is removed.
+- **`account.signIn {id}`** gives `{command}`: one PowerShell line with the environment set for that command only, for example `$env:CLAUDE_CONFIG_DIR='<folder>'; claude auth login`. The folder is quoted with single quotes and an inner quote is doubled. It holds no secret.
+- **`account.check {id}`** asks the CLI again and remembers the answer, so a later `list` is instant.
+- All six are `tiers.json` class `never`: an account is a host-side folder, and the sign-in command is for the owner to run. Usage bars keep reading the default account only; the quota reader never consults `accounts`.
+
+**Bots.** `agent.accountId` is a string or `null`, through `agent.create` and `agent.update` and readable in `agent.list`. An id that does not exist, or that belongs to another provider than the bot's runtime, is `invalid_argument`. It never travels in a backup (`backup::export_bot` is an allowlist that does not name it) or in a handoff, which carries that same bot export: a restored or moved bot gets `null` and lands on the default account. At spawn the account's variables join `options.env` beside `customEnv`; `options.env` is part of the shared-process key in the Codex and ACP adapters, so two bots on different accounts get separate provider processes, and Claude spawns per conversation anyway.
+
+### Custom models (31 October 2026)
+
+A custom model is a name the owner typed for a model a provider's catalog does not list. Table `custom_models(id, provider, model_id, label, efforts_json, created_at)` in `crates/bloblex-storage/src/phase5.rs`, unique on `(provider, model_id)`. It holds no secret, never enters a catalog cache, and a restored one is just a name.
+
+- **`model.custom.list {provider}`** gives `{models}`; `provider` must be `claude`, `codex` or `opencode`.
+- **`model.custom.save {id, provider, modelId, label, efforts}`** gives `{model}`. Without `id` it creates; with a known `id` it updates. `modelId` is 1 to 200 characters with no whitespace, `label` at most 80, `efforts` at most 8 strings of at most 24 characters. A second name for the same provider and model id is `conflict`, and so is an id the provider's **cached** catalog already lists — a save never polls a provider.
+- **`model.custom.delete {id}`** gives `{deleted: true}`, or `not_found`.
+- `runtime.models` merges them **after** the catalog's own entries, each with `source: "custom"`; the rest of that reply is unchanged.
+- A bot picks one as its `model` and the turn passes it to the CLI unchanged; a name the CLI refuses fails that turn in the normal way.
+- All three are `tiers.json` class `never`. A backup carries them in `contents.customModels`, and an import puts back any the host does not already have: nothing about them is sensitive.

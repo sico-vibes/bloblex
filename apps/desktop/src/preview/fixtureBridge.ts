@@ -503,6 +503,9 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   }
   if (method === 'remote.push.get') return { enabled: fixturePushOn, publicKey: 'preview', devices: 0 } as T
   if (method === 'remote.push.set') { fixturePushOn = params.enabled === true; return { enabled: fixturePushOn } as T }
+  if (method === 'automation.webhook.enable' || method === 'automation.webhook.rotate') return { url: 'https://example.ts.net/api/hook/' + String(params.id), secret: 'preview-secret-shown-once', webhook: { enabled: true, includeBody: false } } as T
+  if (method === 'automation.webhook.update') return { webhook: { enabled: true, includeBody: params.includeBody === true } } as T
+  if (method === 'automation.webhook.disable') return { webhook: { enabled: false, includeBody: false } } as T
   if (method === 'account.list') return { accounts: fixtureAccounts } as T
   if (method === 'account.create') { const account = { id: `preview-account-${fixtureAccounts.length + 1}`, provider: String(params.provider), name: String(params.name), signedIn: false, label: null, plan: null, bots: 0 }; fixtureAccounts = [...fixtureAccounts, account]; return { account } as T }
   if (method === 'account.rename') { fixtureAccounts = fixtureAccounts.map((item) => item.id === params.id ? { ...item, name: String(params.name) } : item); return { ok: true } as T }

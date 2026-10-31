@@ -26,3 +26,12 @@
 .bot-secret code { color: var(--text-1); font: var(--fs-2xs) var(--font-mono); }
 .bot-secret > span { flex: 1; min-width: 0; color: var(--text-3); }
 .bot-secret-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; padding: 8px 12px; }
+
+/* Phase 6: a schedule's webhook. */
+.webhook-panel { display: grid; gap: 6px; margin: 6px 0; }
+.webhook-toggle { display: inline-flex; align-items: center; gap: 5px; justify-self: start; }
+.webhook-body { display: grid; gap: 8px; padding: 10px; color: var(--text-2); font-size: var(--fs-xs); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.webhook-body p { margin: 0; }
+.webhook-line { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--fs-2xs); }
+.webhook-line code { overflow-x: auto; padding: 4px 6px; color: var(--text-1); white-space: nowrap; border-radius: var(--radius-sm); background: var(--surface-hover); font: var(--fs-2xs) var(--font-mono); }
+.webhook-actions { display: flex; gap: 6px; }

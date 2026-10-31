@@ -2,6 +2,7 @@
 // morning, brief me on the news"). The daemon owns the timer and the runs;
 // this view lists them and edits their definition.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { WebhookPanel, type WebhookState } from './WebhookPanel'
 import { ArrowLeft, CalendarClock, ChevronDown, Mail, Newspaper, Pencil, Play, Plus, Trash2, FlaskConical, GitBranch } from 'lucide-react'
 import type { Agent, Automation, AutomationRun } from '../types'
 import { rpcFailure } from '../executionContract'
@@ -243,6 +244,7 @@ function ScheduleCard({ automation, agent, nowMs, busy, onToggle, onRunNow, onEd
       {needsManualRetry(last) && !automation.running && <button type="button" className="queue-link" disabled={busy} onClick={onRunNow}>Retry now</button>}</p>}
     {open && <div className="schedule-history">
       <p className="schedule-prompt" title={automation.prompt}>{automation.prompt}</p>
+      <WebhookPanel automationId={automation.id} name={automation.name} webhook={automation.webhook as WebhookState | undefined} onChanged={() => undefined} />
       {runsError && <p className="schedules-problem" role="alert">{runsError}</p>}
       {!runsError && runs === null && <p className="blob-muted">Loading…</p>}
       {runs && runs.length === 0 && <p className="blob-muted">No runs yet.</p>}

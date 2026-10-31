@@ -6,11 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, Project, Session } from '../types'
 
 vi.mock('./openSafeLink', () => ({ openSafeLink: vi.fn() }))
-vi.mock('../tauri', () => ({ inDesktop: true, rpc: vi.fn(), openExternal: vi.fn(), revealInExplorer: vi.fn() }))
+const rpc = vi.fn()
+vi.mock('../tauri', () => ({ inDesktop: true, rpc: (...args: unknown[]) => rpc(...args), openExternal: vi.fn(), revealInExplorer: vi.fn() }))
 
 import { VisualFrame, VisualReply, visualDocument, visualFence } from './VisualReply'
 import { terminalLinks } from './terminalLinks'
 import { botCommands } from './BotCommands'
+import { WebhookPanel } from './WebhookPanel'
 import { SETTLE_AFTER_MS, groupBotsByProject, hasSettled, settleOrder, sortBots } from './sidebarOrder'
 
 let root: Root | null = null
@@ -22,7 +24,7 @@ beforeEach(() => {
   document.body.append(host)
   root = createRoot(host)
 })
-afterEach(async () => { await act(async () => { root?.unmount() }); root = null; host.remove() })
+afterEach(async () => { await act(async () => { root?.unmount() }); root = null; host.remove(); document.body.innerHTML = '' })
 
 describe('visual replies', () => {
   it('only a bitbots-visual fence opens drawn', () => {
@@ -64,6 +66,52 @@ describe("the bot's commands", () => {
   })
   it('has nothing for no conversation', () => {
     expect(botCommands(null)).toEqual([])
+  })
+})
+
+describe('a schedule webhook', () => {
+  const click = async (label: string) => { await act(async () => { [...document.querySelectorAll('button')].find((item) => item.textContent?.trim() === label)!.click() }); await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
+  beforeEach(() => rpc.mockReset())
+
+  it('asks first, shows the secret once, and forgets it when turned off', async () => {
+    rpc.mockImplementation(async (method: string) => method === 'automation.webhook.enable'
+      ? { url: 'https://host/api/hook/a', secret: 'shh-once', webhook: { enabled: true, includeBody: false } }
+      : { webhook: { enabled: false, includeBody: false } })
+    await render(<WebhookPanel automationId="a" name="Nightly" onChanged={vi.fn()} />)
+    await click('Start from a webhook')
+    await click('Turn on')
+    expect(rpc).not.toHaveBeenCalled()
+    const confirm = [...document.querySelectorAll('[role="dialog"] button, [role="alertdialog"] button')].find((item) => item.textContent?.trim() === 'Turn on') as HTMLButtonElement
+    await act(async () => { confirm.click() })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(rpc).toHaveBeenCalledWith('automation.webhook.enable', { id: 'a', includeBody: false, confirm: true })
+    expect(document.body.textContent).toContain('shh-once')
+    expect(document.body.textContent).toContain("It won't be shown again.")
+    await click('Turn off')
+    expect(rpc).toHaveBeenCalledWith('automation.webhook.disable', { id: 'a' })
+    expect(document.body.textContent).not.toContain('shh-once')
+  })
+
+  it('an existing webhook shows no secret, and rotating asks first', async () => {
+    rpc.mockResolvedValue({ url: 'https://host/api/hook/a', secret: 'new-one', webhook: { enabled: true, includeBody: false } })
+    await render(<WebhookPanel automationId="a" name="Nightly" webhook={{ enabled: true, includeBody: false, url: 'https://host/api/hook/a' }} onChanged={vi.fn()} />)
+    await click('Webhook on')
+    expect(document.body.textContent).toContain('https://host/api/hook/a')
+    expect(document.body.textContent).toContain('Rotate it')
+    await click('Rotate the secret')
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it('leaves the body out unless asked', async () => {
+    rpc.mockResolvedValue({ webhook: { enabled: true, includeBody: true } })
+    await render(<WebhookPanel automationId="a" name="Nightly" webhook={{ enabled: true, includeBody: false }} onChanged={vi.fn()} />)
+    await click('Webhook on')
+    expect(document.body.textContent).toContain('Turn Remote on')
+    const box = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    expect(box.checked).toBe(false)
+    await act(async () => { box.click() })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(rpc).toHaveBeenCalledWith('automation.webhook.update', { id: 'a', includeBody: true })
   })
 })
 

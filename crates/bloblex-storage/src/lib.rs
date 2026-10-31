@@ -608,6 +608,8 @@ fn ensure_automation_schema(c: &Connection) -> Result<(), StorageError> {
         last_run_at TEXT,
         consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK(consecutive_failures>=0),
         pause_reason TEXT,
+        webhook_enabled INTEGER NOT NULL DEFAULT 0 CHECK(webhook_enabled IN (0,1)),
+        webhook_include_body INTEGER NOT NULL DEFAULT 0 CHECK(webhook_include_body IN (0,1)),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -626,6 +628,16 @@ fn ensure_automation_schema(c: &Connection) -> Result<(), StorageError> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_runs_single_flight ON automation_runs(automation_id) WHERE status='running';
     CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id,started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_automation_runs_session ON automation_runs(session_id);")?;
+    // Phase 5, section 8: an automation may also be started by a signed webhook.
+    // Additive and idempotent, like the other schemas, so an older database that
+    // already has the table gains the columns on open.
+    for (column, ddl) in [
+        ("webhook_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(webhook_enabled IN (0,1))"),
+        ("webhook_include_body", "INTEGER NOT NULL DEFAULT 0 CHECK(webhook_include_body IN (0,1))"),
+    ] {
+        let present: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('automations') WHERE name=?1)", [column], |r| r.get(0))?;
+        if !present { c.execute_batch(&format!("ALTER TABLE automations ADD COLUMN {column} {ddl};"))?; }
+    }
     Ok(())
 }
 
@@ -1629,7 +1641,7 @@ fn automation_run_dto(c: &Connection, id: &str) -> Result<Value, StorageError> {
 fn automation_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
     let row = c
         .query_row(
-            "SELECT id,agent_id,name,prompt,schedule_kind,cron,timezone,once_at,session_mode,approval_mode,max_runtime_secs,enabled,created_by,reuse_session_id,next_run_at,last_run_at,consecutive_failures,pause_reason,created_at,updated_at FROM automations WHERE id=?1",
+            "SELECT id,agent_id,name,prompt,schedule_kind,cron,timezone,once_at,session_mode,approval_mode,max_runtime_secs,enabled,created_by,reuse_session_id,next_run_at,last_run_at,consecutive_failures,pause_reason,created_at,updated_at,webhook_enabled,webhook_include_body FROM automations WHERE id=?1",
             [id],
             |r| Ok((
                 r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
@@ -1637,11 +1649,12 @@ fn automation_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
                 r.get::<_, String>(8)?, r.get::<_, String>(9)?, r.get::<_, i64>(10)?, r.get::<_, bool>(11)?,
                 r.get::<_, String>(12)?, r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?,
                 r.get::<_, i64>(16)?, r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, String>(19)?,
+                r.get::<_, bool>(20)?, r.get::<_, bool>(21)?,
             )),
         )
         .optional()?
         .ok_or(StorageError::AgentNotFound)?;
-    let (id, agent_id, name, prompt, schedule_kind, cron, timezone, once_at, session_mode, approval_mode, max_runtime_secs, enabled, created_by, reuse_session_id, next_run_at, last_run_at, consecutive_failures, pause_reason, created_at, updated_at) = row;
+    let (id, agent_id, name, prompt, schedule_kind, cron, timezone, once_at, session_mode, approval_mode, max_runtime_secs, enabled, created_by, reuse_session_id, next_run_at, last_run_at, consecutive_failures, pause_reason, created_at, updated_at, webhook_enabled, webhook_include_body) = row;
     let running: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM automation_runs WHERE automation_id=?1 AND status='running')", [&id], |r| r.get(0))?;
     let last_run_id: Option<String> = c.query_row("SELECT id FROM automation_runs WHERE automation_id=?1 ORDER BY started_at DESC,id DESC LIMIT 1", [&id], |r| r.get(0)).optional()?;
     let mut dto = json!({
@@ -1650,6 +1663,7 @@ fn automation_read(c: &Connection, id: &str) -> Result<Value, StorageError> {
         "sessionMode":session_mode,"approvalMode":approval_mode,"maxRuntimeSecs":max_runtime_secs,"enabled":enabled,
         "createdBy":created_by,"reuseSessionId":reuse_session_id,"nextRunAt":next_run_at,"lastRunAt":last_run_at,
         "consecutiveFailures":consecutive_failures,"pauseReason":pause_reason,"running":running,
+        "webhook":{"enabled":webhook_enabled,"includeBody":webhook_include_body},
         "createdAt":created_at,"updatedAt":updated_at,
     });
     if let Some(last) = last_run_id {
@@ -5181,6 +5195,22 @@ impl Storage {
             c.execute("UPDATE automations SET enabled=?2,pause_reason=?3,updated_at=?4 WHERE id=?1", params![id, enabled, pause_reason, now])?
         };
         if changed == 0 { return Err(StorageError::AgentNotFound); }
+        automation_read(&c, id)
+    }
+
+    /// Turn an automation's webhook on or off (Phase 5, section 8). The signing
+    /// secret is not stored here: it lives in the credential store. Disabling
+    /// clears `includeBody` too, so a later enable starts from the safe default.
+    pub fn automation_webhook_set(&self, id: &str, enabled: bool, include_body: bool) -> Result<Value, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let include_body = enabled && include_body;
+        if c.execute(
+            "UPDATE automations SET webhook_enabled=?2,webhook_include_body=?3,updated_at=?4 WHERE id=?1",
+            params![id, enabled, include_body, now],
+        )? == 0 {
+            return Err(StorageError::AgentNotFound);
+        }
         automation_read(&c, id)
     }
 

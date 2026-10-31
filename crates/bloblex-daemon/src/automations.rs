@@ -79,6 +79,15 @@ impl Automations {
     }
 }
 
+/// A run's approval mode. An automation is only ever `plan` or `auto`, so nothing
+/// a webhook (or anything else) sends can put a run in `bypass`.
+pub(crate) fn run_mode(approval: Option<&str>) -> &'static str {
+    match approval {
+        Some("plan") => "plan",
+        _ => "auto",
+    }
+}
+
 fn now_utc() -> DateTime<Utc> {
     Utc::now()
 }
@@ -102,7 +111,8 @@ fn automation_error(error: bloblex_storage::StorageError) -> DispatchError {
     }
 }
 
-async fn emit_changed(st: &AppState, automation: &Value) {
+pub(crate) async fn emit_changed(st: &AppState, automation: &Value) {
+    let automation = crate::webhooks::with_block(st, automation.clone());
     st.emit("automation.changed", json!({"automation": automation})).await;
 }
 
@@ -162,17 +172,24 @@ async fn agent_has_live_user_turn(st: &AppState, agent_id: &str) -> bool {
 /// Start a run. `advance` is false for `automation.run_now`, which must not move
 /// `next_run_at`. Returns the new run DTO.
 async fn start_run(st: &AppState, automation: &Value, scheduled_for: &str, advance: bool) -> Result<Value, DispatchError> {
+    start_run_with(st, automation, scheduled_for, advance, None).await
+}
+
+/// The same run with a webhook request body appended to the prompt. The body is
+/// someone else's input, so it reaches the prompt only as inert quoted data
+/// (Phase 5, section 8; THREAT_MODEL §18).
+async fn start_run_with(st: &AppState, automation: &Value, scheduled_for: &str, advance: bool, body: Option<&str>) -> Result<Value, DispatchError> {
     let automation_id = automation["id"].as_str().unwrap_or("").to_owned();
     let Some(_claim) = st.automations.claim_start(&automation_id) else {
         return Err(derr("conflict", "This automation is already starting.", StatusCode::CONFLICT));
     };
     let agent_id = automation["agentId"].as_str().unwrap_or("").to_owned();
     let name = automation["name"].as_str().unwrap_or("Automation").to_owned();
-    let prompt = automation["prompt"].as_str().unwrap_or("").to_owned();
-    let mode = match automation["approvalMode"].as_str() {
-        Some("plan") => "plan",
-        _ => "auto",
-    };
+    let mut prompt = automation["prompt"].as_str().unwrap_or("").to_owned();
+    if let Some(body) = body {
+        prompt = crate::webhooks::prompt_with_body(&prompt, body);
+    }
+    let mode = run_mode(automation["approvalMode"].as_str());
     let session_mode = automation["sessionMode"].as_str().unwrap_or("new");
     let agent = st.db.agent_get(&agent_id).map_err(automation_error)?;
     if agent["archived"] == true {
@@ -441,6 +458,29 @@ async fn run_now(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     Ok(json!({"run": run}))
 }
 
+/// One run started by a signed webhook (Phase 5, section 8). The fences are the
+/// scheduler's own: the global pause, the concurrency limit, single flight, and
+/// the automation's `plan`/`auto` mode, which `start_run` clamps. `Ok(None)`
+/// means nothing ran, which the route answers exactly as it answers a run.
+pub async fn webhook_run(st: &AppState, automation: &Value, body: Option<&str>) -> Result<Option<Value>, DispatchError> {
+    let id = automation["id"].as_str().unwrap_or("");
+    let settings = st.db.settings().unwrap_or(Value::Null);
+    if settings["automations.paused"] == true || automation["enabled"] != true {
+        return Ok(None);
+    }
+    if st.db.automation_run_running_for(id).map_err(automation_error)?.is_some() {
+        return Ok(None);
+    }
+    let max_concurrent = settings["automations.maxConcurrent"].as_u64().unwrap_or(1).clamp(1, 3) as i64;
+    let running = st.db.automation_running_count().unwrap_or(0);
+    let global = st.active_turns.lock().await.len() as i64;
+    if running >= max_concurrent || global >= 4 {
+        return Ok(None);
+    }
+    let run = start_run_with(st, automation, &fmt(now_utc()), false, body).await?;
+    Ok(Some(run))
+}
+
 fn preview(p: &Value) -> Result<Value, DispatchError> {
     let schedule = bloblex_storage::cron::parse_schedule(&p["schedule"], None).map_err(automation_error)?;
     let count = match p.get("count") {
@@ -459,38 +499,41 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
         "automation.create" => {
             let automation = st.db.automation_create(p).map_err(automation_error)?;
             emit_changed(st, &automation).await;
-            Ok(json!({"automation": automation}))
+            Ok(json!({"automation": crate::webhooks::with_block(st, automation)}))
         }
         "automation.list" => {
             let automation_list = st.db.automation_list(p["agentId"].as_str()).map_err(automation_error)?;
-            Ok(json!({"automations": automation_list}))
+            Ok(json!({"automations": automation_list.into_iter().map(|item| crate::webhooks::with_block(st, item)).collect::<Vec<_>>()}))
         }
         "automation.get" => {
             let id = p["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
-            Ok(json!({"automation": st.db.automation_get(id).map_err(automation_error)?}))
+            Ok(json!({"automation": crate::webhooks::with_block(st, st.db.automation_get(id).map_err(automation_error)?)}))
         }
         "automation.update" => {
             let id = p["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
             let automation = st.db.automation_update(id, p).map_err(automation_error)?;
             emit_changed(st, &automation).await;
-            Ok(json!({"automation": automation}))
+            Ok(json!({"automation": crate::webhooks::with_block(st, automation)}))
         }
         "automation.pause" => {
             let id = p["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
             let automation = st.db.automation_pause(id).map_err(automation_error)?;
             st.automations.forget(id);
             emit_changed(st, &automation).await;
-            Ok(json!({"automation": automation}))
+            Ok(json!({"automation": crate::webhooks::with_block(st, automation)}))
         }
         "automation.resume" => {
             let id = p["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
             let automation = st.db.automation_resume(id).map_err(automation_error)?;
             emit_changed(st, &automation).await;
-            Ok(json!({"automation": automation}))
+            Ok(json!({"automation": crate::webhooks::with_block(st, automation)}))
         }
         "automation.delete" => {
             let id = p["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| derr("invalid_argument", "id is required", StatusCode::BAD_REQUEST))?;
             st.db.automation_delete(id).map_err(automation_error)?;
+            // Phase 5, section 8: the webhook secret goes with the automation, so
+            // an id that is recreated later never inherits a live secret.
+            let _ = crate::secrets::store::delete(&crate::webhooks::secret_name(id));
             st.automations.forget(id);
             st.emit("automation.deleted", json!({"id": id})).await;
             Ok(json!({"deleted": true}))

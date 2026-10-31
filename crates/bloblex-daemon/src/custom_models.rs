@@ -88,6 +88,18 @@ pub fn append_to(st: &AppState, catalog: &mut Value, provider: &str) {
     if rows.is_empty() {
         return;
     }
+    // The shape of a catalog entry: `id` is what a turn sends to the CLI, so it's the model's own
+    // id, never this row's. The row's id stays as `customId`.
+    let rows: Vec<Value> = rows.iter().map(|row| {
+        let label = row["label"].as_str().filter(|label| !label.trim().is_empty());
+        json!({
+            "id": row["modelId"],
+            "displayName": label.map(Value::from).unwrap_or_else(|| row["modelId"].clone()),
+            "supportedThinking": row["efforts"],
+            "source": "custom",
+            "customId": row["id"],
+        })
+    }).collect();
     match catalog.get_mut("models").and_then(Value::as_array_mut) {
         Some(models) => models.extend(rows),
         None => catalog["models"] = json!(rows),
@@ -129,8 +141,12 @@ mod tests {
         let models = catalog["models"].as_array().unwrap();
         assert_eq!(models.len(), 2);
         assert_eq!(models[0]["id"], "gpt-listed");
-        assert_eq!(models[1]["modelId"], "gpt-private");
+        // `id` is what a turn sends to the CLI.
+        assert_eq!(models[1]["id"], "gpt-private");
+        assert_eq!(models[1]["displayName"], "Private");
+        assert_eq!(models[1]["supportedThinking"], json!(["low", "high"]));
         assert_eq!(models[1]["source"], "custom");
+        assert_eq!(models[1]["customId"], saved["model"]["id"]);
         // Another provider's list is unaffected.
         assert!(dispatch(&st, "model.custom.list", &json!({"provider": "claude"})).await.unwrap()["models"].as_array().unwrap().is_empty());
     }

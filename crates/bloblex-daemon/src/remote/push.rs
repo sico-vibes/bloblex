@@ -629,6 +629,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_settings_calls_reach_the_daemon() {
+        let (st, _stub) = push_state();
+        let got = crate::dispatch(&st, "remote.push.get", json!({})).await.unwrap();
+        assert!(got["publicKey"].is_string() && got.get("enabled").is_some(), "{got}");
+        assert_eq!(crate::dispatch(&st, "remote.push.set", json!({"enabled": true})).await.unwrap_err().1.code, "invalid_argument");
+        crate::dispatch(&st, "remote.push.set", json!({"enabled": false})).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_payload_holds_no_content() {
         let (st, stub) = push_state();
         // The event carries everything the phone must not see.

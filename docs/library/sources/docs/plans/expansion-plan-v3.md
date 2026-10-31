@@ -171,8 +171,28 @@ Run Bitbots on a second Windows laptop and use it the same way. Linux is out of 
   - snapshot size;
   - a 1,000-message conversation's render time, with budgets that fail the build.
 
+## Phase 8: sub-bots (owner request, 31 October 2026)
+
+A bot can have a fleet working under it, when asked: "spawn 3 sub-agents as Haiku to research X". Sub-bots, also called agents, are first-class. Unlike Claude Code's background list and T3 Code's hidden threads, **the full workflow stays visible, so the owner can keep track of every bot and sub-bot**. The research behind this is the Haiku comparison with T3 Code at commit 79f1fadfc.
+
+- **Claude's own sub-agents stop vanishing.** Today our adapter folds a Task's work into the parent's turn. Route frames by `parent_tool_use_id`, and nest a Task's steps under its row, read-only. Codex's native child threads wait: they need protocol work this phase doesn't justify.
+- **`spawn_subbots`, a tool for bots:** a list of briefs, each with a model and effort the daemon checks against the catalog. A sub-bot can use another installed provider than its parent's. An optional wait mode. It's built on the existing assignment ledger, side conversations and Stop.
+- **Each sub-bot is a real conversation:** the owner can open it, read everything, message it and stop it. It stays off the bot roster.
+- **Visible everywhere:**
+  - Sidebar: a row per sub-bot nested under its parent, with live status.
+  - Parent's conversation: the fleet, with model, state, Open and Stop, and Stop all.
+  - Companion: a count, such as "Rae · 2/3 working".
+- **Limits:**
+  - At most 5 running per parent.
+  - Sub-bots can't spawn their own, at least at first.
+  - A sub-bot never has more access than its parent, and never Full access in unattended work.
+  - Stopping the parent stops the fleet.
+  - A restart marks running ones interrupted, as assignments are today.
+
+**Companion:** the count above, opening the fleet in the full app.
+
 ## Order and checks
 
 1. Phase 0, release, owner installs, Director connects and smoke-tests, **owner confirms**.
-2. Then, through the MCP, Phases 1 and 2 (they share no files), then 3, 4, 5, 6 and 7. Each phase is a release candidate on its own.
+2. Then, through the MCP, Phases 1 and 2 (they share no files), then 3, 4, 5, 6, 7 and 8. Each phase is a release candidate on its own.
 3. Every phase: the gates in `.claude/skills/bitbots-development`, the browser preview for UI in Haze and Stone, dark and light, and the companion. Each phase ends with a live check by the owner and the skill update.

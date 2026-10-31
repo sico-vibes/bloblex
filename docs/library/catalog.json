@@ -1,7 +1,7 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "e7ebb62",
+  "revision": "7b73806",
   "documentCount": 367,
   "assets": [
     {
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "762a8a85835d931742e4585c4628f780f820dfb76bd53ef0da3e150979e6b1fd",
+      "sha256": "3eac4e1b8ede3d1f5c9f01558d88223b56a1e12ff8aba5896349754eb26cd552",
       "headings": [
         {
           "id": "update-commands",
@@ -1987,6 +1987,41 @@
           "id": "phase-5-section-3-gemini-cli-and-qwen-code-over-acp",
           "text": "Phase 5, section 3: Gemini CLI and Qwen Code over ACP",
           "level": 2
+        },
+        {
+          "id": "phase-5-secrets-and-one-use-secret-requests-31-october-2026",
+          "text": "Phase 5: secrets and one-use secret requests (31 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "secrets-in-the-credential-store",
+          "text": "Secrets in the credential store",
+          "level": 3
+        },
+        {
+          "id": "one-use-secret-requests",
+          "text": "One-use secret requests",
+          "level": 3
+        },
+        {
+          "id": "phase-5-accounts-31-october-2026",
+          "text": "Phase 5: accounts (31 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "several-accounts-per-provider-31-october-2026",
+          "text": "Several accounts per provider (31 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "custom-models-31-october-2026",
+          "text": "Custom models (31 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "webhook-triggers-31-october-2026-phase-5-section-8",
+          "text": "Webhook triggers (31 October 2026, Phase 5 section 8)",
+          "level": 3
         }
       ]
     },
@@ -3953,7 +3988,7 @@
       "title": "Expansion plan v3: the connector",
       "section": "Plans & briefs",
       "status": "Plan",
-      "sha256": "5210ae3820d82368d9eac219e430f105f84b1704e6a2150aef2b9d18d1ab23c1",
+      "sha256": "ee16b3f89269738bea9dd92756cb2e6f10bf0acb613bc2932dd8af005362158e",
       "headings": [
         {
           "id": "lanes",
@@ -4008,6 +4043,11 @@
         {
           "id": "phase-7-quality-gates",
           "text": "Phase 7: quality gates",
+          "level": 2
+        },
+        {
+          "id": "phase-8-sub-bots-owner-request-31-october-2026",
+          "text": "Phase 8: sub-bots (owner request, 31 October 2026)",
           "level": 2
         },
         {
@@ -18334,7 +18374,7 @@
       "title": "Remote mode: threat model",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "0d8bda81443d65447f43801925269e7dd4ffbc35045ef0538ada6adc52de58c7",
+      "sha256": "652de175c734b485550ae95c75c7e2d3caace8f11dfd8e654cdbecdd6b85a317",
       "headings": [
         {
           "id": "1-the-core-fact",
@@ -18434,6 +18474,11 @@
         {
           "id": "17-phone-push-31-october-2026",
           "text": "17. Phone push (31 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "18-webhook-triggers-31-october-2026",
+          "text": "18. Webhook triggers (31 October 2026)",
           "level": 2
         }
       ]

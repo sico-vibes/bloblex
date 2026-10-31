@@ -450,8 +450,9 @@ const RECAP_BLOCK_CHARS: usize = 6_000;
 const RECAP_FILE_LIMIT: usize = 12;
 
 /// Keeps tag-like text in the quoted data from breaking out of its delimiters,
-/// exactly as `reply_prompt_context` does in `main.rs`.
-fn inert(text: &str) -> String {
+/// exactly as `reply_prompt_context` does in `main.rs`. Also used for a webhook
+/// body, which is someone else's input (Phase 5, section 8).
+pub(crate) fn inert(text: &str) -> String {
     text.replace('&', "\\u0026").replace('<', "\\u003c").replace('>', "\\u003e")
 }
 

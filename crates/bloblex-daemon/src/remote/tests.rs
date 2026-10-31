@@ -2162,3 +2162,186 @@ fn bind_failures_that_rule_out_only_one_candidate() {
     assert!(!super::bind_error_allows_fallback(ErrorKind::InvalidInput));
     assert!(!super::bind_error_allows_fallback(ErrorKind::AddrNotAvailable));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5, section 8: webhook triggers
+
+/// Seeds one enabled automation with its webhook on and a known secret.
+fn seed_webhook(gateway: &Gateway, include_body: bool) -> (String, String) {
+    let (agent, _) = gateway.st.db.agent_create(&json!({"name": format!("Hook {}", uuid::Uuid::new_v4()), "runtimeId": "rt-test"})).unwrap();
+    let automation = gateway
+        .st
+        .db
+        .automation_create(&json!({
+            "agentId": agent["id"],
+            "name": "Hook",
+            "prompt": "do the thing",
+            "schedule": {"kind": "cron", "cron": "0 3 * * *", "timezone": "UTC"},
+            "enabled": true,
+        }))
+        .unwrap();
+    let id = automation["id"].as_str().unwrap().to_owned();
+    gateway.st.db.automation_webhook_set(&id, true, include_body).unwrap();
+    let secret = crate::webhooks::new_secret().as_str().to_owned();
+    crate::secrets::store::write(&crate::webhooks::secret_name(&id), &secret).unwrap();
+    (id, secret)
+}
+
+/// One signed webhook request. No `Origin`: a sender is a machine, not a page.
+async fn hook(gateway: &Gateway, id: &str, timestamp: &str, signature: &str, body: &str) -> (StatusCode, String) {
+    let response = gateway
+        .client
+        .post(gateway.url(&format!("/api/hook/{id}")))
+        .header(crate::webhooks::TIMESTAMP_HEADER, timestamp)
+        .header(crate::webhooks::SIGNATURE_HEADER, signature)
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.text().await.unwrap())
+}
+
+fn signed(secret: &str, timestamp: &str, body: &str) -> String {
+    crate::webhooks::signature(secret, timestamp, body.as_bytes())
+}
+
+#[tokio::test]
+async fn a_signed_request_starts_the_automation() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    let now = chrono::Utc::now().timestamp().to_string();
+    let body = "{\"event\":\"push\"}";
+    let (status, response) = hook(&gateway, &id, &now, &signed(&secret, &now, body), body).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    assert_eq!(gateway.st.db.automation_runs_list(&id, 20, None).unwrap().len(), 1, "the request reached the run path");
+}
+
+#[tokio::test]
+async fn a_bad_signature_is_a_plain_404() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    let now = chrono::Utc::now().timestamp().to_string();
+    let body = "{\"event\":\"push\"}";
+    let (unknown_status, unknown_body) = hook(&gateway, &uuid::Uuid::new_v4().to_string(), &now, &signed(&secret, &now, body), body).await;
+    let wrong = signed(&secret, &now, "different body");
+    let (status, response) = hook(&gateway, &id, &now, &wrong, body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(unknown_status, StatusCode::NOT_FOUND);
+    assert_eq!(status, unknown_status, "a wrong signature and an unknown id are the same answer");
+    assert_eq!(response, unknown_body, "and the same body");
+    assert!(gateway.st.db.automation_runs_list(&id, 20, None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_old_timestamp_is_refused() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    let old = (chrono::Utc::now().timestamp() - crate::webhooks::TIMESTAMP_SKEW_SECS - 60).to_string();
+    let body = "{}";
+    let (status, _) = hook(&gateway, &id, &old, &signed(&secret, &old, body), body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(gateway.st.db.automation_runs_list(&id, 20, None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_replay_is_refused() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    let now = chrono::Utc::now().timestamp().to_string();
+    let body = "{\"event\":\"push\"}";
+    let signature = signed(&secret, &now, body);
+    assert_eq!(hook(&gateway, &id, &now, &signature, body).await.0, StatusCode::ACCEPTED);
+    assert_eq!(hook(&gateway, &id, &now, &signature, body).await.0, StatusCode::NOT_FOUND, "the same signature twice");
+}
+
+#[tokio::test]
+async fn a_disabled_webhook_is_a_404() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    gateway.st.db.automation_webhook_set(&id, false, false).unwrap();
+    let now = chrono::Utc::now().timestamp().to_string();
+    let body = "{}";
+    let (status, _) = hook(&gateway, &id, &now, &signed(&secret, &now, body), body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn failures_count_toward_the_lockout() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    let now = chrono::Utc::now().timestamp().to_string();
+    let body = "{}";
+    let wrong = signed(&secret, &now, "not the body");
+    for _ in 0..crate::webhooks::FAILURES_PER_SOURCE {
+        assert_eq!(hook(&gateway, &id, &now, &wrong, body).await.0, StatusCode::NOT_FOUND);
+    }
+    let locked = gateway.st.remote.webhooks.is_locked("127.0.0.1", std::time::Instant::now())
+        || gateway.st.remote.webhooks.is_locked("loopback", std::time::Instant::now());
+    assert!(locked, "the failures shelved that source");
+    // The stranger cannot take the real sender down: a valid signature is
+    // checked first and is never refused by the lockout.
+    assert_eq!(hook(&gateway, &id, &now, &signed(&secret, &now, body), body).await.0, StatusCode::ACCEPTED);
+    assert_eq!(gateway.st.db.automation_runs_list(&id, 20, None).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_paused_automation_does_nothing() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    gateway.st.db.set_setting("automations.paused", &json!(true)).unwrap();
+    let now = chrono::Utc::now().timestamp().to_string();
+    let body = "{}";
+    let (status, _) = hook(&gateway, &id, &now, &signed(&secret, &now, body), body).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "a valid request is accepted whatever the automation does");
+    assert!(gateway.st.db.automation_runs_list(&id, 20, None).unwrap().is_empty(), "and nothing ran");
+}
+#[tokio::test]
+async fn the_secret_is_never_returned_twice() {
+    let gateway = gateway().await;
+    let (id, _) = seed_webhook(&gateway, false);
+    let enabled = crate::webhooks::rpc(&gateway.st, "automation.webhook.enable", &json!({"id": id, "confirm": true})).await.unwrap();
+    let secret = enabled["secret"].as_str().expect("the enable reply shows the secret once").to_owned();
+    assert!(enabled["url"].as_str().is_some_and(|url| url.ends_with(&format!("/api/hook/{id}"))), "{enabled}");
+    assert_eq!(enabled["webhook"]["enabled"], true);
+    // The DTO the window reads has the address but never the secret.
+    let dto = crate::automations::rpc(&gateway.st, "automation.get", &json!({"id": id})).await.unwrap();
+    let text = dto.to_string();
+    assert!(!text.contains(&secret), "the automation DTO leaks the secret");
+    assert!(text.contains("/api/hook/"), "the DTO carries the address");
+    // Rotating replaces it, and the old signature stops working.
+    let rotated = crate::webhooks::rpc(&gateway.st, "automation.webhook.rotate", &json!({"id": id, "confirm": true})).await.unwrap();
+    let newer = rotated["secret"].as_str().unwrap().to_owned();
+    assert_ne!(newer, secret);
+    let now = chrono::Utc::now().timestamp().to_string();
+    assert_eq!(hook(&gateway, &id, &now, &signed(&secret, &now, "{}"), "{}").await.0, StatusCode::NOT_FOUND);
+    // Changing includeBody does not mint a secret.
+    let updated = crate::webhooks::rpc(&gateway.st, "automation.webhook.update", &json!({"id": id, "includeBody": true})).await.unwrap();
+    assert!(updated.get("secret").is_none());
+    assert_eq!(updated["webhook"]["includeBody"], true);
+    // Disabling returns no secret and deletes the stored one.
+    let disabled = crate::webhooks::rpc(&gateway.st, "automation.webhook.disable", &json!({"id": id})).await.unwrap();
+    assert!(disabled.get("secret").is_none());
+    assert_eq!(disabled["webhook"]["enabled"], false);
+    assert!(crate::secrets::store::read(&crate::webhooks::secret_name(&id)).unwrap().is_none());
+    assert_eq!(hook(&gateway, &id, &now, &signed(&newer, &now, "{}"), "{}").await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_webhook_url_is_null_while_remote_is_off() {
+    let gateway = gateway().await;
+    let (id, _) = seed_webhook(&gateway, false);
+    let _ = super::disable(&gateway.st).await;
+    let enabled = crate::webhooks::rpc(&gateway.st, "automation.webhook.enable", &json!({"id": id, "confirm": true})).await.unwrap();
+    assert!(enabled["url"].is_null(), "no address while Remote is off");
+    assert!(enabled["webhook"]["url"].is_null());
+}
+
+#[tokio::test]
+async fn deleting_an_automation_deletes_its_secret() {
+    let gateway = gateway().await;
+    let (id, secret) = seed_webhook(&gateway, false);
+    assert_eq!(crate::secrets::store::read(&crate::webhooks::secret_name(&id)).unwrap().as_deref().map(String::as_str), Some(secret.as_str()));
+    crate::automations::rpc(&gateway.st, "automation.delete", &json!({"id": id})).await.unwrap();
+    assert!(crate::secrets::store::read(&crate::webhooks::secret_name(&id)).unwrap().is_none(), "the secret outlived its automation");
+}

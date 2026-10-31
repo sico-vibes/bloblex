@@ -219,10 +219,52 @@
       "params": null
     },
     {
+      "method": "account.*",
+      "class": "never",
+      "minTier": null,
+      "why": "Accounts are sign-ins on the host; only the owner changes them, at the desktop.",
+      "params": null
+    },
+    {
+      "method": "model.custom.*",
+      "class": "never",
+      "minTier": null,
+      "why": "The owner's model list is changed at the desktop.",
+      "params": null
+    },
+    {
       "method": "settings.get",
       "class": "read",
       "minTier": "viewer",
       "why": "Reads local preferences; the response is filtered before it leaves the host.",
+      "params": null
+    },
+    {
+      "method": "automation.webhook.enable",
+      "class": "never",
+      "minTier": null,
+      "why": "Turning a webhook on hands back its signing secret once; only the desktop may do that.",
+      "params": null
+    },
+    {
+      "method": "automation.webhook.rotate",
+      "class": "never",
+      "minTier": null,
+      "why": "Replacing a webhook secret is a desktop action.",
+      "params": null
+    },
+    {
+      "method": "automation.webhook.update",
+      "class": "never",
+      "minTier": null,
+      "why": "Changing whether a webhook body reaches the prompt stays at the desktop.",
+      "params": null
+    },
+    {
+      "method": "automation.webhook.disable",
+      "class": "never",
+      "minTier": null,
+      "why": "Turning a webhook off, and deleting its secret, is a desktop action.",
       "params": null
     },
     {
@@ -272,69 +314,6 @@
       "class": "read",
       "minTier": "viewer",
       "why": "Lists saved runtime profiles.",
-      "params": null
-    },
-    {
-      "method": "account.list",
-      "class": "never",
-      "minTier": null,
-      "why": "Lists the named account folders with who the CLI says is signed in.",
-      "params": null
-    },
-    {
-      "method": "account.create",
-      "class": "never",
-      "minTier": null,
-      "why": "Creates a named account folder on the host.",
-      "params": null
-    },
-    {
-      "method": "account.rename",
-      "class": "never",
-      "minTier": null,
-      "why": "Renames an account folder on the host.",
-      "params": null
-    },
-    {
-      "method": "account.delete",
-      "class": "never",
-      "minTier": null,
-      "why": "Deletes an account folder on the host.",
-      "params": null
-    },
-    {
-      "method": "account.signIn",
-      "class": "never",
-      "minTier": null,
-      "why": "Returns the one-line command that signs an account in; the owner runs it on the host.",
-      "params": null
-    },
-    {
-      "method": "account.check",
-      "class": "never",
-      "minTier": null,
-      "why": "Asks the CLI again who is signed in for one account.",
-      "params": null
-    },
-    {
-      "method": "model.custom.list",
-      "class": "never",
-      "minTier": null,
-      "why": "The owner's own model names are a host-side setting; they stay on the host.",
-      "params": null
-    },
-    {
-      "method": "model.custom.save",
-      "class": "never",
-      "minTier": null,
-      "why": "Adding or changing a custom model name is a host-side setting.",
-      "params": null
-    },
-    {
-      "method": "model.custom.delete",
-      "class": "never",
-      "minTier": null,
-      "why": "Removing a custom model name is a host-side setting.",
       "params": null
     },
     {
@@ -1203,6 +1182,20 @@
       "class": "never",
       "minTier": null,
       "why": "A paired device must not switch approvals from remote on for itself.",
+      "params": null
+    },
+    {
+      "method": "remote.push.get",
+      "class": "never",
+      "minTier": null,
+      "why": "Whether notices go through a push service is the owner's, at the desktop.",
+      "params": null
+    },
+    {
+      "method": "remote.push.set",
+      "class": "never",
+      "minTier": null,
+      "why": "Whether notices go through a push service is the owner's, at the desktop.",
       "params": null
     },
     {

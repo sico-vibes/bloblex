@@ -97,6 +97,8 @@ mod handoff;
 mod machines_tests;
 // Phase 5: secrets in the credential store and one-use secret requests.
 mod secrets;
+/// Phase 5, section 8: webhook triggers and their signature.
+mod webhooks;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
@@ -974,6 +976,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
         "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
         "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
+        "automation.webhook.enable" | "automation.webhook.rotate" | "automation.webhook.update" | "automation.webhook.disable" => webhooks::rpc(st, method, &p).await,
         "secret.list" | "secret.set" | "secret.delete" | "secret.request.list" | "secret.request.answer" | "secret.request.decline" => secrets::rpc(st, method, &p).await,
         "project.findByIdentity" => repo_identity::find_by_identity(st, &p),
         "project.sharedSettings.get" | "project.sharedSettings.trust" | "project.sharedSettings.untrust" | "project.sharedSettings.write" => shared_settings::rpc(st, method, &p),
@@ -1634,7 +1637,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         | "remote.devices.revoke"
         | "remote.security.get"
         | "remote.security.set"
-        | "remote.activity.list" => remote::rpc(st, method, &p).await,
+        | "remote.activity.list"
+        | "remote.push.get"
+        | "remote.push.set" => remote::rpc(st, method, &p).await,
         // Phase 5, section 7: a paired device's own Web Push subscription.
         "push.key" | "push.subscribe" | "push.unsubscribe" => remote::push::device_rpc(st, method, &p).await,
         "machine.self"

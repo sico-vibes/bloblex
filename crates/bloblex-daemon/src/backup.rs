@@ -266,6 +266,9 @@ fn export_automations(st: &AppState) -> Result<Vec<Value>, DispatchError> {
     Ok(automations
         .iter()
         .map(|automation| {
+            // Deliberately no `webhook` block: a restored automation's webhook is
+            // off, and the signing secret never leaves the credential store
+            // (Phase 5, section 8).
             json!({
                 "agentId": automation["agentId"],
                 "name": automation["name"],
@@ -1024,5 +1027,34 @@ mod tests {
         previews.store(json!({"n": 3}));
         previews.store(json!({"n": 4}));
         assert!(previews.take(&kept).is_none(), "the oldest preview is evicted once two are held");
+    }
+}
+
+#[cfg(test)]
+mod webhook_backup_tests {
+    use super::*;
+
+    /// A backup carries no webhook state and no secret, and a restored
+    /// automation's webhook is off: it must never come back on by itself.
+    #[test]
+    fn a_backup_carries_no_webhook_and_a_restored_one_is_off() {
+        let (st, _events) = crate::phase2a_tests::state();
+        let (agent, _) = st.db.agent_create(&json!({"name": "Hook backup", "runtimeId": "rt-test"})).unwrap();
+        let created = st
+            .db
+            .automation_create(&json!({"agentId": agent["id"], "name": "Hook", "prompt": "p", "schedule": {"kind": "cron", "cron": "0 3 * * *", "timezone": "UTC"}, "enabled": true}))
+            .unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        st.db.automation_webhook_set(&id, true, true).unwrap();
+        crate::secrets::store::write(&crate::webhooks::secret_name(&id), "test-only-secret").unwrap();
+
+        let exported = export_automations(&st).unwrap();
+        let text = serde_json::to_string(&exported).unwrap();
+        assert!(!text.contains("webhook"), "a backup carries no webhook fields: {text}");
+        assert!(!text.contains("test-only-secret"));
+
+        // Restore is create-from-export, exactly as the import path does it.
+        let restored = st.db.automation_create(&exported[0]).unwrap();
+        assert_eq!(restored["webhook"], json!({"enabled": false, "includeBody": false}));
     }
 }

@@ -25,6 +25,7 @@ bloblex-adapter-claude = { path = "../bloblex-adapter-claude" }
 chrono.workspace = true
 futures-util.workspace = true
 hkdf.workspace = true
+hmac = "0.12"
 if-addrs.workspace = true
 p256.workspace = true
 igd-next.workspace = true

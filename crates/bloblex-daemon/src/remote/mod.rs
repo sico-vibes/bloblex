@@ -274,6 +274,9 @@ pub struct RemoteState {
     method_cache: StdMutex<Option<String>>,
     /// Phase 5, section 7: Web Push, its transport seam and its rate limit.
     pub push: push::PushState,
+    /// Phase 5, section 8: the webhook replay cache and per-source failure
+    /// lockout. Memory only, and never global.
+    pub webhooks: crate::webhooks::WebhookState,
     /// Test seam: the permission commands run for the native key file.
     #[cfg(test)]
     pub key_commands: StdMutex<Vec<Vec<String>>>,
@@ -316,6 +319,7 @@ impl RemoteState {
             security_cache: StdMutex::new(None),
             method_cache: StdMutex::new(None),
             push: push::PushState::default(),
+            webhooks: crate::webhooks::WebhookState::default(),
             #[cfg(test)]
             key_commands: StdMutex::new(Vec::new()),
             #[cfg(test)]

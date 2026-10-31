@@ -649,3 +649,20 @@ A custom model is a name the owner typed for a model a provider's catalog does n
 - `runtime.models` merges them **after** the catalog's own entries, each with `source: "custom"`; the rest of that reply is unchanged.
 - A bot picks one as its `model` and the turn passes it to the CLI unchanged; a name the CLI refuses fails that turn in the normal way.
 - All three are `tiers.json` class `never`. A backup carries them in `contents.customModels`, and an import puts back any the host does not already have: nothing about them is sensitive.
+
+### Webhook triggers (31 October 2026, Phase 5 section 8)
+
+An automation can be started by a signed HTTP request instead of, or as well as, its schedule. The design and its limits are `docs/remote/THREAT_MODEL.md` §18; this is the wire shape.
+
+- **`automation.webhook.enable {id, includeBody, confirm}`** gives `{url, secret, webhook}`. `confirm: true` is required. A new 256-bit secret is made every time, so an old one stops working. `secret` appears in this reply **only**: it is not in the DTO, an event, a backup or a diagnostics bundle. `url` is `null` while Remote is off, and otherwise `"<gateway address>/api/hook/<id>"`.
+- **`automation.webhook.rotate {id, confirm}`** gives `{url, secret, webhook}` with a new secret; `conflict` when the webhook is not on.
+- **`automation.webhook.update {id, includeBody}`** gives `{webhook}`, so changing whether the body reaches the prompt does not mint a secret. On a webhook that is off it leaves `includeBody` false.
+- **`automation.webhook.disable {id}`** gives `{webhook}` and deletes the stored secret.
+- `secret` is lost for good once the reply is gone; the only recovery is `rotate`, which invalidates the old one.
+- Every automation DTO carries `webhook: {enabled, includeBody, url}` — the address, never the secret. `url` follows Remote: `null` while it is off.
+- All four are `tiers.json` class `never`: only the desktop turns a webhook on, rotates it or changes what it may include.
+- **The route:** `POST /api/hook/<id>` on the gateway, outside the `Origin` and Native `Host` checks (a sender is a machine with no cookie) and inside the per-source abuse bucket. Body at most 64 KiB; a larger one is answered like any other failure. `X-Bitbots-Timestamp` is Unix seconds and must be within 300 s; `X-Bitbots-Signature` is `sha256=<hex HMAC-SHA-256 of "<timestamp>.<body>">`, compared in constant time. An accepted signature is remembered for 600 s, so a replay is a failure. Every failure is exactly the `404` an unknown id gets, and one HMAC is computed on every request, so an id cannot be discovered by timing. Failures count toward that source's own lockout (5 in 60 s → 60 s); a valid signature is never refused by it.
+- **Accepted** answers `202 {"accepted": true}` whether the automation ran or was paused, disabled or already running, so a valid signature cannot tell them apart; the difference appears only in the owner's activity list, as one content-free line.
+- **The body** is off by default. When `includeBody` is on it reaches the prompt only inside a `<bloblex_webhook>` block as inert quoted data (`&`, `<`, `>` escaped, as `knowledge.rs` `inert` does), after one sentence saying it is data. It is never stored, logged, evented or echoed.
+- **Fences:** the run goes through the automation path, so it takes the automation's `plan`/`auto` mode (never `bypass`), `maxRuntimeSecs`, single flight, the global pause and the concurrency limit.
+- **Deleting an automation deletes its secret.** A backup carries no webhook field and no secret, and an import creates the automation with the webhook off: it never comes back on by itself.

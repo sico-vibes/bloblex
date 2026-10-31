@@ -85,7 +85,7 @@ pub fn router(state: WebState) -> Router {
     // The self-test (`GET /api/ping`) is merged *after* the origin layer, so it
     // is deliberately open: the owner opens it from a phone's address bar, which
     // carries no `Origin`. It answers `{"ok":true}` and nothing else.
-    let open = Router::new().route("/ping", get(ping_get));
+    let open = Router::new().route("/ping", get(ping_get)).route("/hook/{id}", post(hook_post));
     let guarded = Router::new()
         .route("/pair", post(pair_post).get(pair_get))
         .route("/login", post(login_post))
@@ -178,6 +178,9 @@ async fn abuse_limit(
     let unauthenticated = path == "/api/login"
         || path == "/api/pair"
         || path == "/api/ping"
+        // A webhook sender is a machine with no cookie, and on Native the route
+        // is on the public internet (Phase 5, section 8).
+        || path.starts_with("/api/hook/")
         || !path.starts_with("/api/");
     if unauthenticated {
         let key = source_key(request.headers(), connect.as_ref());
@@ -581,6 +584,79 @@ async fn ping_get(
             .await;
     }
     json_response(StatusCode::OK, json!({"ok": true, "app": "bitbots", "role": "remote-gateway"}))
+}
+
+// ---------------------------------------------------------------------------
+// /api/hook/<id>
+
+/// `POST /api/hook/<id>` (Phase 5, section 8). A signed request starts an
+/// automation through its normal run path. The route is outside the `Origin`
+/// check because its sender is a machine, and it carries no cookie, so a web
+/// page gains nothing from it. Every failure answers exactly what an unknown id
+/// answers, and one HMAC is computed on every request, with a placeholder key
+/// when there is no secret, so the work cannot be told apart either
+/// (THREAT_MODEL §18).
+async fn hook_post(
+    State(state): State<WebState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    connect: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let source = source_ip(connect.as_ref());
+    let now = Instant::now();
+    let timestamp = header_text(&headers, crate::webhooks::TIMESTAMP_HEADER);
+    let signature = header_text(&headers, crate::webhooks::SIGNATURE_HEADER);
+    let automation = if id.len() <= 64 && body.len() <= crate::webhooks::MAX_BODY_BYTES {
+        state.daemon.db.automation_get(&id).ok().filter(|automation| automation["webhook"]["enabled"] == true)
+    } else {
+        None
+    };
+    let secret = if automation.is_some() {
+        crate::secrets::store::read(&crate::webhooks::secret_name(&id)).ok().flatten()
+    } else {
+        None
+    };
+    let key = secret.as_ref().map(|value| value.as_str()).unwrap_or(crate::webhooks::PLACEHOLDER_SECRET);
+    let signed = crate::webhooks::signature_valid(key, &timestamp, &body, &signature);
+    if !signed || automation.is_none() || !crate::webhooks::timestamp_fresh(&timestamp, Utc::now().timestamp()) {
+        webhook_failed(&state, &source, now).await;
+        return not_found();
+    }
+    let Some(automation) = automation else { return not_found() };
+    if !state.remote.webhooks.accept_signature(&signature, now) {
+        webhook_failed(&state, &source, now).await;
+        return not_found();
+    }
+    let text = crate::webhooks::included_body(&automation, &body);
+    let ran = crate::automations::webhook_run(&state.daemon, &automation, text.as_deref())
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    // Content-free. The two lines differ only in the owner's own activity list;
+    // the answer to the sender is the same either way.
+    let line = if ran {
+        "An automation webhook started a run."
+    } else {
+        "An automation webhook arrived; the automation is paused, disabled or already running."
+    };
+    audit(&state.daemon, None, "prompt", line).await;
+    json_response(StatusCode::ACCEPTED, json!({"accepted": true}))
+}
+
+/// A failed webhook request. The lockout is per source and never global, and it
+/// shelves only the failure path: a valid signature has already been checked and
+/// is never refused by it (THREAT_MODEL §18).
+async fn webhook_failed(state: &WebState, source: &str, now: Instant) {
+    if state.remote.webhooks.is_locked(source, now) { return; }
+    if state.remote.webhooks.record_failure(source, now) {
+        audit(&state.daemon, None, "denied", "Webhook requests from this address are paused after repeated failures.").await;
+    }
+}
+
+fn header_text(headers: &HeaderMap, name: &str) -> String {
+    headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or_default().to_string()
 }
 
 async fn pair_get(State(state): State<WebState>, headers: HeaderMap) -> Response {

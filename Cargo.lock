@@ -629,6 +629,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hkdf",
+ "hmac",
  "if-addrs",
  "igd-next",
  "p256",

@@ -1236,3 +1236,5 @@ async fn a_raised_tier_reaches_the_link() {
 async fn a_lowered_tier_reaches_the_link() {
     tier_follows("operator", "viewer").await;
 }
+
+include!("handoff_tests.rs");

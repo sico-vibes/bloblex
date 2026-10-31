@@ -185,7 +185,7 @@ fn memory_has_secret(record: &Value) -> bool {
 
 /// The first usable installed runtime for a provider: one whose status is not
 /// `error`. `None` means the provider cannot be restored on this machine.
-fn first_runtime_for(runtimes: &[Value], provider: &str) -> Option<String> {
+pub(crate) fn first_runtime_for(runtimes: &[Value], provider: &str) -> Option<String> {
     runtimes
         .iter()
         .find(|runtime| runtime["provider"].as_str() == Some(provider) && runtime["status"].as_str() != Some("error"))
@@ -198,7 +198,7 @@ fn first_runtime_for(runtimes: &[Value], provider: &str) -> Option<String> {
 
 /// One agent read, stripped to what a backup carries: no id, no runtime id, no
 /// project, no custom arguments, and environment values dropped to their keys.
-fn export_bot(agent: &Value, runtimes: &[Value]) -> Value {
+pub(crate) fn export_bot(agent: &Value, runtimes: &[Value]) -> Value {
     let runtime_id = agent["runtimeId"].as_str().unwrap_or("");
     let runtime = runtimes.iter().find(|runtime| runtime["id"].as_str() == Some(runtime_id));
     let env_keys = agent["customEnv"]

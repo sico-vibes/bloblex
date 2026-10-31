@@ -139,8 +139,8 @@ export function CompanionMachineBots() {
   const busy = machineBusyBots(machines)
   if (!busy.length) return null
   return <div className="companion-machine-bots" aria-label="Working on other machines">
-    {busy.map(({ machine, bot }) => <button type="button" key={`${machine.id}-${bot.id}`} className="companion-machine-bot" onClick={() => void openMachineBotInMainWindow(machine.id, bot.id).catch(() => undefined)}>
-      <strong>{bot.name}</strong><span>Working</span><MachineBadge name={machine.name} />
+    {busy.map(({ machine, bot }) => <button type="button" key={`${machine.id}-${bot.id}`} className="companion-machine-bot" aria-label={`${bot.name}, working on ${machine.name}`} title={`${bot.name} is working on ${machine.name}`} onClick={() => void openMachineBotInMainWindow(machine.id, bot.id).catch(() => undefined)}>
+      <strong>{bot.name}</strong><MachineBadge name={machine.name} />
     </button>)}
   </div>
 }

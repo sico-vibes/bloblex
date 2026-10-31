@@ -622,6 +622,55 @@
       "expect": {
         "allowed": true
       }
+    },
+    {
+      "name": "handoff-operator-allowed",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": false,
+        "method": "handoff.prepare",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "handoff-chat-denied",
+      "call": {
+        "tier": "chat",
+        "approvalsFromRemote": false,
+        "method": "handoff.prepare",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "tier_required",
+        "reason": "a chat device cannot call handoff.prepare"
+      }
+    },
+    {
+      "name": "handoff-quiet-hours-denied",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": false,
+        "method": "handoff.prepare",
+        "params": {
+          "sessionId": "s"
+        },
+        "quietHours": true
+      },
+      "expect": {
+        "allowed": false,
+        "code": "quiet_hours",
+        "reason": "quiet hours are on; this host only allows reading right now"
+      }
     }
   ],
   "results": [

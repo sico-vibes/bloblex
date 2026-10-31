@@ -127,4 +127,74 @@ impl Storage {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         Ok(c.execute("DELETE FROM machine_links WHERE id=?1", [id])? > 0)
     }
+
+    // ── Handoff: putting a returning conversation back as it was ─────────────
+
+    /// The raw columns of one conversation, so a take-over that fails after it touched a row the
+    /// machine already had (a conversation coming back) can put that row back exactly.
+    pub fn session_snapshot(&self, id: &str) -> Result<Option<Value>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.query_row(
+            "SELECT runtime_id,provider,project_path,title,state,created_at,updated_at,agent_id,provider_session_id,resumable,data FROM sessions WHERE id=?1",
+            [id],
+            |r| {
+                Ok(json!({
+                    "id": id,
+                    "runtimeId": r.get::<_, String>(0)?,
+                    "provider": r.get::<_, String>(1)?,
+                    "projectPath": r.get::<_, String>(2)?,
+                    "title": r.get::<_, String>(3)?,
+                    "state": r.get::<_, String>(4)?,
+                    "createdAt": r.get::<_, String>(5)?,
+                    "updatedAt": r.get::<_, String>(6)?,
+                    "agentId": r.get::<_, Option<String>>(7)?,
+                    "providerSessionId": r.get::<_, Option<String>>(8)?,
+                    "resumable": r.get::<_, i64>(9)?,
+                    "data": r.get::<_, Option<String>>(10)?,
+                }))
+            },
+        ).optional()?)
+    }
+
+    /// Writes a [`Storage::session_snapshot`] back. `false` when the row is gone.
+    pub fn session_restore(&self, snapshot: &Value) -> Result<bool, StorageError> {
+        let id = snapshot["id"].as_str().ok_or(StorageError::InvalidAgent)?;
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        Ok(c.execute(
+            "UPDATE sessions SET runtime_id=?2,provider=?3,project_path=?4,title=?5,state=?6,created_at=?7,updated_at=?8,agent_id=?9,provider_session_id=?10,resumable=?11,data=?12 WHERE id=?1",
+            params![
+                id,
+                snapshot["runtimeId"].as_str().unwrap_or(""),
+                snapshot["provider"].as_str().unwrap_or(""),
+                snapshot["projectPath"].as_str().unwrap_or(""),
+                snapshot["title"].as_str().unwrap_or(""),
+                snapshot["state"].as_str().unwrap_or("idle"),
+                snapshot["createdAt"].as_str().unwrap_or(""),
+                snapshot["updatedAt"].as_str().unwrap_or(""),
+                snapshot["agentId"].as_str(),
+                snapshot["providerSessionId"].as_str(),
+                snapshot["resumable"].as_i64().unwrap_or(0),
+                snapshot["data"].as_str(),
+            ],
+        )? > 0)
+    }
+
+    /// The ids of the messages a conversation has.
+    pub fn session_message_ids(&self, session_id: &str) -> Result<Vec<String>, StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let mut q = c.prepare("SELECT id FROM messages WHERE session_id=?1")?;
+        let ids = q.query_map([session_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
+    /// Removes the named messages from a conversation, in one transaction.
+    pub fn session_remove_messages(&self, session_id: &str, ids: &[String]) -> Result<(), StorageError> {
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction()?;
+        for id in ids {
+            tx.execute("DELETE FROM messages WHERE session_id=?1 AND id=?2", params![session_id, id])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
 }

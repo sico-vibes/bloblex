@@ -18,7 +18,7 @@ describe('remote method rules', () => {
     for (const rule of METHOD_RULES) {
       if (rule.class === 'read') expect(rule.minTier, rule.method).toBe('viewer')
       else if (rule.class === 'chat') expect(rule.minTier, rule.method).toBe('chat')
-      else if (rule.class === 'approve') expect(rule.minTier, rule.method).toBe('operator')
+      else if (rule.class === 'approve' || rule.class === 'handoff') expect(rule.minTier, rule.method).toBe('operator')
       else expect(rule.minTier, rule.method).toBeNull()
       expect(rule.why.trim().length, rule.method).toBeGreaterThan(0)
     }

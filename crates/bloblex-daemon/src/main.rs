@@ -90,6 +90,7 @@ mod pull_request;
 mod remote;
 mod machine_client;
 mod machines;
+mod handoff;
 #[cfg(test)]
 mod machines_tests;
 
@@ -1604,6 +1605,13 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         | "machine.refresh"
         | "machine.conversations"
         | "machine.conversation" => machines::rpc(st, method, &p).await,
+        "machine.takeOver.preview"
+        | "machine.takeOver"
+        | "machine.takeOver.list"
+        | "handoff.preview"
+        | "handoff.prepare"
+        | "handoff.commit"
+        | "handoff.abort" => handoff::rpc(st, method, &p).await,
         _ => Err(derr(
             "unsupported",
             "method is not supported",
@@ -2649,6 +2657,7 @@ async fn resume_or_start_fresh(
 /// activation lock with sends and warm-ups.
 async fn resume_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
     let sid = p["sessionId"].as_str().unwrap_or("").to_owned();
+    machines::refuse_if_moved_id(st, &sid)?;
     activate_session(st, &sid, Owner::Rpc).await
 }
 
@@ -2862,6 +2871,8 @@ async fn activation_lock_for(st: &AppState, id: &str) -> Arc<Mutex<()>> {
 /// a per-session activation lock, so a warm-up and a first send cannot resume
 /// the same conversation twice.
 async fn activate_session(st: &AppState, sid: &str, owner: Owner) -> Result<Value, DispatchError> {
+    // Every way to start a provider process passes here: a conversation another machine runs never starts one.
+    machines::refuse_if_moved_id(st, sid)?;
     let already_active = || derr("conflict", "session is already active", StatusCode::CONFLICT);
     let is_rpc = matches!(owner, Owner::Rpc);
     if st.sessions.lock().await.contains_key(sid) {
@@ -3133,6 +3144,7 @@ async fn session_warm(st: &AppState, p: Value) -> Result<Value, DispatchError> {
         .to_owned();
     let row = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if row["archived"] == true { return Ok(json!({"warming":false,"active":false})); }
+    machines::refuse_if_moved(st, &row)?;
     let provider = row["provider"].as_str().unwrap_or("");
     if matches!(row["link"]["kind"].as_str(), Some("side" | "automation")) { return Ok(json!({"warming":false,"active":false})); }
     let runtime_usable = st.runtimes.read().await.iter().any(|runtime| runtime["id"] == row["runtimeId"] && catalog::runtime_usable(runtime));
@@ -3801,6 +3813,8 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     let confirm_resend = p["confirmResend"].as_bool() == Some(true);
     let session_before = st.db.session_detail(&sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session_before["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
+    // Phase 4: a conversation another machine runs, or is taking right now, can't start a turn here.
+    machines::refuse_if_moved(st, &session_before)?;
     // A question answer is daemon-written, and it is the only way a delegated
     // bot's pending question can continue its own assignment.
     if session_before["link"]["kind"] == "side" && !matches!(origin, PromptOrigin::Team | PromptOrigin::Queue | PromptOrigin::QuestionAnswer) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
@@ -3887,6 +3901,8 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
             }
         }
         let live_session = st.db.session_detail(&sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
+        // The handoff's commit takes this same gate, so a move that landed while this send waited is seen here.
+        machines::refuse_if_moved(st, &live_session)?;
         if live_session["archived"] == true || live_session["state"] != previous_state
             || live_session["modelLock"] != session_options["modelLock"] {
             return Err(derr("conflict", "session changed while a new turn was being prepared", StatusCode::CONFLICT));
@@ -4244,6 +4260,7 @@ pub(crate) async fn session_steer_marked(st: &AppState, p: Value, mcp_client: Op
     let session = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
     if session["link"]["kind"] == "side" { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    machines::refuse_if_moved(st, &session)?;
     let provider = session["provider"].as_str().unwrap_or("");
     if !provider_can_steer(provider) {
         return Err(derr("unsupported", "Steering is unavailable for this runtime.", StatusCode::BAD_REQUEST));

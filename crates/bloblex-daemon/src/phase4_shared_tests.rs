@@ -214,6 +214,27 @@ async fn write_leaves_out_full_access() {
 }
 
 #[tokio::test]
+async fn write_keeps_the_instructions_already_in_the_file() {
+    let (st, _) = state();
+    let (id, dir) = shared_project(&st, "Instructions", r#"{"instructions":"Use tabs.","setupScript":"old"}"#);
+    dispatch(&st, "project.update", json!({"projectId":id,"overrides":{"setupScript":"npm install"}})).await.unwrap();
+    dispatch(&st, "project.sharedSettings.write", json!({"projectId":id,"replace":true,"confirm":true})).await.unwrap();
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
+    assert_eq!(written["instructions"], "Use tabs.");
+    assert_eq!(written["setupScript"], "npm install");
+    assert_eq!(written["version"], 1);
+}
+
+#[tokio::test]
+async fn a_file_with_only_instructions_is_valid_and_names_no_problem() {
+    let (st, _) = state();
+    let (id, _) = shared_project(&st, "Older file", r#"{"instructions":"Use tabs."}"#);
+    let shared = shared_get(&st, &id).await;
+    assert_eq!(shared["state"], "untrusted");
+    assert!(shared["problems"].as_array().unwrap().is_empty(), "{shared}");
+}
+
+#[tokio::test]
 async fn trust_never_travels_in_a_backup_or_to_a_device() {
     let (st, _) = state();
     let (id, _) = shared_project(&st, "Trusted", r#"{"version":1,"setupScript":"echo hi"}"#);

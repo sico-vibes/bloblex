@@ -91,6 +91,8 @@ pub struct Machines {
     looping: AtomicBool,
     wake: Notify,
     timing: Mutex<Timing>,
+    /// Handoff leases and take-over jobs (Phase 4, Round 2). Memory only.
+    pub(crate) handoff: crate::handoff::Handoffs,
 }
 
 impl Default for Machines {
@@ -103,6 +105,7 @@ impl Default for Machines {
             looping: AtomicBool::new(false),
             wake: Notify::new(),
             timing: Mutex::new(Timing::default()),
+            handoff: crate::handoff::Handoffs::default(),
         }
     }
 }
@@ -110,6 +113,11 @@ impl Default for Machines {
 impl Machines {
     fn timing(&self) -> Timing {
         *self.timing.lock().unwrap()
+    }
+
+    /// How long to wait between two asks of another machine.
+    pub(crate) fn poll_every(&self) -> Duration {
+        self.timing().poll_every
     }
 
     #[cfg(test)]
@@ -178,6 +186,33 @@ fn self_rename(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     }
     st.db.set_setting(SETTING_NAME, &json!(name)).map_err(internal)?;
     Ok(self_value(st))
+}
+
+// ---------------------------------------------------------------------------
+// A conversation another machine runs
+
+/// A conversation that moved to another machine, or is being moved right now, can't start a turn
+/// here. `session` is a row with `link` (a brief is enough) and `id`. A link with no `kind` at all
+/// is a bot's own conversation, so only `movedTo` and the lease decide.
+pub(crate) fn refuse_if_moved(st: &AppState, session: &Value) -> Result<(), DispatchError> {
+    let moved = &session["link"]["movedTo"];
+    if moved.is_object() {
+        let name = moved["name"].as_str().map(str::trim).filter(|name| !name.is_empty()).unwrap_or("another machine");
+        return Err(derr("conflict", &format!("This conversation moved to {name}. Take it over to continue."), StatusCode::CONFLICT));
+    }
+    if let Some(lease) = session["id"].as_str().and_then(|id| st.machines.handoff.live(id)) {
+        return Err(derr("conflict", &format!("This conversation is moving to {}.", lease.to_name), StatusCode::CONFLICT));
+    }
+    Ok(())
+}
+
+/// [`refuse_if_moved`] for a caller that only has the id. An unknown conversation is the caller's
+/// own error to give.
+pub(crate) fn refuse_if_moved_id(st: &AppState, session_id: &str) -> Result<(), DispatchError> {
+    match st.db.session_brief(session_id) {
+        Ok(row) => refuse_if_moved(st, &row),
+        Err(_) => Ok(()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,7 +440,7 @@ pub async fn start_at_boot(st: &AppState) {
 // ---------------------------------------------------------------------------
 // Reads that go straight through
 
-fn failure(st: &AppState, machine_id: &str, error: ClientError) -> DispatchError {
+pub(crate) fn failure(st: &AppState, machine_id: &str, error: ClientError) -> DispatchError {
     let name = st
         .db
         .machine_link_get(machine_id)

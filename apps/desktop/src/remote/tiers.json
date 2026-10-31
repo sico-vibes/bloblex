@@ -1318,6 +1318,13 @@
       "params": null
     },
     {
+      "method": "handoff.*",
+      "class": "handoff",
+      "minTier": "operator",
+      "why": "Moving a conversation to another computer commits and pushes its own task branch, so it needs an operator device, and only a paired Bitbots machine may ask; a phone or browser is always refused. It carries no host path, environment value, thinking or tool output.",
+      "params": null
+    },
+    {
       "method": "session.git.diff",
       "class": "never",
       "minTier": null,
@@ -1410,6 +1417,7 @@
     "runtime.models.changed": "allow",
     "machine.changed": "drop",
     "machine.pair.changed": "drop",
+    "machine.takeOver.changed": "drop",
     "backup.imported": "drop",
     "automation.changed": "drop",
     "automation.deleted": "drop",

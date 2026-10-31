@@ -66,6 +66,9 @@ pub enum MethodClass {
     Read,
     Chat,
     Approve,
+    /// Moving a conversation to another machine: operator, and only a `machine` device
+    /// (the gateway checks the kind; `authorize` sees the tier).
+    Handoff,
     Never,
 }
 
@@ -206,6 +209,7 @@ fn load_policy() -> Result<Policy, String> {
             "read" => MethodClass::Read,
             "chat" => MethodClass::Chat,
             "approve" => MethodClass::Approve,
+            "handoff" => MethodClass::Handoff,
             "never" => MethodClass::Never,
             other => return Err(format!("tiers.json: {} has unknown class {other}", row.method)),
         };
@@ -298,7 +302,7 @@ pub fn authorize(call: &RemoteCall) -> Decision {
             reason: rule.why.clone(),
         };
     }
-    if call.quiet_hours && matches!(rule.class, MethodClass::Chat | MethodClass::Approve) {
+    if call.quiet_hours && matches!(rule.class, MethodClass::Chat | MethodClass::Approve | MethodClass::Handoff) {
         return Decision::Denied {
             code: DenialCode::QuietHours,
             reason: "quiet hours are on; this host only allows reading right now".to_string(),
@@ -766,7 +770,7 @@ mod tests {
             match rule.class {
                 MethodClass::Read => assert_eq!(rule.min_tier, Some(Tier::Viewer), "{}", rule.method),
                 MethodClass::Chat => assert_eq!(rule.min_tier, Some(Tier::Chat), "{}", rule.method),
-                MethodClass::Approve => assert_eq!(rule.min_tier, Some(Tier::Operator), "{}", rule.method),
+                MethodClass::Approve | MethodClass::Handoff => assert_eq!(rule.min_tier, Some(Tier::Operator), "{}", rule.method),
                 MethodClass::Never => assert_eq!(rule.min_tier, None, "{}", rule.method),
             }
         }

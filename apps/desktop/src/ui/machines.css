@@ -70,7 +70,7 @@
 .take-over-steps li[data-status="failed"] { color: var(--danger-ink); }
 
 /* A conversation that moved away: in place of the composer. */
-.moved-bar { display: flex; align-items: center; gap: 10px; margin: 0 auto 12px; width: min(760px, calc(100% - 32px)); padding: 10px 14px; color: var(--text-2); font-size: var(--fs-sm); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.moved-bar { display: flex; align-items: center; gap: 10px; margin: 0 auto 12px; width: min(760px, calc(100% - 32px)); padding: 10px 14px; color: var(--text-2); font-size: var(--fs-sm); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
 .moved-bar > span { flex: 1; min-width: 0; }
 .moved-bar strong { color: var(--text-1); font-weight: 500; }
 
@@ -79,12 +79,11 @@
 .onboarding-template p { margin: 0; }
 
 /* The companion. */
-.companion-machine-bots { display: grid; gap: 4px; margin: 6px 0; }
-.companion-machine-bot { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 8px; color: var(--text-2); font-size: var(--fs-xs); text-align: left; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.companion-machine-bots { display: grid; gap: 1px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.companion-machine-bot { display: grid; justify-items: start; gap: 2px; width: 100%; padding: 4px 8px; color: var(--text-1); font-size: var(--fs-xs); text-align: left; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
 .companion-machine-bot:hover { background: var(--surface-hover); }
 .companion-machine-bot:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.companion-machine-bot strong { color: var(--text-1); font-weight: 500; }
-.companion-machine-bot span:nth-of-type(1) { flex: 1; color: var(--text-3); }
+.companion-machine-bot strong { max-width: 100%; overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .companion-moved { display: inline-flex; align-items: center; gap: 6px; }
 
 /* The name of the machine a bot is running on. */

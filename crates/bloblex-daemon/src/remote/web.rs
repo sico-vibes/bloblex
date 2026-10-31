@@ -74,9 +74,7 @@ pub struct DeviceAuth {
     pub name: String,
     pub tier: Tier,
     /// What kind of device paired: `phone`, `tablet`, `browser`, `computer` or
-    /// `machine` (another Bitbots daemon, Phase 4). Round 2's `handoff.*` check
-    /// reads it.
-    #[allow(dead_code)]
+    /// `machine` (another Bitbots daemon, Phase 4). `handoff.*` reads it.
     pub kind: String,
 }
 
@@ -737,6 +735,12 @@ async fn rpc_post(State(state): State<WebState>, headers: HeaderMap, body: Bytes
         };
         return denial(&id, RemoteFailure::new(status, code.as_str(), reason));
     }
+    // Moving a conversation is for another Bitbots machine only; a phone or browser at
+    // `operator` is refused whatever the policy table says.
+    if method.starts_with("handoff.") && device.kind != "machine" {
+        audit(&state.daemon, Some(&device.id), "denied", &format!("{} was refused {method}.", device.name)).await;
+        return denial(&id, RemoteFailure::new(StatusCode::FORBIDDEN, "forbidden_remote", "Only a linked Bitbots machine can move a conversation."));
+    }
     if let Some(reason) = attachment_rule(&method, &params) {
         audit(
             &state.daemon,
@@ -773,6 +777,7 @@ fn audit_kind(method: &str) -> Option<&'static str> {
     match policy::rule_for(method).map(|rule| rule.class) {
         Some(policy::MethodClass::Chat) => Some("prompt"),
         Some(policy::MethodClass::Approve) => Some("approval"),
+        Some(policy::MethodClass::Handoff) => Some("handoff"),
         _ => None,
     }
 }

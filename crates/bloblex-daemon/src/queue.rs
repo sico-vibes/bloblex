@@ -176,6 +176,7 @@ pub(crate) async fn add_marked(st: &AppState, p: Value, mcp_client: Option<&str>
     if session["link"]["kind"] == "side" {
         return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN));
     }
+    crate::machines::refuse_if_moved(st, &session)?;
     let attachments = validate_body(&session, &p)?;
     // A command is validated before it is queued, so a bad one fails here
     // rather than when the queue later tries to send it.

@@ -112,6 +112,9 @@ struct Where {
     live: HashSet<String>,
     /// Folders an archived conversation still points at, so the reason can say so.
     archived: HashSet<String>,
+    /// Folders a conversation that moved to another machine still points at (Phase 4): the work is
+    /// running there, so this copy is no longer in use here, though it keeps the usual removal rules.
+    moved: HashSet<String>,
     /// Every registered project's own folder.
     projects: HashSet<String>,
     /// Repository roots to look in, unvalidated.
@@ -123,10 +126,10 @@ impl Where {
         if !self.repos.iter().any(|other| key(other) == key(&path)) { self.repos.push(path); }
     }
 
-    fn folder(&mut self, path: &str, archived: bool) {
+    fn folder(&mut self, path: &str, archived: bool, moved: bool) {
         if path.trim().is_empty() { return; }
         let path = Path::new(path);
-        if archived { self.archived.insert(key(path)); } else { self.live.insert(key(path)); }
+        if moved { self.moved.insert(key(path)); } else if archived { self.archived.insert(key(path)); } else { self.live.insert(key(path)); }
     }
 }
 
@@ -138,16 +141,18 @@ impl AppState {
         let mut out = Where::default();
         for project in self.db.project_list().unwrap_or_default() {
             let Some(path) = project["path"].as_str().filter(|path| !path.trim().is_empty()) else { continue };
-            out.folder(path, false);
+            out.folder(path, false, false);
             out.projects.insert(key(Path::new(path)));
             out.add_repo(PathBuf::from(path));
         }
         for session in sessions {
             // An archived conversation with a turn still running is using its folder.
             let archived = session["archived"] == true && !crate::workspace::WORKING.contains(&session["state"].as_str().unwrap_or(""));
-            if let Some(path) = session["projectPath"].as_str() { out.folder(path, archived); }
+            // A conversation that moved to another machine isn't working in its copy here.
+            let moved = session["link"]["movedTo"].is_object();
+            if let Some(path) = session["projectPath"].as_str() { out.folder(path, archived, moved); }
             let worktree = &session["link"]["worktree"];
-            if let Some(path) = worktree["path"].as_str() { out.folder(path, archived); }
+            if let Some(path) = worktree["path"].as_str() { out.folder(path, archived, moved); }
             if let Some(repo) = worktree["repo"].as_str().filter(|repo| !repo.trim().is_empty()) {
                 out.add_repo(PathBuf::from(repo));
             }
@@ -163,8 +168,9 @@ async fn scan(st: &AppState) -> Vec<Found> {
     for repo in std::mem::take(&mut where_.repos) {
         let live = where_.live.clone();
         let archived = where_.archived.clone();
+        let moved = where_.moved.clone();
         let projects = where_.projects.clone();
-        let task = tokio::task::spawn_blocking(move || scan_repo(&repo, &live, &archived, &projects));
+        let task = tokio::task::spawn_blocking(move || scan_repo(&repo, &live, &archived, &moved, &projects));
         let Ok(Ok(mut items)) = tokio::time::timeout(SCAN_LIMIT, task).await else { continue };
         found.append(&mut items);
     }
@@ -173,7 +179,7 @@ async fn scan(st: &AppState) -> Vec<Found> {
 }
 
 /// One repository: its registered worktrees, filtered down to the ones nothing live uses.
-fn scan_repo(repo: &Path, live: &HashSet<String>, archived: &HashSet<String>, projects: &HashSet<String>) -> Vec<Found> {
+fn scan_repo(repo: &Path, live: &HashSet<String>, archived: &HashSet<String>, moved: &HashSet<String>, projects: &HashSet<String>) -> Vec<Found> {
     let Some(root) = crate::worktree::repo_root(repo) else { return Vec::new() };
     let Some(listed) = git(&root, &["worktree", "list", "--porcelain"]) else { return Vec::new() };
     let Some(name) = root.file_name().map(|name| name.to_string_lossy().into_owned()) else { return Vec::new() };
@@ -191,6 +197,8 @@ fn scan_repo(repo: &Path, live: &HashSet<String>, archived: &HashSet<String>, pr
         if live.contains(&folder) || projects.contains(&folder) { continue; }
         let reason = if !path.is_dir() {
             "folder_missing"
+        } else if moved.contains(&folder) {
+            "conversation_moved"
         } else if archived.contains(&folder) {
             "conversation_archived"
         } else {

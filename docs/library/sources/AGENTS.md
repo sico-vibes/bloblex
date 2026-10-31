@@ -2,6 +2,14 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (31 October 2026, later): finish the plan, mostly on Gogo
+
+Owner directive for the rest of `docs/plans/expansion-plan-v3.md`, until the owner says otherwise. It amends the 30 October lanes below.
+
+- **Lanes:** rely heavily on Gogo (OpenCode Go DeepSeek V4.1 Flash, high). Several Gogo conversations may run at once, each in its own worktree. Only one Sona task runs at a time.
+- **Order:** Phases 5, 6 and 7 run in parallel, and the Director may release when a phase's gates pass. Polish comes after every phase is done, with the owner's live check.
+- **Unchanged:** the Director does the front end, reviews every diff, merges, runs every gate and commits. Lanes never run `git commit`.
+
 # Amendment (31 October 2026): machine links and handoff
 
 From the owner's plan (`docs/plans/expansion-plan-v3.md`, Phase 4), which the owner started on 31 October 2026. It adds to the Remote amendments below for this one path. The threat model is `docs/remote/THREAT_MODEL.md`, section 16.

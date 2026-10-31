@@ -131,11 +131,13 @@ fn parse(bytes: &[u8]) -> File {
     let Ok(text) = std::str::from_utf8(bytes) else { return invalid("The file isn't valid text.") };
     let Ok(value) = serde_json::from_str::<Value>(text) else { return invalid("The file isn't valid JSON.") };
     let Some(map) = value.as_object() else { return invalid("The file isn't a JSON object.") };
-    if map.get("version").and_then(Value::as_u64) != Some(VERSION) { return invalid("The file's version isn't 1, so it was not read."); }
+    // A file from before this version holds only `instructions`, with no version: that's version 1.
+    if map.get("version").is_some_and(|version| version.as_u64() != Some(VERSION)) { return invalid("The file's version isn't 1, so it was not read."); }
     let mut file = File { found: true, valid: true, hash: Some(hex(&Sha256::digest(bytes))), ..File::default() };
     for (key, value) in map {
         match key.as_str() {
-            "version" => {}
+            // `instructions` is read elsewhere, for the bots (Phase 1A), and needs no trust to be named here.
+            "version" | "instructions" => {}
             "setupScript" => match value.as_str() {
                 Some(script) if script.chars().count() <= MAX_SCRIPT_CHARS && !script.contains('\0') => {
                     if !script.trim().is_empty() { file.setup_script = Some(script.to_owned()); }
@@ -297,8 +299,14 @@ fn write(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let target = folder.join(NAME);
     if std::fs::symlink_metadata(&target).is_ok() && p["replace"] != true { return Err(conflict("That file already exists. Replace it?")); }
     let overrides = &project["overrides"];
-    let mut out = serde_json::Map::new();
+    // Everything else already in the file stays, such as the `instructions` the bots read.
+    let mut out = std::fs::read(&target).ok().filter(|_| !std::fs::symlink_metadata(&target).is_ok_and(|meta| meta.file_type().is_symlink()))
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
     out.insert("version".to_owned(), json!(VERSION));
+    out.remove("setupScript");
+    out.remove("approvalMode");
     if let Some(script) = overrides["setupScript"].as_str() { out.insert("setupScript".to_owned(), json!(script)); }
     if let Some(mode) = overrides["approvalMode"].as_str().filter(|mode| MODES.contains(mode)) { out.insert("approvalMode".to_owned(), json!(mode)); }
     // The bot the file names now, so writing never loses it; it is inert until trusted, and the new

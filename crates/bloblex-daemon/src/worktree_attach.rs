@@ -14,7 +14,10 @@
 //! `worktree::create` does. This is its own file so it never touches `worktree.rs`.
 
 use crate::worktree::{self, Worktree};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 /// What an attach gives: exactly what `worktree::create` returns, so a conversation's `link.worktree`
 /// looks the same whether its copy was made here or taken from another machine.
@@ -25,18 +28,67 @@ const PREFIX: &str = "bitbots/";
 /// The folder family holds every task copy of one repository.
 const FAMILY_SUFFIX: &str = "-bitbots";
 
-/// One `git [-C dir] args...` run without a shell. Trimmed stdout on a zero exit, else an error.
-fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = crate::experiments::git_command()
-        .arg("--no-optional-locks").arg("-C").arg(dir).args(args)
+/// Limits per command. Only the fetch talks to the network, so it gets the long one.
+const FETCH_LIMIT: Duration = Duration::from_secs(300);
+const WRITE_LIMIT: Duration = Duration::from_secs(60);
+const READ_LIMIT: Duration = Duration::from_secs(15);
+
+/// One `git [-C dir] args...` run without a shell and with a time limit that really stops the
+/// process: past it the child is killed and reaped. Trimmed stdout on a zero exit, else an error.
+/// Like `pull_request.rs`'s push, nothing can wait for input: no prompt (`GIT_TERMINAL_PROMPT=0`), no
+/// console window or stdin, and `protocol.ext.allow=never`; ssh asks nothing without a console.
+fn run_limited(dir: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
+    let mut child = crate::experiments::git_command()
+        .args(["-c", "protocol.ext.allow=never", "--no-optional-locks"]).arg("-C").arg(dir).args(args)
         .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_OBJECT_DIRECTORY").env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
+        .env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0").env("NO_COLOR", "1")
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn()
         .map_err(|_| "Git could not be started.".to_owned())?;
-    if !output.status.success() { return Err("Git did not complete that command.".to_owned()); }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    // Read stdout on its own thread so a full pipe never stalls the child while we watch the clock.
+    // The thread hands its bytes back over a channel and is never joined: a grandchild that still holds
+    // the pipe open (ssh, a remote helper) must not be able to keep this call waiting.
+    let mut stdout = child.stdout.take();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(out) = stdout.as_mut() { let _ = out.take(1024 * 1024).read_to_end(&mut bytes); }
+        let _ = sender.send(bytes);
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
+            other => {
+                kill_tree(&mut child);
+                return Err(if other.is_ok() { "Git took too long and was stopped." } else { "Git did not complete that command." }.to_owned());
+            }
+        }
+    };
+    let bytes = receiver.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+    if !status.success() { return Err("Git did not complete that command.".to_owned()); }
+    Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
 }
+
+/// Stops git and what it started. On Windows `Child::kill` ends only the process itself, and a fetch
+/// runs through helpers (`git-remote-https`, ssh), so the whole tree goes with `taskkill /T`.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .creation_flags(0x0800_0000)
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn run(dir: &Path, args: &[&str]) -> Result<String, String> { run_limited(dir, args, READ_LIMIT) }
 
 /// Why this branch may not be taken, or `None` when it may. It arrives from another machine, so it is
 /// checked before git sees it: the `bitbots/` family only, never an option, and a valid ref name.
@@ -93,14 +145,14 @@ pub(crate) fn attach_branch(repo_root: &Path, branch: &str) -> Result<Attached, 
     let repo = worktree::repo_root(repo_root).ok_or_else(|| "That folder is not a git repository.".to_owned())?;
     if !ref_name_ok(&repo, branch) { return Err("That branch name can't be used.".to_owned()); }
     // The one fetch. `FETCH_HEAD` is then the remote's commit for this branch.
-    run(&repo, &["fetch", "origin", &format!("refs/heads/{branch}")]).map_err(|_| format!("`{branch}` could not be fetched from the remote."))?;
+    run_limited(&repo, &["fetch", "origin", &format!("refs/heads/{branch}")], FETCH_LIMIT).map_err(|_| format!("`{branch}` could not be fetched from the remote."))?;
     let fetched = run(&repo, &["rev-parse", "FETCH_HEAD"]).map_err(|_| format!("`{branch}` could not be fetched from the remote."))?;
     let attached = |path: PathBuf| Attached { repo: repo.clone(), path, branch: branch.to_owned(), base: String::new(), base_commit: fetched.clone() };
 
     // 1. A copy is already on that branch: never overwrite what it has not committed.
     if let Some(path) = copy_on(&repo, branch) {
         if worktree::is_dirty(&path).unwrap_or(true) { return Err(format!("`{branch}` has uncommitted files here. Commit or discard them first.")); }
-        run(&path, &["merge", "--ff-only", &fetched]).map_err(|_| format!("`{branch}` could not be brought up to date here."))?;
+        run_limited(&path, &["merge", "--ff-only", &fetched], WRITE_LIMIT).map_err(|_| format!("`{branch}` could not be brought up to date here."))?;
         return Ok(attached(path));
     }
 
@@ -109,9 +161,9 @@ pub(crate) fn attach_branch(repo_root: &Path, branch: &str) -> Result<Attached, 
         let ancestor = run(&repo, &["merge-base", "--is-ancestor", &format!("refs/heads/{branch}"), "FETCH_HEAD"]).is_ok();
         if !ancestor { return Err(format!("`{branch}` has commits here that aren't on the remote.")); }
         let path = free_path(&repo, branch)?;
-        run(&repo, &["worktree", "add", &path.to_string_lossy(), branch]).map_err(|_| "The task copy could not be created.".to_owned())?;
+        run_limited(&repo, &["worktree", "add", &path.to_string_lossy(), branch], WRITE_LIMIT).map_err(|_| "The task copy could not be created.".to_owned())?;
         // Fast-forward only: the branch is an ancestor of what was fetched, so this can never lose work.
-        if run(&path, &["merge", "--ff-only", &fetched]).is_err() {
+        if run_limited(&path, &["merge", "--ff-only", &fetched], WRITE_LIMIT).is_err() {
             let _ = run(&repo, &["worktree", "remove", &path.to_string_lossy()]);
             return Err(format!("`{branch}` could not be brought up to date here."));
         }
@@ -120,6 +172,27 @@ pub(crate) fn attach_branch(repo_root: &Path, branch: &str) -> Result<Attached, 
 
     // 3. No local branch: a new one at the fetched commit.
     let path = free_path(&repo, branch)?;
-    run(&repo, &["worktree", "add", "-b", branch, &path.to_string_lossy(), "FETCH_HEAD"]).map_err(|_| "The task copy could not be created.".to_owned())?;
+    run_limited(&repo, &["worktree", "add", "-b", branch, &path.to_string_lossy(), "FETCH_HEAD"], WRITE_LIMIT).map_err(|_| "The task copy could not be created.".to_owned())?;
     Ok(attached(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A git command that never ends is killed at its limit, not waited for. The alias is a test-only
+    /// way to make git hang; production never runs a shell.
+    #[test]
+    fn a_hanging_command_is_killed_at_its_limit() {
+        let started = Instant::now();
+        let outcome = run_limited(Path::new("."), &["-c", "alias.hang=!sleep 30", "hang"], Duration::from_millis(400));
+        assert_eq!(outcome, Err("Git took too long and was stopped.".to_owned()));
+        assert!(started.elapsed() < Duration::from_secs(10), "returned after {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_command_that_finishes_returns_its_output() {
+        assert_eq!(run_limited(Path::new("."), &["--version"], Duration::from_secs(20)).map(|text| text.starts_with("git version")), Ok(true));
+        assert!(run_limited(Path::new("."), &["definitely-not-a-git-command"], Duration::from_secs(20)).is_err());
+    }
 }

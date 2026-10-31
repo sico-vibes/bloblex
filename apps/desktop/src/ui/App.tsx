@@ -4155,7 +4155,6 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
             <CompanionFanoutSummary connected={connected} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
             <OutsideSessionPills sessions={outsideSessions} />
-            <CompanionMachineBots />
             <p className="cs-glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}>All {nouns}: Tokens <b>{tokenGlance}</b></p>
             {activityDetails && (recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>)}
   </>
@@ -4240,7 +4239,7 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
           <span className="cs-bot-name">{item.name}</span>
           {state === 'waiting' ? <span className="cs-bot-meta needs">Needs you</span> : rowSession?.updatedAt ? <time className="cs-bot-meta">{shortTime(rowSession.updatedAt)}</time> : null}
         </button>
-      })}</div>
+      })}<CompanionMachineBots /></div>
       <nav className="cs-foot" aria-label="Companion views" data-companion-no-drag="">
         <button type="button" className={view === 'chat' ? 'on' : ''} aria-label="Chat" title="Chat" onClick={() => openView('chat')}><MessageCircle size={14} /></button>
         <button type="button" className={view === 'activity' ? 'on' : ''} aria-label="Activity" title="Activity" onClick={() => openView('activity')}><Activity size={14} /></button>

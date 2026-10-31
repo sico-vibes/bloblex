@@ -86,3 +86,7 @@ Both supported looks (Bitbots and Blobots), in dark and light; selected, hover, 
 **Flaky under load, besides the known one:** `stopping_a_turn_stops_its_setup_script`. It failed once with five parallel git tests running and passed alone. Mounted UI tests time out if run during cargo builds.
 
 **Check D's free space before starting lanes.** A daemon test build needs about 6 GB. If a lane must build elsewhere, `$env:CARGO_TARGET_DIR` works.
+
+## Live test of machine links (31 October 2026)
+
+Two daemons on one computer can stand in for two machines: give each its own `BLOBLEX_DB_PATH`, turn on Native on loopback ports, and answer the pairing with `remote.pair.confirm` from the `remote.pairing.requested` event. Use a local bare repository as `origin`. Its path has no identity, so `needsProject` isn't exercised this way; unit tests cover it. A conversation only has a task copy if its `link` holds `{"kind": "main", "worktree": {repo, path, branch, base, baseCommit}}`, and a `fanout.start` row is refused for a move. **Not reachable this way:** a real Tailscale certificate, a real second computer, and the real app's windows.

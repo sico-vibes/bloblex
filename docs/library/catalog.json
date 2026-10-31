@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "675693a",
-  "documentCount": 365,
+  "revision": "275c855",
+  "documentCount": 367,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1791,7 +1791,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "17f379be498ee8ac539b09358401cdd4f2a9fdc35464f9c4e129dbb6a83ab2a6",
+      "sha256": "b9e0f7b4761d9c35fb9cf552626c1521e6e8f61d39cf0ae0a10704b0231d99ae",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "b9d7f4ab2cde1f7ece3a8b6428653f3bd37aa74221366734a601361c4615828a",
+      "sha256": "190a314cea529b53fb65c1e6bc5f2e6ab26f3d228cbbeef5ac78837d542bb1d8",
       "headings": [
         {
           "id": "update-commands",
@@ -1972,6 +1972,11 @@
           "id": "phase-4-machines-31-october-2026",
           "text": "Phase 4: machines (31 October 2026)",
           "level": 2
+        },
+        {
+          "id": "phase-4-handoff-31-october-2026-round-2",
+          "text": "Phase 4: handoff (31 October 2026, Round 2)",
+          "level": 3
         }
       ]
     },
@@ -4422,6 +4427,91 @@
         {
           "id": "keeping-the-two-lanes-apart-in-round-1",
           "text": "Keeping the two lanes apart in Round 1",
+          "level": 2
+        },
+        {
+          "id": "rules",
+          "text": "Rules",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-5-7-brief",
+      "source": "docs/history/wave15/phase-5-7-brief.md",
+      "title": "Brief: Phases 5, 6 and 7",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "3c907b3dc942f8bcede344eb6ce44feafecd260ebb0a0937108059e0386b522f",
+      "headings": [
+        {
+          "id": "1-accounts-lane-a-new-accountsrs",
+          "text": "1. Accounts (Lane A, new accounts.rs)",
+          "level": 2
+        },
+        {
+          "id": "who-is-signed-in",
+          "text": "Who is signed in",
+          "level": 3
+        },
+        {
+          "id": "several-accounts-per-provider",
+          "text": "Several accounts per provider",
+          "level": 3
+        },
+        {
+          "id": "2-custom-models-lane-a",
+          "text": "2. Custom models (Lane A)",
+          "level": 2
+        },
+        {
+          "id": "3-more-acp-providers-lane-b",
+          "text": "3. More ACP providers (Lane B)",
+          "level": 2
+        },
+        {
+          "id": "4-codex-schema-lane-b",
+          "text": "4. Codex schema (Lane B)",
+          "level": 2
+        },
+        {
+          "id": "5-secrets-in-the-credential-store-sona-s1-new-secretsrs",
+          "text": "5. Secrets in the credential store (Sona S1, new secrets.rs)",
+          "level": 2
+        },
+        {
+          "id": "6-one-use-secret-requests-sona-s1-secretsrs",
+          "text": "6. One-use secret requests (Sona S1, secrets.rs)",
+          "level": 2
+        },
+        {
+          "id": "7-phone-push-lane-c-new-remotepushrs",
+          "text": "7. Phone push (Lane C, new remote/push.rs)",
+          "level": 2
+        },
+        {
+          "id": "8-webhook-triggers-sona-s2-new-webhooksrs-after-s1-is-merged",
+          "text": "8. Webhook triggers (Sona S2, new webhooks.rs, after S1 is merged)",
+          "level": 2
+        },
+        {
+          "id": "9-ci-and-performance-lane-d",
+          "text": "9. CI and performance (Lane D)",
+          "level": 2
+        },
+        {
+          "id": "keeping-the-lanes-apart",
+          "text": "Keeping the lanes apart",
           "level": 2
         },
         {
@@ -17004,6 +17094,41 @@
         {
           "id": "changed",
           "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "verification",
+          "text": "Verification",
+          "level": 2
+        },
+        {
+          "id": "installation",
+          "text": "Installation",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/releases/0.1.0-beta.44",
+      "source": "docs/releases/0.1.0-beta.44.md",
+      "title": "Bitbots 0.1.0-beta.44",
+      "section": "Release notes",
+      "status": "Release note",
+      "sha256": "b40866e172b4a9f831cf538f9064af1649420ede2050903fea8c4f66fbd097f8",
+      "headings": [
+        {
+          "id": "added",
+          "text": "Added",
+          "level": 2
+        },
+        {
+          "id": "changed",
+          "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "not-yet-checked-on-real-hardware",
+          "text": "Not yet checked on real hardware",
           "level": 2
         },
         {

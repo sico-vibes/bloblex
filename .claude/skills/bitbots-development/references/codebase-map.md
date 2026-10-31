@@ -45,6 +45,7 @@ Last reviewed: 2026-10-27 (T7 wave: model plan, idempotent sends, conversation f
     - **Review:** `git_ops.rs`: `session.git.diff`, `.stage`, `.revert` (safety copy in `<data>/reverted/<id>`, then discard), `.revertUndo`, `prune_reverted` at startup. `repository::locate` gives the full status list for actions. `staged` on each file comes from `parse_status`.
     - **Pull requests:** `pull_request.rs`: `session.pr.draft`, `session.pr.create` (commit, push, `gh pr create`), a `pull_request` notice. `gather` works out the base and every refusal.
     - **Cleanup:** `worktree_cleanup.rs`: `worktree.abandoned`, `worktree.removeAbandoned`. The recomputed list is the guard.
+    - **A copy's life:** made for a conversation, kept while that conversation is open (a turn that changes nothing never removes it), restored by `proposals::before_task_turn` if its files went, and removed only by a merge, a Discard on the merge card, or `worktree.removeAbandoned`.
     - **Setup:** `project_setup.rs` runs copy, submodules, then script. Overrides gain `copyFiles` and `initSubmodules` (`validate_project_overrides`).
     - **Projects:** `project_clone.rs`: `project.clone`, `.cancel`, `.list`, `project.discover`; `refuse_url` is the URL check. Setting `projects.folder`.
     - **Search:** `project_search.rs`: `project.files.search`, `project.content.search`, both by `sessionId` or `projectId`.

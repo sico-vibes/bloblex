@@ -266,13 +266,6 @@ async fn run_git(dir: PathBuf, args: Vec<String>) -> bool {
     matches!(tokio::time::timeout(REMOVE_LIMIT, task).await, Ok(Ok(true)))
 }
 
-fn is_empty_or_missing(path: &Path) -> bool {
-    match std::fs::read_dir(path) {
-        Ok(mut entries) => entries.next().is_none(),
-        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-    }
-}
-
 /// Removes the folder if it's there and empty, retrying briefly. True when it's gone. `remove_dir`
 /// refuses a folder with anything in it, so this can only ever take an empty one.
 async fn tidy_empty_folder(path: &Path) -> bool {
@@ -310,7 +303,7 @@ async fn remove(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         // On Windows git deletes the files and then fails on the empty folder itself while a process,
         // such as the coding agent, still has it as its working folder. The copy is gone by then, and
         // git's record is only cleared by a prune. A folder with anything left in it isn't removed.
-        finished || (is_empty_or_missing(&entry.path) && run_git(entry.repo.clone(), vec!["worktree".into(), "prune".into()]).await)
+        finished || (crate::worktree::is_empty_or_missing(&entry.path) && run_git(entry.repo.clone(), vec!["worktree".into(), "prune".into()]).await)
     };
     // The emptied folder holds nothing, so it's only tidied here and never blocks the rest.
     let folder_left = removed && entry.reason != "folder_missing" && !tidy_empty_folder(&entry.path).await;

@@ -4168,6 +4168,8 @@ async fn note_prompt_delivered(st: &AppState, sid: &str) {
 async fn run_turn(state: AppState, driver: TurnDriver) {
     let st = &state;
     let TurnDriver { sid, turn, text, attachments, reply_snapshot, references, command_directive, annotation_block, exec_options, provider, desired_instruction_hash } = driver;
+    // A task copy that lost its files gets them back before anything runs in it.
+    proposals::before_task_turn(st, &sid).await;
     // 0. The project's setup script, once, in this conversation's own worktree. A failure never stops the turn; the agent is told.
     let setup_failure = match project_setup::before_first_turn(st, &sid, &turn).await {
         project_setup::Setup::Cancelled => { finish_turn_cancelled(st, &sid, &turn).await; return; }

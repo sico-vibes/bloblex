@@ -1724,8 +1724,11 @@ impl AgentAdapter for AcpAdapter {
 
 fn resume_rejected_evidence(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
+    // OpenCode 2 ties a session to its folder, and answers a load from any other
+    // with "session ses_x does not belong to cwd". A conversation moves folder when
+    // its task copy is merged, and it carries on in a fresh session.
     (message.contains("session") || message.contains("resume"))
-        && ["not found", "expired", "does not exist", "unknown id"]
+        && ["not found", "expired", "does not exist", "unknown id", "does not belong to cwd"]
             .iter()
             .any(|evidence| message.contains(evidence))
 }
@@ -1733,6 +1736,12 @@ fn resume_rejected_evidence(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_from_another_folder_counts_as_a_rejected_resume() {
+        assert!(resume_rejected_evidence(r#"{"code":-32602,"message":"Invalid params: session ses_e6 does not belong to cwd: C:\\b"}"#));
+        assert!(!resume_rejected_evidence(r#"{"code":-32602,"message":"Invalid params: cwd must be absolute"}"#));
+    }
 
     #[test]
     fn question_tool_cards_are_hidden_with_their_updates() {

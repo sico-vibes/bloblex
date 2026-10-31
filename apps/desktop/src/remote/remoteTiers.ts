@@ -253,6 +253,7 @@ export function renderTierTableMarkdown(): string {
 // | agents[].defaultProject, projectPath, projects[].path, files[].path | last two path segments only          |
 // | agents[].customArgs                              | replaced by `{ argCount }`                                     |
 // | agents[].customEnv                               | `{}` (key names dropped)                                       |
+// | agents[].envRefs                                 | removed                                                        |
 // | agents[].instructions                            | `{ hasInstructions: true }` when non-empty                     |
 // | messages[].attachments[].path                    | file name only                                                 |
 // | tools[]/turns[]/files[] detail                   | removed by default; `includeToolOutput` restores tool detail   |
@@ -354,6 +355,8 @@ function fieldPolicy(path: readonly string[]): FieldPolicy {
       return 'drop'
     case 'customEnv':
       return 'customEnv'
+    case 'envRefs': // which secret a bot's variable points at never leaves the host
+      return 'drop'
     case 'customArgs':
     case 'args':
     case 'launchArgs':

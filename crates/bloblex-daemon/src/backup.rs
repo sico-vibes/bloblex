@@ -205,6 +205,8 @@ pub(crate) fn export_bot(agent: &Value, runtimes: &[Value]) -> Value {
         .as_object()
         .map(|object| object.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
+    // Phase 5: the variable names a bot points at secrets with, never the secret names or values.
+    let env_ref_keys = agent["envRefs"].as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
     json!({
         "exportId": agent["id"],
         "provider": runtime.and_then(|runtime| runtime["provider"].as_str()).unwrap_or(""),
@@ -225,6 +227,7 @@ pub(crate) fn export_bot(agent: &Value, runtimes: &[Value]) -> Value {
         "hidden": agent["hidden"],
         "maxConcurrency": agent["maxConcurrency"],
         "customEnvKeys": env_keys,
+        "envRefKeys": env_ref_keys,
     })
 }
 
@@ -345,7 +348,7 @@ async fn export(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let picked = |id: &Value| only.as_ref().is_none_or(|ids| id.as_str().is_some_and(|id| ids.iter().any(|wanted| wanted == id)));
     let wants = |name: &str| include.and_then(|include| include.get(name)).and_then(Value::as_bool).unwrap_or(true);
     let runtimes = st.runtimes.read().await.clone();
-    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| picked(&agent["id"])).collect::<Vec<_>>();
+    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| picked(&agent["id"])).map(|agent| crate::secrets::with_refs(st, agent)).collect::<Vec<_>>();
     if let Some(ids) = &only {
         if agents.len() != ids.len() { return Err(derr("not_found", "One of those bots no longer exists.", StatusCode::NOT_FOUND)); }
     }

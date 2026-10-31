@@ -585,3 +585,32 @@ A conversation moves by being **pulled**: the machine that wants it asks the mac
 A provider in the table is discovered like the others — not installed means not listed, an installed CLI whose `--help` does not mention ACP is kept as an error row and retried — and then runs through the existing ACP adapter: sessions, turns, tools, approvals and the models `session/new` reports, with no adapter code of its own. `runtime.list` rows carry `protocolFamily: "acp"`; `runtime.capabilities` gives the same honest row OpenCode gets by the same adapter code (`model`, `thinking` and `instructions` from the session, no `serviceTier`, no `steer`), and `thinking` stays behind its execution gate until a real CLI is verified. `agent.create` and bot proposals accept both new providers; attachments and images are accepted for them as for OpenCode; a sign-in failure names the table's own command (`run gemini in a terminal and sign in there`).
 
 No new RPC, no tier change, nothing on the Bitbots MCP. Capability rows for an unknown provider stay `false`: nothing is claimed about a coding agent Bitbots cannot run.
+
+## Phase 5: secrets and one-use secret requests (31 October 2026)
+
+All of these are `tiers.json` class `never` and the event `secret.request.changed` is `drop`: nothing here crosses to a device, and the secure form exists only at the desktop. The code is `crates/bloblex-daemon/src/secrets.rs`, with `agent_env_refs` in `crates/bloblex-storage/src/secret_refs.rs`.
+
+### Secrets in the credential store
+
+A secret is a named value in Windows Credential Manager, target `Bitbots/<name>`, generic, persisted for the local machine. `name` is 1 to 64 of `[A-Za-z0-9_.-]`, the value 1 to 2,048 bytes of text. **No RPC returns a value.** The value is never in the database, an event, a log, a reply, a backup or a diagnostics bundle.
+
+- `secret.list {}` gives `{secrets: [{name, updatedAt, usedBy}]}`, where `usedBy` is the names of the bots that point at it.
+- `secret.set {name, value, confirm}` gives `{name}`. No `confirm: true` is `invalid_argument`; an existing name is replaced.
+- `secret.delete {name, confirm}` gives `{deleted: true}`. A secret a bot still uses is `conflict`, naming the bots.
+- `agent.create` and `agent.update` accept `envRefs: {ENV_KEY: secretName}` (`null` or `{}` clears it; omitting it keeps it), and `agent.get`, `agent.list` and the create and update replies carry it. A key is a plain variable name (letters, digits, underscore, at most 128) and may look secret (`API_KEY`); `PATH`, `SYSTEMROOT`, `COMSPEC` and the other process-shaping names, and anything starting `BITBOTS_` or `BLOBLEX_`, are `invalid_argument`. The secret need not exist when it is saved.
+- At spawn (a new session, a resumed session and every prompt) the values are read and join the environment beside `customEnv`. A missing secret fails the call with `conflict` and a sentence naming the secret, never a value.
+- A backup carries `envRefKeys` (the variable names) and nothing else; a restored bot has no references. A handoff carries none. Devices never see `envRefs` (field rule in `policy.rs` and `remoteTiers.ts`, goldens `phase5-*`).
+- A coding agent can read its own environment, so this protects a value at rest, not from the bot.
+
+### One-use secret requests
+
+The bot tool `request_secret {name, reason}` (`reason` at most 300 characters) joins the tools beside `ask_user`, offered wherever `ask_user` is. In a conversation nobody watches (an automation, an unattended task, or a delegated child whose origin chain holds one) it is not offered and a call answers a plain sentence without asking. Auto-approve and Full access never answer it.
+
+The call **waits** for the owner for up to 50 seconds (the team bridge's limit is 60). The request is held in memory only, so a restart ends it. It ends on an answer, a decline, the end of the turn (a cancel included) or the time limit, and a late answer is `conflict`. One request per conversation is open at a time.
+
+- `secret.request.list {}` gives `{requests: [{id, sessionId, name, reason, botName, expiresAt}]}`.
+- `secret.request.answer {id, value}` (1 to 16,384 bytes) gives `{answered: true}`; `secret.request.decline {id}` gives `{declined: true}`. A request that is no longer waiting is `conflict`.
+- Event `secret.request.changed {id, sessionId, name, reason, botName, expiresAt, status}` with `status` `pending`, `answered`, `declined`, `cancelled` or `expired`. It never carries a value.
+- On an answer the value goes to `<data>/one-use/<id>`, created empty, restricted to the current user, and only then written. The tool result names that path and nothing else. The file is deleted when the turn ends, and the folder is emptied at startup. The conversation gets the notice "You gave Rae NAME for this turn."
+- The bot can read the file, and what it does with the value is up to it.
+

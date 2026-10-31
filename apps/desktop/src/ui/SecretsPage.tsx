@@ -61,6 +61,12 @@ export function SecretsPage() {
   </>
 }
 
+/** Seconds left to answer, or null when the daemon gave no limit. */
+export function secondsLeft(expiresAt: string | null, now: number): number | null {
+  const at = expiresAt ? Date.parse(expiresAt) : NaN
+  return Number.isFinite(at) ? Math.max(0, Math.ceil((at - now) / 1000)) : null
+}
+
 function SecretRequestDialog({ request, onDone }: { request: SecretRequest; onDone: () => void }) {
   const entered = useDialogEntered()
   const [value, setValue] = useState('')
@@ -69,6 +75,9 @@ function SecretRequestDialog({ request, onDone }: { request: SecretRequest; onDo
   const { ref } = useDialogAccessibility(() => undefined, () => false)
   const input = useRef<HTMLInputElement>(null)
   useEffect(() => { input.current?.focus() }, [])
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer) }, [])
+  const left = secondsLeft(request.expiresAt, now)
   const send = async (method: 'secret.request.answer' | 'secret.request.decline') => {
     setBusy(true); setProblem(null)
     try {
@@ -81,6 +90,7 @@ function SecretRequestDialog({ request, onDone }: { request: SecretRequest; onDo
     <form ref={ref as unknown as React.RefObject<HTMLFormElement>} className="blob-dialog secret-request" role="dialog" aria-modal="true" aria-labelledby="secret-request-title" tabIndex={-1} autoComplete="off" onSubmit={(event) => { event.preventDefault(); if (value) void send('secret.request.answer') }}>
       <h2 id="secret-request-title">{request.botName} is asking for {request.name}</h2>
       <p className="secret-reason">{request.reason}</p>
+      {left !== null && <small className="project-settings-note" role="timer">{left > 0 ? `Answer within ${left} second${left === 1 ? '' : 's'}. The bot is waiting.` : 'This request has run out of time.'}</small>}
       <label className="new-project-field"><span>{request.name}</span>
         <input ref={input} className="text-input" type="password" value={value} autoComplete="new-password" onChange={(event) => setValue(event.target.value)} />
         <small className="project-settings-note">For this turn only. It goes to a private file that's deleted when the turn ends, and it isn't saved in the conversation. {request.botName} can read it, so what happens to it after that is up to the bot.</small>
@@ -88,7 +98,7 @@ function SecretRequestDialog({ request, onDone }: { request: SecretRequest; onDo
       {problem && <p className="new-project-error" role="alert">{problem}</p>}
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void send('secret.request.decline')}>Decline</button>
-        <button type="submit" className="primary-button" disabled={busy || !value}>Give it for this turn</button>
+        <button type="submit" className="primary-button" disabled={busy || !value || left === 0}>Give it for this turn</button>
       </div>
     </form>
   </div>, document.body)

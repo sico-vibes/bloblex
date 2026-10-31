@@ -93,6 +93,8 @@ mod machines;
 mod handoff;
 #[cfg(test)]
 mod machines_tests;
+// Phase 5: secrets in the credential store and one-use secret requests.
+mod secrets;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
@@ -970,6 +972,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
         "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
         "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
+        "secret.list" | "secret.set" | "secret.delete" | "secret.request.list" | "secret.request.answer" | "secret.request.decline" => secrets::rpc(st, method, &p).await,
         "project.findByIdentity" => repo_identity::find_by_identity(st, &p),
         "project.sharedSettings.get" | "project.sharedSettings.trust" | "project.sharedSettings.untrust" | "project.sharedSettings.write" => shared_settings::rpc(st, method, &p),
         "worktree.abandoned" | "worktree.removeAbandoned" => worktree_cleanup::rpc(st, method, &p).await,
@@ -999,9 +1002,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "agent.list" => {
             let include=match p.get("includeArchived"){None=>false,Some(v)=>v.as_bool().ok_or_else(||derr("invalid_argument","includeArchived must be a boolean",StatusCode::BAD_REQUEST))?};
             let runtime=match p.get("runtimeId"){None=>None,Some(v)=>Some(v.as_str().ok_or_else(||derr("invalid_argument","runtimeId must be a string",StatusCode::BAD_REQUEST))?)};
-            st.db.agent_list(include,runtime).map(|agents|json!({"agents":agents})).map_err(agent_error)
+            st.db.agent_list(include,runtime).map(|agents|json!({"agents":secrets::with_refs_all(st,json!(agents))})).map_err(agent_error)
         }
-        "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":agent})).map_err(agent_error) }
+        "agent.get" => { let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?; st.db.agent_get(id).map(|agent|json!({"agent":secrets::with_refs(st,agent)})).map_err(agent_error) }
         "permissions.policy.get" => { let default=st.db.default_approval_mode().map_err(agent_error)?;let agents=st.db.agent_list(false,None).map_err(agent_error)?;let per_agent=agents.iter().map(|a|json!({"agentId":a["id"],"mode":a["approvalMode"],"effectiveMode":a["effectiveApprovalMode"]})).collect::<Vec<_>>();Ok(json!({"defaultMode":default,"perAgent":per_agent})) }
         "manager.get" => st.db.manager_agent().map(|manager| json!({"manager": manager})).map_err(agent_error),
         "manager.profile.list" | "manager.profile.set" | "manager.profile.delete" | "manager.playbook.get" | "manager.playbook.history" | "manager.playbook.set" | "manager.playbook.revert" => knowledge::rpc(st, method, &p).await,
@@ -1017,7 +1020,15 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let agent = agent_create_from_rpc(st, fields).await?;
             Ok(json!({"manager": agent, "created": true}))
         }
-        "agent.create" => Ok(json!({"agent": agent_create_from_rpc(st, p.clone()).await?})),
+        "agent.create" => {
+            // Environment references are the owner's: checked here, saved after the bot exists.
+            let refs = secrets::parse_refs(&p["envRefs"])?;
+            let mut fields = p.clone();
+            if let Some(object) = fields.as_object_mut() { object.remove("envRefs"); }
+            let agent = agent_create_from_rpc(st, fields).await?;
+            if !refs.is_empty() { if let Some(id) = agent["id"].as_str() { st.db.env_refs_set(id, &refs).map_err(agent_error)?; } }
+            Ok(json!({"agent": secrets::with_refs(st, agent)}))
+        }
         "agent.update" => {
             let id = p["agentId"].as_str().ok_or_else(|| derr("invalid_argument", "agentId is required", StatusCode::BAD_REQUEST))?;
             let existing = st.db.agent_get(id).map_err(agent_error)?;
@@ -1025,6 +1036,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if bot_is_locked(&existing) { return Err(locked_bot_error()); }
             let mut fields = p.clone();
             fields.as_object_mut().unwrap().remove("agentId");
+            let refs = match fields.get("envRefs") { None => None, Some(value) => Some(secrets::parse_refs(value)?) };
+            fields.as_object_mut().unwrap().remove("envRefs");
             let runtime_id = fields["runtimeId"].as_str().unwrap_or(existing["runtimeId"].as_str().unwrap_or("")).to_owned();
             let mut effective = existing.clone();
             if let (Some(dst), Some(src)) = (effective.as_object_mut(), fields.as_object()) { for (key, value) in src { dst.insert(key.clone(), value.clone()); } }
@@ -1040,8 +1053,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let options_changed = ["runtimeId", "model", "thinking", "serviceTier"].iter().any(|key| fields.get(*key).is_some());
             if options_changed { validate_agent_catalog(st, &runtime_id, &effective).await?; }
             let (agent, events) = st.db.agent_update(id, &fields).map_err(agent_error)?;
+            if let Some(refs) = &refs { st.db.env_refs_set(id, refs).map_err(agent_error)?; }
             st.broadcast_persisted(events);
-            Ok(json!({"agent":agent}))
+            Ok(json!({"agent":secrets::with_refs(st, agent)}))
         }
         "agent.delete" => {
             let id=p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId is required",StatusCode::BAD_REQUEST))?;
@@ -2488,6 +2502,7 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
     let options_session=json!({"agentId":agent_id,"provider":provider,"projectId":project_id});
     let base_options=exec_options_for_session(st,&options_session)?;
     let (mut exec_options,mut model_lock)=resolve_session_model_lock(st,&runtime,base_options).await;
+    secrets::add_to_environment(st,agent_id.as_deref(),&mut exec_options.env)?;
     // Phase 1: the project's model for this bot's provider, when that provider's catalog offers it.
     // An explicit `model` in the call wins, and unattended work keeps the bot's own model.
     if agent_id.is_some() && !is_unattended(&p["link"]) && p.get("model").is_none_or(Value::is_null) {
@@ -2746,7 +2761,8 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
             StatusCode::BAD_REQUEST,
         )
     })?;
-    let base_options = exec_options_for_session(st, &row)?;
+    let mut base_options = exec_options_for_session(st, &row)?;
+    secrets::add_to_environment(st, row["agentId"].as_str(), &mut base_options.env)?;
     let (exec_options, model_lock, migrate_lock) = if row["modelLock"].is_object() {
         let current_lock = row["modelLock"].clone();
         let catalog = catalog::get(st, &rt, None, None, catalog::Mode::CachedOnly).await.ok().flatten().map(|served| served.value);
@@ -3891,7 +3907,8 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
         }
         (row, state)
     };
-    let exec_options=exec_options_for_session(st,&session_options)?;
+    let mut exec_options=exec_options_for_session(st,&session_options)?;
+    secrets::add_to_environment(st,session_options["agentId"].as_str(),&mut exec_options.env)?;
     let turn = Uuid::new_v4().to_string();
     let runtime_value=st.runtimes.read().await.iter().find(|r|r["id"]==session_options["runtimeId"]).cloned().unwrap_or(Value::Null);
     let desired_instruction_hash=bloblex_agent_core::instruction_sha256(exec_options.instructions.as_deref().unwrap_or(""));
@@ -5457,6 +5474,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     *st.team.address.lock().unwrap() = Some(addr.to_string());
+    if let Some(dir) = data_dir.as_deref() { secrets::sweep_leftovers(dir); }
     *st.team.data_dir.lock().unwrap() = data_dir;
     stash::prune_restored(&st);
     git_ops::prune_reverted(&st);
@@ -12898,6 +12916,9 @@ mod phase2a_tests {
 
     // Phase 4 (Gogo's lane): taking a branch, and importing a conversation.
     include!("phase4_attach_tests.rs");
+
+    // Phase 5 (Sona S1): secrets in the credential store, and one-use secret requests.
+    include!("secrets_tests.rs");
 
     #[tokio::test]
     async fn team_update_project_move_does_not_archive() {

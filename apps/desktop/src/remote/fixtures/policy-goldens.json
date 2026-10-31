@@ -671,6 +671,96 @@
         "code": "quiet_hours",
         "reason": "quiet hours are on; this host only allows reading right now"
       }
+    },
+    {
+      "name": "phase5-never-secret-list",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "secret.list",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "Secret names and which bots use them stay at the desktop; no device sees them."
+      }
+    },
+    {
+      "name": "phase5-never-secret-set",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "secret.set",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "Saving a secret is a desktop action; the value is typed at the desktop and never travels."
+      }
+    },
+    {
+      "name": "phase5-never-secret-delete",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "secret.delete",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "Deleting a secret is a desktop action."
+      }
+    },
+    {
+      "name": "phase5-never-secret-request-list",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "secret.request.list",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "The secure form for a bot's request exists only at the desktop."
+      }
+    },
+    {
+      "name": "phase5-never-secret-request-answer",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "secret.request.answer",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "Only the owner at the desktop gives a secret; a device never can."
+      }
+    },
+    {
+      "name": "phase5-never-secret-request-decline",
+      "call": {
+        "tier": "operator",
+        "approvalsFromRemote": true,
+        "method": "secret.request.decline",
+        "params": {},
+        "quietHours": false
+      },
+      "expect": {
+        "allowed": false,
+        "code": "forbidden_remote",
+        "reason": "Only the owner at the desktop answers a secret request."
+      }
     }
   ],
   "results": [
@@ -1202,6 +1292,50 @@
             "workspace": {
               "path": "repos/site"
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "phase5-env-refs-hidden",
+      "method": "agent.get",
+      "options": {},
+      "input": {
+        "agent": {
+          "id": "a_1",
+          "envRefs": {
+            "GITHUB_TOKEN": "gh-main"
+          },
+          "customEnv": {
+            "LANG": "en"
+          }
+        }
+      },
+      "expect": {
+        "agent": {
+          "id": "a_1",
+          "customEnv": {}
+        }
+      }
+    },
+    {
+      "name": "phase5-env-refs-hidden-in-list",
+      "method": "agent.list",
+      "options": {},
+      "input": {
+        "agents": [
+          {
+            "id": "a_1",
+            "envRefs": {
+              "API_KEY": "openai"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "agents": [
+          {
+            "id": "a_1"
           }
         ]
       }
@@ -2078,6 +2212,20 @@
           }
         }
       }
+    },
+    {
+      "name": "phase5-dropped-secret-request-changed",
+      "input": {
+        "type": "secret.request.changed",
+        "payload": {
+          "id": "r",
+          "sessionId": "s",
+          "name": "GITHUB_TOKEN",
+          "reason": "push",
+          "status": "pending"
+        }
+      },
+      "expect": null
     }
   ]
 }

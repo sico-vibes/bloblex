@@ -450,6 +450,8 @@ fn field_policy(path: &[String]) -> FieldPolicy {
         // Phase 4: which `.bitbots.json` the owner trusted is host-only, wherever it sits.
         "trustedSharedHash" => FieldPolicy::Drop,
         "customEnv" => FieldPolicy::CustomEnv,
+        // Phase 5: which secret a bot's variable points at never leaves the host.
+        "envRefs" => FieldPolicy::Drop,
         "customArgs" | "args" | "launchArgs" => FieldPolicy::ArgCount,
         "executablePath" => FieldPolicy::FileName,
         "instructions" => FieldPolicy::Instructions,

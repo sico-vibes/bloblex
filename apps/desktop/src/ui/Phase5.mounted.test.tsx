@@ -14,7 +14,7 @@ vi.mock('../tauri', () => ({
 }))
 
 import { AccountsPage, accountLine, customModelProblem, parseEfforts } from './AccountsPage'
-import { SecretRequests, SecretsPage, secretNameProblem } from './SecretsPage'
+import { SecretRequests, SecretsPage, secondsLeft, secretNameProblem } from './SecretsPage'
 
 let root: Root | null = null
 let host: HTMLDivElement
@@ -102,6 +102,12 @@ describe('custom models', () => {
 })
 
 describe('secrets', () => {
+  it('counts down, and stops at zero', () => {
+    expect(secondsLeft(null, 0)).toBeNull()
+    expect(secondsLeft('2026-10-31T12:00:50Z', Date.parse('2026-10-31T12:00:00Z'))).toBe(50)
+    expect(secondsLeft('2026-10-31T12:00:00Z', Date.parse('2026-10-31T12:00:09Z'))).toBe(0)
+  })
+
   it('checks a name', () => {
     expect(secretNameProblem('')).toMatch(/name/)
     expect(secretNameProblem('has space')).toMatch(/letters/)

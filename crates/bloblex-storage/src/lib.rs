@@ -13,6 +13,7 @@ mod phase4;
 mod phase4_sessions;
 // Phase 5, section 7: Web Push subscriptions, one per device.
 mod phase6;
+mod secret_refs; // Phase 5: environment references to secrets
 pub mod cron;
 
 #[derive(Debug, Error)]
@@ -2171,6 +2172,7 @@ impl Storage {
         let storage = Self::migrate_versions(conn, path)?;
         { let mut c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_agent_accept_edits(&mut c, path)?; }
         { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; phase1b::ensure_phase1b_schema(&c)?; phase2::ensure_phase2_schema(&c)?; phase4::ensure_phase4_schema(&c)?; phase6::ensure_phase6_schema(&c)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
+        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; secret_refs::ensure_secret_refs_schema(&c)?; }
         Ok(storage)
     }
     fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {

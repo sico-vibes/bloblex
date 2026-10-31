@@ -226,6 +226,48 @@
       "params": null
     },
     {
+      "method": "secret.list",
+      "class": "never",
+      "minTier": null,
+      "why": "Secret names and which bots use them stay at the desktop; no device sees them.",
+      "params": null
+    },
+    {
+      "method": "secret.set",
+      "class": "never",
+      "minTier": null,
+      "why": "Saving a secret is a desktop action; the value is typed at the desktop and never travels.",
+      "params": null
+    },
+    {
+      "method": "secret.delete",
+      "class": "never",
+      "minTier": null,
+      "why": "Deleting a secret is a desktop action.",
+      "params": null
+    },
+    {
+      "method": "secret.request.list",
+      "class": "never",
+      "minTier": null,
+      "why": "The secure form for a bot's request exists only at the desktop.",
+      "params": null
+    },
+    {
+      "method": "secret.request.answer",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the desktop gives a secret; a device never can.",
+      "params": null
+    },
+    {
+      "method": "secret.request.decline",
+      "class": "never",
+      "minTier": null,
+      "why": "Only the owner at the desktop answers a secret request.",
+      "params": null
+    },
+    {
       "method": "runtime.profile.list",
       "class": "read",
       "minTier": "viewer",
@@ -1437,6 +1479,7 @@
     "replay.gap": "allow",
     "runtime.models.changed": "allow",
     "machine.changed": "drop",
+    "secret.request.changed": "drop",
     "machine.pair.changed": "drop",
     "machine.takeOver.changed": "drop",
     "backup.imported": "drop",

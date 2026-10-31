@@ -573,7 +573,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         }
     }
     // OpenCode has no native question tool over ACP, so the bridge offers one.
-    if ask_user { list.push(crate::questions::tool_schema()); }
+    if ask_user { list.push(crate::questions::tool_schema()); list.push(crate::secrets::tool_schema()); }
     list.extend(memory);
     list.extend(skill_tools);
     json!(list)
@@ -657,6 +657,8 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                 "list_my_schedules" => crate::automations::list_my_schedules_tool(st, session_id).await,
                 "ask_user" if ask_user => crate::questions::ask_user_tool(st, session_id, args).await,
                 "ask_user" => Err("ask_user is not available in this conversation.".into()),
+                "request_secret" if ask_user => crate::secrets::request_secret_tool(st, session_id, args).await,
+                "request_secret" => Err("request_secret is not available here: nobody is watching this conversation to answer. Ask for it in a conversation the owner is in.".into()),
                 "memory_search" if memory_enabled => crate::memory::tool_search(st, session_id, args).await,
                 "memory_get" if memory_enabled => crate::memory::tool_get(st, session_id, args).await,
                 "memory_write" if memory_enabled => crate::memory::tool_write(st, session_id, args).await,

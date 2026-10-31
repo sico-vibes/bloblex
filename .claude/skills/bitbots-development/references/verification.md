@@ -80,3 +80,5 @@ Then connect to the page's `webSocketDebuggerUrl` with a small Node script (`new
 ## UI review checklist
 
 Both supported looks (Bitbots and Blobots), in dark and light; selected, hover, focus and disabled states; text contrast of 4.5:1 or more; no pill or circle controls in the new looks (the Manager and lock badges and the look orbs excepted); companion and dictation windows if styles changed; reduced motion; the production build when styles or assets load differently.
+
+**Checking `bloblex-desktop` from a lane worktree.** It needs three things a worktree lacks: a path with no apostrophe (else `tauri-winres` fails with `RC2135`), `apps/desktop/dist`, and the staged `binaries/bitbotsd-*.exe`. Copy the tree without `target`, `node_modules`, `.git` and `dist` to a short path, run `cargo check -p bloblex-desktop` there with `TAURI_CONFIG='{"bundle":{"externalBin":[]},"build":{"frontendDist":"../dist-remote"}}'`, and delete the copy afterwards. The build also rewrites `src-tauri/gen/schemas/*.json`: revert those.

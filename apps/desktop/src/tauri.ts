@@ -154,6 +154,12 @@ export async function openInEditor(path: string, projectRoot?: string | null): P
   await invoke('open_in_editor', { path, projectRoot: projectRoot ?? null })
 }
 
+/** Opens the save dialog and writes a generated image there. False when the owner cancels. The renderer never holds its path. */
+export async function saveGeneratedImage(sessionId: string, mediaId: string): Promise<boolean> {
+  if (!inDesktop) throw new Error('Saving is available only in the desktop app.')
+  return invoke<boolean>('save_generated_image', { sessionId, mediaId })
+}
+
 export async function revealInExplorer(path: string, projectRoot?: string | null): Promise<void> {
   if (!inDesktop) throw new Error('File Explorer is available only in the desktop app.')
   await invoke('reveal_in_explorer', { path, projectRoot: projectRoot ?? null })

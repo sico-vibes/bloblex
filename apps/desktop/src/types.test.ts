@@ -16,6 +16,18 @@ const base = (): Snapshot => ({
 const event = (type: string, sequence: number, payload: Record<string, unknown>): DaemonEvent => ({ v: 1, type, sequence, payload })
 
 describe('daemon event reconciliation', () => {
+  it('updates a generated image in place, and two notices of one turn stay separate', () => {
+    const notice = (sequence: number, id: string, status: string) => event('message.completed', sequence, { sessionId: 's-a', messageId: id, role: 'notice', message: { id, role: 'notice', turnId: 't-a', content: status, meta: { kind: 'generated_image', mediaId: id, status } } })
+    let next = applyEvent(base(), notice(5, 'img-1', 'pending'))
+    next = applyEvent(next, notice(6, 'img-2', 'pending'))
+    expect(next.sessions?.[0]?.messages?.map((item) => item.id)).toEqual(['m-a', 'img-1', 'img-2'])
+    next = applyEvent(next, notice(7, 'img-1', 'ready'))
+    const messages = next.sessions?.[0]?.messages ?? []
+    expect(messages.map((item) => item.id)).toEqual(['m-a', 'img-1', 'img-2'])
+    expect(messages[1]?.meta?.status).toBe('ready')
+    expect(messages[2]?.meta?.status).toBe('pending')
+  })
+
   it('replaces the runtime roster when background discovery completes', () => {
     const next = applyEvent(base(), event('runtime.changed', 5, {
       runtimes: [{ id: 'rt-claude', provider: 'claude' }],

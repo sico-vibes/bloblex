@@ -1,7 +1,7 @@
 // Composer footer controls: permission mode, attachment tray and the shared
 // popover behaviour used by the model, effort and context controls.
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { Check, ChevronDown, FilePenLine, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, X, CircleAlert } from 'lucide-react'
+import { Check, ChevronDown, FilePenLine, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, Sparkles, X, CircleAlert } from 'lucide-react'
 import type { Agent, ApprovalMode, Session } from '../types'
 import { parseApprovalMode } from '../approvalContract'
 import { rpc } from '../tauri'
@@ -184,7 +184,7 @@ export function AttachButton({ supported, disabled, count, onFiles }: { supporte
  * is disabled on its own, with the reason shown, so the control itself stays
  * available whenever either kind is. Drag and paste still add images directly.
  */
-export function AttachMenu({ imagesSupported, imagesDisabled, imageCount, fileDisabled, onImages, onPickFile }: { imagesSupported: boolean; imagesDisabled: boolean; imageCount: number; fileDisabled: boolean; onImages: (files: File[]) => void; onPickFile: () => void }) {
+export function AttachMenu({ imagesSupported, imagesDisabled, imageCount, fileDisabled, onImages, onPickFile, onGenerateImage }: { imagesSupported: boolean; imagesDisabled: boolean; imageCount: number; fileDisabled: boolean; onImages: (files: File[]) => void; onPickFile: () => void; onGenerateImage?: () => void }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -197,7 +197,7 @@ export function AttachMenu({ imagesSupported, imagesDisabled, imageCount, fileDi
   const imageOff = imagesDisabled || !imagesSupported || full
   const imageNote = !imagesSupported ? 'This coding agent does not accept images.' : full ? `Up to ${MAX_COMPOSER_ATTACHMENTS} images per message.` : 'PNG, JPEG, GIF or WebP, sent with your message.'
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className="composer-icon-button" aria-haspopup="menu" aria-expanded={open} aria-label="Attach" title="Attach an image or a file" disabled={imageOff && fileDisabled} onClick={() => setOpen((value) => !value)}><Paperclip size={16} aria-hidden="true" /></button>
+    <button ref={triggerRef} type="button" className="composer-icon-button" aria-haspopup="menu" aria-expanded={open} aria-label="Attach" title="Attach an image or a file" disabled={imageOff && fileDisabled && !onGenerateImage} onClick={() => setOpen((value) => !value)}><Paperclip size={16} aria-hidden="true" /></button>
     {open && <div ref={menuRef} className="composer-menu attach-menu align-left" role="menu" aria-label="Attach to this message" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
       <div className="composer-menu-heading">Attach</div>
       <button type="button" role="menuitem" className="composer-menu-item rich" disabled={imageOff} onClick={() => { close(false); inputRef.current?.click() }}>
@@ -208,6 +208,13 @@ export function AttachMenu({ imagesSupported, imagesDisabled, imageCount, fileDi
         <span className="composer-menu-icon"><FileText size={15} aria-hidden="true" /></span>
         <span className="composer-menu-text"><strong>File by path</strong><small>Document, audio or video. Bitbots does not read it; the coding agent opens it if its permissions allow.</small></span>
       </button>
+      {onGenerateImage && <>
+        <div className="composer-menu-separator" role="separator" />
+        <button type="button" role="menuitem" className="composer-menu-item rich" onClick={() => { close(false); onGenerateImage() }}>
+          <span className="composer-menu-icon"><Sparkles size={15} aria-hidden="true" /></span>
+          <span className="composer-menu-text"><strong>Generate an image</strong><small>Asks the bot to use its own image tool. You describe the picture.</small></span>
+        </button>
+      </>}
     </div>}
     <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; if (files.length) onImages(files) }} />
   </div>

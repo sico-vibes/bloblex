@@ -1,0 +1,22 @@
+/* A generated image in the transcript and the companion. Builds on the media cards in mediaPreview.css. */
+.generated-image-row { width: 100%; }
+.generated-image-row.compact { margin: 2px 0; }
+.generated-image-row .media-card { max-width: min(100%, 520px); }
+
+.generated-image-pending { display: flex; align-items: center; gap: 10px; max-width: min(100%, 520px); min-height: 44px; margin: 8px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); font-size: var(--fs-xs); }
+.generated-image-pending-art { display: grid; place-items: center; flex: none; width: 28px; height: 28px; color: var(--text-3); border-radius: var(--radius-sm); background: var(--surface-hover); animation: generated-image-wait 1.4s ease-in-out infinite; }
+@keyframes generated-image-wait { 50% { opacity: 0.55; } }
+.generated-image-row.compact .generated-image-pending, .generated-image-row.compact .media-card { min-height: 0; margin: 4px 0; padding: 6px 10px; }
+
+.generated-image-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 26px; }
+/* Two classes, to win over `.media-image button`, which styles the picture's own button. */
+.generated-image-actions .generated-image-action { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font-size: var(--fs-2xs); cursor: pointer; }
+.generated-image-actions .generated-image-action:hover { color: var(--text-1); background: var(--surface-hover); }
+.generated-image-actions .generated-image-action:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.generated-image-note { margin-left: 4px; color: var(--text-3); font-size: var(--fs-2xs); }
+.generated-image-note.error { color: var(--danger-ink); }
+
+.media-image.generated-image.compact { max-width: min(100%, 200px); margin: 4px 0; }
+.media-image.generated-image.compact img { max-height: 132px; }
+
+@media (prefers-reduced-motion: reduce) { .generated-image-pending-art { animation: none; } }

@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "0020834",
-  "documentCount": 362,
+  "revision": "3647793",
+  "documentCount": 363,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "320e60a90aef205a178951de6c99143d2d14ebfdc668d7ced702e73e250f259c",
+      "sha256": "c81af24f3675c7b451d43a9b76d1e5e8f2760231a7a67bfe22a1ae7c62e13c1f",
       "headings": [
         {
           "id": "update-commands",
@@ -1906,6 +1906,11 @@
         {
           "id": "phase-1-approvals-and-project-overrides-30-october-2026-lane-a",
           "text": "Phase 1, approvals and project overrides (30 October 2026, lane A)",
+          "level": 3
+        },
+        {
+          "id": "phase-2-31-october-2026-generated-images",
+          "text": "Phase 2 (31 October 2026): generated images",
           "level": 3
         },
         {
@@ -4192,6 +4197,76 @@
         {
           "id": "6-report-a-problem",
           "text": "6. Report a problem",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-2-brief",
+      "source": "docs/history/wave15/phase-2-brief.md",
+      "title": "Brief: Phase 2, images from any path",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "1c12abd3baafcd729b6fa61fb979f240f040315190db40c54a9e6fb9cc2b6c4e",
+      "headings": [
+        {
+          "id": "evidence-read-from-the-installed-tools-31-october-2026",
+          "text": "Evidence (read from the installed tools, 31 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "1-the-generated-media-record",
+          "text": "1. The generated-media record",
+          "level": 2
+        },
+        {
+          "id": "2-opencode-acp-adapter",
+          "text": "2. OpenCode (ACP adapter)",
+          "level": 2
+        },
+        {
+          "id": "3-codex",
+          "text": "3. Codex",
+          "level": 2
+        },
+        {
+          "id": "4-the-daemon",
+          "text": "4. The daemon",
+          "level": 2
+        },
+        {
+          "id": "5-mediapreview",
+          "text": "5. media.preview",
+          "level": 2
+        },
+        {
+          "id": "6-capability",
+          "text": "6. Capability",
+          "level": 2
+        },
+        {
+          "id": "7-mcp",
+          "text": "7. MCP",
+          "level": 2
+        },
+        {
+          "id": "tests",
+          "text": "Tests",
+          "level": 2
+        },
+        {
+          "id": "rules",
+          "text": "Rules",
           "level": 2
         },
         {

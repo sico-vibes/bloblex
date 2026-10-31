@@ -31,6 +31,8 @@ export interface RuntimeCapabilities {
   agentConcurrency: { configuredMaxConcurrency: number | null; effectiveMaxConcurrency: number; active: number } | null
   agentConcurrencies: AgentConcurrencyRow[]
   hostDependent: boolean
+  /** The coding agent has its own image tool. */
+  generatesImages: boolean
 }
 
 export interface ServiceTierOption {
@@ -173,6 +175,7 @@ export function parseCapabilities(value: unknown): RuntimeCapabilities | null {
     agentConcurrency,
     agentConcurrencies,
     hostDependent: root.hostDependent === true,
+    generatesImages: root.generatesImages === true,
   }
 }
 

@@ -12,6 +12,22 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **PowerShell calls don't share environment changes:** remove `BITBOTS_HOOK_BRIDGE` and `BITBOTS_REMOTE_WEB_DIR` in the same command that runs `cargo test`, or the two known env tests fail.
 - **Python in a Bash heredoc is fine for text without backslashes** (it handled the CRLF `tiers.json`); put anything with Windows paths in a file.
 
+## 2026-10-31 · Phase 2: images from any path, and the OpenCode timer
+
+- **Read the tool before trusting the plan.** The plan said to parse "Saved image: <file>" from OpenCode's tool result. OpenCode 2.2.2's npm binary holds its JavaScript as plain text, and it shows the tool returns at once, before the image exists, with a path that has no extension. A plan's description of a third-party tool is a guess until it is read.
+- **OpenCode's ACP shapes:** the tool's name is only in the started `tool_call`, in `title`. The finished `tool_call_update` has no name or title, only `rawOutput.metadata {path, model, jobID}`. `path` is the stem. The completion notice has no producer in the ACP layer of 2.2.2, so the daemon watches for the file itself.
+- **A title can be forged.** A shell call's title comes from the model, so a bot can title one `experimental_image_generate`. Refuse `kind:"execute"`, read only the exact structured field, and never search or parse output. A notice may finish a known call but never create a record.
+- **`session.changed` doesn't update messages.** It merges summary fields and keeps the old message list (`types.ts`). To change a message in place, emit `message.completed` with its `messageId`: the client replaces the row with that id.
+- **The client's turn-and-role fallback would merge notices.** Streamed text finds its row by turn and role, so a notice with a turn id could overwrite another notice from that turn. Notices now only match their own id, and notices are stored with no turn.
+- **When a provider sends both a saved file and the bytes, the saved file wins.** Otherwise every image is written twice. The bytes are only the fallback, and they never reach a tool row, event or log.
+- **Failure text is provider text.** Redact it and strip absolute paths before it goes in `meta` or a message, or a path reaches a phone.
+- **Don't cancel on a "busy" refusal.** Sending `session/cancel` whenever a prompt fails would stop the running turn the refusal is about, while telling the owner to wait for it.
+- **A test hook that changes a process-wide value needs its tests run one at a time.** Set it after the session is open, so only the call under test feels it. `applyEvent` drops a repeated sequence number, so reducer tests need increasing ones.
+- **`explorer /select,` needs two arguments and backslashes:** `.arg("/select,").arg(path)`. Not yet seen opening a window in the real app.
+- **`.media-image button` styles every button inside the figure.** New buttons in there need two classes to win.
+- **The browser pane denies all clipboard writes, even `writeText`.** Copy can only be proven in the real app.
+- **Keep an OpenCode lane's turns short while the installed app has the 30-minute limit.** Asking Gogo to report after each chunk also made review easier: each chunk's mistakes were caught before the next built on them.
+
 ## 2026-10-30 · Phase 1: modes, overrides, the sign-in read, and two lanes in parallel
 
 - **Widening a CHECK on `agents` means rebuilding from the table's own stored SQL** (`ensure_agent_accept_edits`): it has gained columns since version 9, so a fixed column list would lose data. Change the CHECK text in the old migration SQL too, so fresh databases skip the rebuild and its backup. A CHECK it doesn't recognise returns `Ok`: opening the app matters more than one new mode. A failed backup or rebuild still returns an error.

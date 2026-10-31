@@ -563,7 +563,8 @@ export function applyEvent(snapshot: Snapshot, event: DaemonEvent): Snapshot {
         const messageId = typeof payload.messageId === 'string' ? payload.messageId : message.id
           ?? (turnId && role ? `stream:${sessionId}:${turnId}:${role}` : undefined)
         const index = messageId ? messages.findIndex((item) => item.id === messageId) : -1
-        const matchingIndex = index >= 0 ? index : turnId && role
+        // Streamed text finds its row by turn and role. A turn can hold many notices, so a notice only matches its own id.
+        const matchingIndex = index >= 0 ? index : turnId && role && role !== 'notice'
           ? messages.findIndex((item) => item.turnId === turnId && item.role === role)
           : -1
         if (matchingIndex >= 0) {

@@ -264,6 +264,7 @@ export async function previewBackupImport(token: string): Promise<never> { void 
 
 export async function inspectLocalFile(path: string): Promise<{ path: string; fileName: string; sizeBytes: number }> { void path; throw notAvailable() }
 export async function openInEditor(path: string, projectRoot?: string | null): Promise<void> { void path; void projectRoot; throw notAvailable() }
+export async function saveGeneratedImage(sessionId: string, mediaId: string): Promise<boolean> { void sessionId; void mediaId; throw notAvailable() }
 export async function revealInExplorer(path: string, projectRoot?: string | null): Promise<void> { void path; void projectRoot; throw notAvailable() }
 export async function resolveProjectFile(path: string, projectRoot?: string | null): Promise<string> { void path; void projectRoot; throw notAvailable() }
 export type RuntimeTerminalProvider = 'claude' | 'codex' | 'opencode'

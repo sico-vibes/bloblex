@@ -135,10 +135,15 @@ let agents: Agent[] = [
 
 let sessions: Session[] = [
   {
-    id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'working', model: 'gpt-6.1-sol', updatedAt: minutesAgo(2),
+    id: 'session-codex', runtimeId: 'runtime-codex', agentId: 'agent-codex', title: 'Invoice parser tests', projectPath: 'C:/work/korus', state: flags().has('idle') ? 'idle' : 'working', model: 'gpt-6.1-sol', updatedAt: minutesAgo(fixturePreset() === 'generated-image' ? 0 : 2),
     messages: [
       { id: 'm1', role: 'user', content: 'Can you make the invoice parser tests pass?', createdAt: minutesAgo(9), ...(fixturePreset() === 'mcp' ? { meta: { origin: { kind: 'mcp', client: 'claude-code' } } } : {}) },
       { id: 'm2', role: 'assistant', content: 'Sure. I found two failing cases in **tests/invoice.test.ts**: the currency field is parsed before the locale is known, and totals use floats.\n\nI will switch totals to integer minor units and parse the locale first.', createdAt: minutesAgo(8) },
+      ...(fixturePreset() === 'generated-image' ? [
+        { id: 'img-failed', role: 'notice', content: "The image couldn't be generated: The image didn't arrive.", createdAt: minutesAgo(8), meta: { kind: 'generated_image', mediaId: 'img-failed', status: 'failed', detail: "The image didn't arrive." } },
+        { id: 'img-ready', role: 'notice', content: 'Generated an image: sunrise.png', createdAt: minutesAgo(7), meta: { kind: 'generated_image', mediaId: 'img-ready', status: 'ready', name: 'sunrise.png', bytes: 182_400, mediaType: 'image/png', provider: 'codex' } },
+        { id: 'img-pending', role: 'notice', content: 'Generating an image…', createdAt: minutesAgo(6), meta: { kind: 'generated_image', mediaId: 'img-pending', status: 'pending' } },
+      ] : []),
       { id: 'm3', role: 'assistant', content: fixturePreset() === 'message-links'
         ? 'Here are the projects I found:\n\n| Project | Stars | Licence | What it gives you |\n| --- | ---: | --- | --- |\n| [dicebear/dicebear](https://github.com/dicebear/dicebear) | 9.9k | MIT | 61 styles for avatars and characters |\n| [Alain00/blobatar](https://github.com/Alain00/blobatar) | 1.5k | MIT | Parametric blob illustrations |\n\nMore details: https://github.com/hardbeat920/monocode.'
         : 'Patched `parseInvoice` and the fixture loader. Running the suite now.', createdAt: minutesAgo(3) },
@@ -999,8 +1004,25 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const steer = params.runtimeId === 'runtime-codex'
       ? { supported: true, enabled: fixtureSettings['exec_gate.codex.steer'] !== false, scope: 'turn', evidence: 'none', ...(fixtureSettings['exec_gate.codex.steer'] === false ? { reason: 'execution entry gate is disabled' } : {}) }
       : { supported: false, enabled: false, scope: 'turn', evidence: 'none', reason: 'setting is unsupported by this runtime' }
-    return { runtimeId: params.runtimeId, settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported, steer } } as T
+    return { runtimeId: params.runtimeId, generatesImages: params.runtimeId === 'runtime-codex', settings: { model: supported, thinking, serviceTier: supported, instructions: supported, customEnv: supported, steer } } as T
   }
+  if (method === 'media.preview' && typeof params.mediaId === 'string') {
+    const canvas = document.createElement('canvas')
+    canvas.width = 640
+    canvas.height = 400
+    const paint = canvas.getContext('2d')!
+    const sky = paint.createLinearGradient(0, 0, 0, 400)
+    sky.addColorStop(0, '#2b3a67')
+    sky.addColorStop(1, '#f6a65a')
+    paint.fillStyle = sky
+    paint.fillRect(0, 0, 640, 400)
+    paint.fillStyle = '#ffe9b0'
+    paint.beginPath()
+    paint.arc(320, 300, 70, 0, Math.PI * 2)
+    paint.fill()
+    return { status: 'ok', reason: null, name: 'sunrise.png', relativePath: null, kind: 'image', mediaType: 'image/png', size: 182_400, dataUrl: canvas.toDataURL('image/png') } as T
+  }
+  if (method === 'media.reveal') return { ok: true } as T
   if (method === 'runtime.models') {
     const runtimeId = String(params.runtimeId ?? '')
     return fixtureCatalog(runtimeId) as T
@@ -1365,6 +1387,7 @@ export async function previewBackupImport(_selectionToken: string) {
 }
 export async function inspectLocalFile(path: string) { return { path, fileName: path.split(/[\\/]/).pop() ?? path, sizeBytes: 2048 } }
 export async function openInEditor() {}
+export async function saveGeneratedImage(_sessionId: string, _mediaId: string) { return true }
 export async function revealInExplorer() {}
 export async function resolveProjectFile(path: string) { return path }
 // The preview opens no window; the shape is what the sign-in sheet expects.

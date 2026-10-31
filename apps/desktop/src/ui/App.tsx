@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Sparkles, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { outsideSender } from './messageOrigin'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
@@ -50,7 +50,7 @@ import { applySoundPrefs, saveSoundsEnabled, saveSoundVolume, soundPrefsFromSett
 import { ActivitySteps, ActivitySummaryLine } from './ActivityDetails'
 import { eventSessionId, noteSessionActivity } from './sessionActivity'
 import { busyDelivery, busySendMode, BUSY_SEND_SETTING, newClientMessageId, sendWithDelivery, steerRuntimeId, useSteerAvailable, type BusySendMode } from './busySend'
-import { fetchCached, invalidateCatalog } from './catalogCache'
+import { fetchCached, invalidateCatalog, useCachedRpc } from './catalogCache'
 import { ConversationsPanel, type ProjectActions } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
 import { PullRequestDialog } from './PullRequestDialog'
@@ -133,6 +133,7 @@ import { startTour } from './tour/startTour'
 import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
 import { ComposerStatus, DeliveryModeToggle } from './PromptQueue'
 import { AttachMenu, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
+import { GeneratedImage, generatedImageMeta, imagePromptFrom } from './GeneratedImage'
 import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
 import { SlashCommandChip, SlashMenu } from './SlashMenu'
 import { COMPANION_SLASH_ACTIONS, commandMessage, leadingCommand, requestExecutionPicker, slashItems, slashQuery, type SlashCommand, type SlashItem, type SlashSkill } from './slashCommands'
@@ -1860,6 +1861,8 @@ export function App() {
     if (role === 'notice' && meta?.kind === 'context_reset') {
       return <ContextResetDivider key={key} id={`conversation-message-${encodeURIComponent(key)}`} text={text} lost={(message.meta as { contextLost?: unknown }).contextLost === true} />
     }
+    const generated = role === 'notice' ? generatedImageMeta(message.meta) : null
+    if (generated) return <GeneratedImage key={key} id={`conversation-message-${encodeURIComponent(key)}`} sessionId={(sideSession ?? selectedSession)?.id} meta={generated} />
     if (role === 'notice') {
       return <div key={key} className="team-chip-row"><span className="team-notice">{text}</span></div>
     }
@@ -2542,6 +2545,12 @@ ${fileReferenceText(sentFile)}` : typed
     return () => window.clearInterval(timer)
   }, [hasScheduledPrompt])
   const imagesSupported = ['claude', 'codex', 'opencode'].includes(String(selectedRuntime?.provider ?? '').toLowerCase())
+  const generatesImages = useCachedRpc<{ generatesImages?: boolean }>('runtime.capabilities', selectedRuntime ? { runtimeId: selectedRuntime.id } : null).value?.generatesImages === true
+  const askForImage = () => {
+    const next = imagePromptFrom(composer)
+    setComposer(next)
+    requestAnimationFrame(() => { const field = composerRef.current; field?.focus(); field?.setSelectionRange(next.length, next.length) })
+  }
   const sessionQuota = (snapshot?.quotas ?? []).find((item) => String(item.provider) === String(selectedRuntime?.provider ?? '').toLowerCase()) ?? null
   const selectedModelLock = selectedSession?.modelLock
   const contextModel = selectedModelLock && Object.prototype.hasOwnProperty.call(selectedModelLock, 'model')
@@ -2878,7 +2887,7 @@ ${fileReferenceText(sentFile)}` : typed
               }} placeholder={!runtimeReady ? `${agentName}'s coding agent is not ready` : limitUntil ? `${agentName} is at its usage limit. A message goes out at ${limitResetTime(limitUntil)}` : selectedSession.state === 'waiting_permission' ? `Answer the request above, or queue a message for ${agentName}` : sessionBusy ? composerDelivery.mode === 'steer' ? `Steer ${agentName} now` : `Queue a message for ${agentName}` : activeSelectedAgent?.systemRole === 'manager' && !(selectedSession.messages ?? []).some((message) => message.role === 'user') ? `Tell ${agentName} what needs doing. Type @ to name a bot` : `Message ${agentName}`} aria-label={`Message ${agentName}`} disabled={busy || !runtimeReady} rows={1} />
               <div className="composer-control-strip" data-tour="controls">
                 <div className="composer-controls-start">
-                  <AttachMenu imagesSupported={imagesSupported} imagesDisabled={connection !== 'connected' || busy || !runtimeReady} imageCount={attachments.length} fileDisabled={connection !== 'connected' || busy || !runtimeReady || !selectedSession} onImages={addAttachments} onPickFile={() => { void (async () => { try { const path = await selectLocalFile(); if (!path) return; const info = await inspectLocalFile(path); setLocalFile({ fileName: info.fileName, path: info.path, sizeBytes: info.sizeBytes }); setLocalFileError(null) } catch (reason) { setLocalFileError(messageOf(reason)) } })() }} />
+                  <AttachMenu imagesSupported={imagesSupported} imagesDisabled={connection !== 'connected' || busy || !runtimeReady} imageCount={attachments.length} fileDisabled={connection !== 'connected' || busy || !runtimeReady || !selectedSession} onImages={addAttachments} onGenerateImage={generatesImages && connection === 'connected' && !busy && runtimeReady ? askForImage : undefined} onPickFile={() => { void (async () => { try { const path = await selectLocalFile(); if (!path) return; const info = await inspectLocalFile(path); setLocalFile({ fileName: info.fileName, path: info.path, sizeBytes: info.sizeBytes }); setLocalFileError(null) } catch (reason) { setLocalFileError(messageOf(reason)) } })() }} />
                   <StashMenu disabled={connection !== 'connected' || busy} canStash={!!composer.trim() || attachments.some((item) => item.status === 'ready')} onStash={stashDraft} onRestored={restoreStashedDraft} onError={setError} />
                   <button type="button" data-tour="plan" className={`composer-pill plan-pill ${planOn ? 'on' : ''}`} aria-pressed={planOn} aria-label="Plan mode" title={planOn ? 'Plan mode: the agent proposes a plan before changing anything' : 'Turn on plan mode'} disabled={connection !== 'connected' || sessionBusy} onClick={() => void setPlanMode(!planOn)}><ClipboardList size={14} aria-hidden="true" /><span>Plan</span></button>
                   <PermissionModeControl session={selectedSession} agent={activeSelectedAgent} disabled={connection !== 'connected' || activeSelectedAgent?.locked === true} locked={activeSelectedAgent?.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />
@@ -3731,6 +3740,12 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
     try { const path = await selectLocalFile(); if (path) void prepareLocalReference(path) }
     catch (reason) { setFileError(messageOf(reason)) }
   }
+  const generatesImages = useCachedRpc<{ generatesImages?: boolean }>('runtime.capabilities', runtime ? { runtimeId: runtime.id } : null).value?.generatesImages === true
+  const askForImage = () => {
+    const next = imagePromptFrom(draft)
+    setDraft(next)
+    requestAnimationFrame(() => { const field = draftRef.current; field?.focus(); field?.setSelectionRange(next.length, next.length) })
+  }
   const sendCompanionPrompt = async (event: React.FormEvent | React.KeyboardEvent, opposite = false) => {
     event.preventDefault()
     if (!session || sending || !connected || !runtimeUsable(runtime) || session.state === 'waiting_permission') return
@@ -4033,6 +4048,7 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
                 <div className="companion-composer-start">
                   <StashMenu textOnly disabled={!connected} canStash={!!draft.trim()} onStash={async () => { await rpc('stash.add', { text: draft.trim(), agentId: agent?.id ?? null, sessionId: session && !isDraftSession(session) ? session.id : null, projectId: session && !isDraftSession(session) ? projectOfSession(session, projects)?.id ?? null : null }); setDraft(''); return true }} onRestored={(restored) => setDraft((current) => current.trim() ? `${current}\n\n${restored.text}` : restored.text)} onError={(message) => setDropError(message)} />
                   <button type="button" className="companion-attach" aria-label="Choose a local file" title="Choose a local file" onClick={() => void chooseCompanionFile()} disabled={!connected || !runtimeUsable(runtime) || !session || preparingFile}><Paperclip size={13} /></button>
+                  {generatesImages && <button type="button" className="companion-attach" aria-label="Generate an image" title="Generate an image with the bot's own image tool" onClick={askForImage} disabled={!connected || !runtimeUsable(runtime) || !session}><Sparkles size={13} /></button>}
                   {agent && session && !isDraftSession(session) && onSessionUpdated && onError && <SessionExecutionControls session={session} agent={agent} onSessionUpdated={onSessionUpdated} onError={onError} />}
                 </div>
                 <div className="companion-composer-end">

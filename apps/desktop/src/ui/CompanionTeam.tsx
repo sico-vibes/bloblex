@@ -2,6 +2,7 @@
 // Same projects, roles, leader and side conversations as the main window.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUpRight, Check, ClipboardList, Copy, Pin, PinOff, X, ArrowLeftRight } from 'lucide-react'
+import { GeneratedImage, generatedImageMeta } from './GeneratedImage'
 import { outsideSender } from './messageOrigin'
 import type { Agent, ChatMessage, Project, Runtime, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -254,6 +255,8 @@ export function CompanionChatItem({ message, agents, onOpenSide, onOpenAgent, on
   if (role === 'notice' && meta?.kind === 'context_reset') {
     return <div className={`companion-context-divider${meta.contextLost === true ? ' lost' : ''}`} role="separator" aria-label={text}><span>{plain(text)}</span></div>
   }
+  const generated = role === 'notice' ? generatedImageMeta(meta) : null
+  if (generated) return <GeneratedImage compact sessionId={currentSessionId} meta={generated} />
   if (role === 'plan' || meta?.kind === 'plan') {
     return <div className="companion-plan"><ClipboardList size={12} aria-hidden="true" /><span><b>Proposed plan</b> {plain(text)}</span></div>
   }

@@ -47,7 +47,7 @@ const cache = new Map<string, MediaReply>()
 const CACHE_LIMIT = 16
 const CACHE_ENTRY_BYTES = 1_500_000
 
-function formatSize(bytes: number | null | undefined) {
+export function formatSize(bytes: number | null | undefined) {
   if (typeof bytes !== 'number') return ''
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`
@@ -66,19 +66,26 @@ function blobUrlFor(dataUrl: string): string | null {
   } catch { return null }
 }
 
-function useMediaReply(scope: MediaScope | null, path: string) {
-  const [state, setState] = useState<{ phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'done'; reply: MediaReply }>({ phase: 'loading' })
+type MediaReplyState = { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'done'; reply: MediaReply }
+
+/** `source` is a file in the conversation's folder, or a generated image the daemon recorded for it. */
+function usePreviewReply(sessionId: string | null, source: { path: string } | { mediaId: string } | null): MediaReplyState {
+  const [state, setState] = useState<MediaReplyState>({ phase: 'loading' })
+  const name = source ? ('path' in source ? `path\n${source.path}` : `media\n${source.mediaId}`) : null
   useEffect(() => {
-    if (!scope) { setState({ phase: 'error', message: 'Previews need an open conversation.' }); return }
-    const key = `${scope.sessionId}\n${path}`
+    if (!source) return
+    if (!sessionId) { setState({ phase: 'error', message: 'Previews need an open conversation.' }); return }
+    const key = `${sessionId}\n${name}`
     const hit = cache.get(key)
     if (hit) { setState({ phase: 'done', reply: hit }); return }
     let live = true
     setState({ phase: 'loading' })
-    rpc<MediaReply>('media.preview', { sessionId: scope.sessionId, path })
+    rpc<MediaReply>('media.preview', { sessionId, ...source })
       .then((reply) => {
         if (!live) return
-        if ((reply.dataUrl?.length ?? 0) + (reply.text?.length ?? 0) <= CACHE_ENTRY_BYTES) {
+        // A generated image's file can come back, so only a real image is remembered.
+        const keep = 'path' in source || reply.status === 'ok'
+        if (keep && (reply.dataUrl?.length ?? 0) + (reply.text?.length ?? 0) <= CACHE_ENTRY_BYTES) {
           if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string)
           cache.set(key, reply)
         }
@@ -86,15 +93,24 @@ function useMediaReply(scope: MediaScope | null, path: string) {
       })
       .catch((reason) => { if (live) setState({ phase: 'error', message: reason instanceof Error ? reason.message : String(reason) }) })
     return () => { live = false }
-  }, [scope?.sessionId, path])
+  }, [sessionId, name])
   return state
+}
+
+function useMediaReply(scope: MediaScope | null, path: string) {
+  return usePreviewReply(scope?.sessionId ?? null, { path })
+}
+
+/** A generated image's preview. Pass null until the image is ready, so nothing is asked for early. */
+export function useGeneratedMediaReply(sessionId: string | null | undefined, mediaId: string | null): MediaReplyState {
+  return usePreviewReply(sessionId ?? null, mediaId ? { mediaId } : null)
 }
 
 function Card({ icon, name, line, children, tone }: { icon: ReactNode; name: string; line: string; children?: ReactNode; tone?: 'error' }) {
   return <div className={`media-card${tone ? ` ${tone}` : ''}`}><span className="media-card-icon" aria-hidden="true">{icon}</span><span className="media-card-text"><strong title={name}>{name}</strong><small>{line}</small></span>{children}</div>
 }
 
-function Viewer({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+export function Viewer({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     requestAnimationFrame(() => closeRef.current?.focus())

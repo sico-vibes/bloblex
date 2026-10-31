@@ -15,7 +15,7 @@
 export type RemoteTier = 'viewer' | 'chat' | 'operator'
 export const REMOTE_TIERS: readonly RemoteTier[] = ['viewer', 'chat', 'operator']
 
-export type DeviceKind = 'phone' | 'tablet' | 'browser' | 'computer'
+export type DeviceKind = 'phone' | 'tablet' | 'browser' | 'computer' | 'machine'
 
 /** The host's link to its serve address. */
 export type RemoteLinkState = 'off' | 'starting' | 'online' | 'error'

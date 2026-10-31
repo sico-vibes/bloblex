@@ -59,6 +59,25 @@ export function BackupPage({ connected }: { connected: boolean }) {
   const [imported, setImported] = useState<string | null>(null)
   const [botChoices, setBotChoices] = useState<Record<string, BotChoice>>({})
   const [skillChoices, setSkillChoices] = useState<Record<string, SkillChoice>>({})
+  const [templating, setTemplating] = useState(false)
+
+  /** Phase 4: for another machine. Every bot, its approved notes, skills and schedules, with no settings or secrets. */
+  const exportTemplate = async () => {
+    setExportProblem(null)
+    setExported(null)
+    const token = await selectBackupExportPath().catch((reason) => { setExportProblem(messageOf(reason, 'The save dialog could not open.')); return null })
+    if (!token) return
+    setTemplating(true)
+    try {
+      const reply = await rpc<{ agents?: Array<{ id: string; archived?: boolean }> }>('agent.list', {})
+      const agentIds = (reply?.agents ?? []).filter((agent) => !agent.archived).map((agent) => agent.id).slice(0, 50)
+      if (!agentIds.length) { setExportProblem(`There are no ${nouns} to put in a template yet.`); return }
+      const result = await writeBackupExport(token, { memory: true, skills: true, automations: true, settings: false, agentIds })
+      setExported(`Saved ${statsSentence(result.stats, botWord)} to ${result.path}.`)
+    } catch (reason) {
+      setExportProblem(messageOf(reason, 'The template could not be saved.'))
+    } finally { setTemplating(false) }
+  }
 
   const exportNow = async () => {
     setExportProblem(null)
@@ -129,7 +148,8 @@ export function BackupPage({ connected }: { connected: boolean }) {
         </ul>
         <p className="backup-note">Environment values, passwords and keys are never written to the file. Automations come back paused.</p>
         <div className="backup-actions">
-          <button type="button" className="primary-button small" disabled={!connected || exporting} onClick={() => void exportNow()}><FileDown size={13} aria-hidden="true" />{exporting ? 'Saving…' : 'Export a backup…'}</button>
+          <button type="button" className="primary-button small" disabled={!connected || exporting || templating} onClick={() => void exportNow()}><FileDown size={13} aria-hidden="true" />{exporting ? 'Saving…' : 'Export a backup…'}</button>
+          <button type="button" className="secondary-button small" disabled={!connected || exporting || templating} title={`Every ${noun}, its approved notes, skills and schedules. No settings, and nothing secret.`} onClick={() => void exportTemplate()}><FileDown size={13} aria-hidden="true" />{templating ? 'Saving…' : 'Export a template for another machine…'}</button>
         </div>
         {exported && <p className="backup-done" role="status"><Check size={14} aria-hidden="true" />{exported}</p>}
         {exportProblem && <p className="memory-problem" role="alert">{exportProblem}</p>}

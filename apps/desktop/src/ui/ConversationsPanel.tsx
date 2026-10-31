@@ -3,6 +3,7 @@
 // in every project), newest first, with bot-to-bot conversations branching
 // under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { MachineBadge } from './MachineBots'
 import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Tag, Trash2 } from 'lucide-react'
 import type { Agent, Project, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -148,7 +149,7 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
               <span className="convo-title">{title}</span>
               {node.kind === 'side' && <span className="convo-sub">{node.role === 'sender' ? `Asked ${peerName}` : `From ${peerName}`}</span>}
             </span>
-            {needsYou ? <span className="convo-flag needs">Needs you</span> : failed ? <span className="convo-flag failed">Failed</span> : busy ? <i className="convo-dot" aria-label="Working" /> : <time className="convo-time">{relativeTime(session.updatedAt ?? session.createdAt, now)}</time>}
+            {session.link?.movedTo ? <MachineBadge name={session.link.movedTo.name} /> : needsYou ? <span className="convo-flag needs">Needs you</span> : failed ? <span className="convo-flag failed">Failed</span> : busy ? <i className="convo-dot" aria-label="Working" /> : <time className="convo-time">{relativeTime(session.updatedAt ?? session.createdAt, now)}</time>}
           </button>}
         {node.kind === 'main' && renaming !== session.id && <span className="convo-actions">
           <button type="button" className="convo-action" aria-label={`Rename ${title}`} title="Rename" onClick={() => setRenaming(session.id)}><Pencil size={12} aria-hidden="true" /></button>

@@ -214,11 +214,19 @@ export interface Project extends JsonRecord {
   tags?: string[]
   /** Phase 1: the owner's per-project settings (see ProjectSettingsDialog). */
   overrides?: { models?: Record<string, string>; approvalMode?: ApprovalMode | null; setupScript?: string | null }
+  /** Phase 4: the normalized Git remote, which makes it the same project on another machine. */
+  repoIdentity?: string | null
+  /** Phase 4: the repository's `.bitbots.json`, which does nothing until the owner trusts it. */
+  sharedSettings?: 'none' | 'untrusted' | 'trusted' | 'invalid'
+  defaultBot?: { name: string; agentId: string | null } | null
 }
 
 /** Side conversation between two blobs, or a scheduled run; absent on a blob's main conversation. */
 export interface SessionLink extends JsonRecord {
-  kind: 'side' | 'automation'
+  /** Phase 4: another machine runs this conversation now. */
+  movedTo?: { machineId: string; name: string; at?: string } | null
+  /** Absent on a bot's own conversation that only has `movedTo`. */
+  kind?: 'side' | 'automation'
   /** Present on side conversations. */
   peerAgentId?: string
   automationId?: string

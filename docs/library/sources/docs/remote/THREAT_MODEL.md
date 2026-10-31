@@ -241,3 +241,23 @@ The export is local. It is written only after the owner picks a path in the nati
 ## 15. Task board and bot deletion (22 October 2026)
 
 The task board (`task.create`, `task.list`, `task.get`, `task.update`, `task.dispatch`, `task.unassign`, `task.reorder`, `task.cancel`, `task.stop`, `task.review`, `task.runs`) and permanent bot deletion (`agent.purge`) are `never` for a paired device, at every tier (`apps/desktop/src/remote/tiers.json`). Dispatching a task starts provider work on the host, and stopping or reviewing a task changes a run the owner is watching, so both stay at the desktop. Task events (`task.changed`, `task.run.changed`, `task.run.finished`) are dropped for remote devices and carry no task text in any case. This section adds no new threat rows: the threats above cover the surface, and a remote task list is not built.
+
+## 16. Machine links and handoff (31 October 2026)
+
+A machine link is one Bitbots daemon acting as a paired device of another, through that machine's gateway. It adds no listener and no relay, and it uses the same pairing, owner approval and tiers as a phone. These are the new things it can do, and what stops each going wrong.
+
+| Risk | What stops it |
+|---|---|
+| A stolen device token on disk | It sits in a user-only file under `<data>/machines/`, never in the database, a backup or a diagnostics bundle, and is read for one request. Removing the link on either side ends it. |
+| Someone between the two machines (Native) | The link pins the SHA-256 of the certificate. The owner compares the fingerprint on both screens before a password is sent, and the certificate is checked again before sending. A later certificate change refuses the connection. |
+| A redirect or system proxy seeing the device cookie | Redirects are off and the client uses no proxy. |
+| An address that later answers as a different machine | Every read checks `machine.info`. A different machine id marks the link offline, and its answers aren't used. |
+| A phone at the top tier moving a conversation | `handoff.*` needs tier `operator` **and** device kind `machine`. The kind comes from the pairing request, and the owner sees it when approving. |
+| A handoff granting Full access | A created bot's mode is capped. No conversation mode travels, and neither do environment values, tokens, or host paths. |
+| Both machines running one conversation | Only one can: a lease on the giving machine blocks new turns during the move, and the taking machine can't run its copy until the giving machine has confirmed. |
+| Lost work in a move | A push is never forced and never to the base branch. A rejected push ends the move and nothing changes hands. Uncommitted files are only committed with the owner's consent. A fetch only fast-forwards, and refuses when it would lose local commits. |
+| A branch name from another machine reaching git | It must start `bitbots/`, pass `git check-ref-format --branch`, and never start with `-`. |
+
+**`.bitbots.json`.** A repository is someone else's input, and a setup script is code. The file does nothing until the owner trusts its exact bytes, a change stops it counting, it can never turn on Full access, and it's read from the project's own folder, never a conversation's copy. Only `project.sharedSettings.trust` and `.write` can record that trust, and it never travels in a backup or to a device.
+
+**What this doesn't cover.** A link at `operator` can pull any eligible conversation's text from that machine, and push its task branch to that machine's `origin`. That's what the owner approves when choosing that tier. Reading another machine's conversations is the same trust as reading them from a phone: paired machines are the owner's own. The review owed before a non-beta release (sections 8, 11 and 13) now covers this section too.

@@ -57,6 +57,9 @@ import { PullRequestDialog } from './PullRequestDialog'
 import { ChangesView } from './ChangesView'
 import { ProjectSearchDialog, useFileMatches, type FileMatch, type SearchTarget } from './ProjectSearch'
 import { openChangesInMainWindow, useOpenChangesRequests } from './changesChannel'
+import { CompanionMachineBots, MovedBar, MachineConversation } from './MachineConversation'
+import { MachineBadge, MachineGroups, useOpenMachineBotRequests } from './MachineBots'
+import { useMachines } from './machines'
 import { DiffBody, DiffModeSwitch, useDiffMode } from './DiffBody'
 import { pullRequestPrompt, repositoryRefreshKey, useSessionRepository, type RepositoryState } from './sessionRepository'
 import { WorkingBotsPanel } from './WorkingBotsPanel'
@@ -2622,6 +2625,21 @@ ${fileReferenceText(sentFile)}` : typed
   const fileSearchTarget: SearchTarget = selectedSession && !isDraftSession(selectedSession) ? { sessionId: selectedSession.id } : draftProjectId ? { projectId: draftProjectId } : null
   const fileCandidates = useFileMatches(fileSearchTarget, mention ? mention.query : null)
   const mentionCount = mentionCandidates.length + fileCandidates.length
+  const { machines, selfId: machineSelfId, reload: reloadMachines } = useMachines(!companion && connection === 'connected')
+  const [machineView, setMachineView] = useState<{ machineId: string; botId: string } | null>(null)
+  const [movedHere, setMovedHere] = useState<string | null>(null)
+  const viewedMachine = machineView ? machines.find((item) => item.id === machineView.machineId) ?? null : null
+  const viewedMachineBot = machineView ? viewedMachine?.bots.find((bot) => bot.id === machineView.botId) ?? null : null
+  useOpenMachineBotRequests(!companion, (machineId, botId) => setMachineView({ machineId, botId }))
+  // A conversation just taken over arrives with the next refresh.
+  useEffect(() => {
+    if (!movedHere) return
+    const target = sessions.find((item) => item.id === movedHere)
+    if (!target) return
+    setMovedHere(null)
+    setSideSessionId(null)
+    selectSession(target)
+  }, [movedHere, sessions])
   useOpenChangesRequests(!companion, (sessionId) => {
     const target = sessions.find((item) => item.id === sessionId)
     if (!target) return
@@ -2759,7 +2777,7 @@ ${fileReferenceText(sentFile)}` : typed
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar needsYou={<NeedsYou permissions={snapshot?.permissions ?? []} sessions={sessions} agents={agents} now={permissionClock} onOpen={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
+        <TeamSidebar machines={machines.length ? <MachineGroups machines={machines} selected={machineView} onOpen={(machine, bot) => setMachineView({ machineId: machine.id, botId: bot.id })} /> : null} needsYou={<NeedsYou permissions={snapshot?.permissions ?? []} sessions={sessions} agents={agents} now={permissionClock} onOpen={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void openNewProject(),
@@ -2901,7 +2919,7 @@ ${fileReferenceText(sentFile)}` : typed
           </section>
           </div>
           {!sideSession && <ReplyAnnotator container={messageListRef} full={annotations.length >= MAX_ANNOTATIONS} onAdd={addAnnotation} />}
-          {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : <div className="composer-wrap">
+          {sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : selectedSession?.link?.movedTo ? <MovedBar sessionId={selectedSession.id} movedTo={selectedSession.link.movedTo} machines={machines} onMoved={() => { void refresh(); void reloadMachines() }} /> : <div className="composer-wrap">
             {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
             <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
               <ComposerStatus steerChoice={steerAvailable} onModeChange={setBusyOverride} modeInBar onInterrupt={turnLive && composer.trim() && !busy ? () => void interruptAndSend() : undefined} items={promptQueue?.items ?? []} paused={promptQueue?.paused ?? false} sessionBusy={sessionBusy} mode={composerDelivery.mode} notice={deliveryNotice} nowMs={queueNowMs} disabled={connection !== 'connected'} expanded={queueExpanded && (promptQueue?.items.length ?? 0) > 0} onToggle={() => setQueueExpanded((value) => !value)} onResume={resumeQueue} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onCancelRetry={cancelAutoRetry} />
@@ -3044,6 +3062,7 @@ ${fileReferenceText(sentFile)}` : typed
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {projectSearchOpen && !companion && <ProjectSearchDialog target={fileSearchTarget} canPreview={!!selectedSession && !isDraftSession(selectedSession)} onClose={() => setProjectSearchOpen(false)} onMention={insertReference} />}
+      {viewedMachine && viewedMachineBot && !companion && <MachineConversation machine={viewedMachine} bot={viewedMachineBot} selfId={machineSelfId} onClose={() => setMachineView(null)} onMoved={(sessionId) => { setMachineView(null); setMovedHere(sessionId); void refresh(); void reloadMachines() }} />}
       {changesFor && selectedSession?.id === changesFor.sessionId && !companion && <ChangesView sessionId={changesFor.sessionId} initialPath={changesFor.path} botName={activeSelectedAgent?.name ?? 'The bot'} onClose={() => setChangesFor(null)} onSendComments={(text) => sendReviewComments(changesFor.sessionId, text)} onCreatePr={(repository) => { setChangesFor(null); setPullRequestFor({ sessionId: changesFor.sessionId, repository }) }} />}
       {pullRequestFor && selectedSession?.id === pullRequestFor.sessionId && <PullRequestDialog sessionId={pullRequestFor.sessionId} onCreated={() => void refresh()} repository={pullRequestFor.repository} botName={activeSelectedAgent?.name ?? 'The bot'} busy={['working', 'starting', 'waiting_permission', 'cancelling'].includes(selectedSession.state ?? '')} onSend={() => requestPullRequest(pullRequestFor.sessionId, pullRequestFor.repository)} onClose={() => setPullRequestFor(null)} />}
       {archivedBotsOpen && <ArchivedBots onClose={() => setArchivedBotsOpen(false)} onRestore={restoreAgent} onDelete={setPurgeTarget} />}
@@ -4093,6 +4112,7 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
               {visibleError && <p className="companion-drop-error" role="alert" tabIndex={-1} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); dismissError() } }}><span>{visibleError}</span><button type="button" className="icon-btn" aria-label="Dismiss error" onClick={dismissError}><X size={10} /></button></p>}
               {dictating && dictationIsland}
               {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
+              {realSession?.link?.movedTo && <div className="chip settled companion-moved" role="status"><MachineBadge name={realSession.link.movedTo.name} /><span>Running there. Read only here.</span></div>}
               {changesReady && realSession && <div className="chip settled companion-changes-ready" role="status"><button type="button" className="companion-changes-open" onClick={() => void openChangesInMainWindow(realSession.id).catch(() => undefined)}><GitCompare size={12} aria-hidden="true" /><span>Changes ready · {changedFiles} {changedFiles === 1 ? 'file' : 'files'}</span></button><button type="button" aria-label="Dismiss" onClick={() => setDismissedChanges(changesKey)}><X size={11} aria-hidden="true" /></button></div>}
               {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
               {!sessionBusy && limitWaitingUntil(session, clock) && <p className="companion-queue-note" role="status">{name} is at its usage limit. A message goes out at {limitResetTime(limitWaitingUntil(session, clock) as string)}.</p>}
@@ -4135,6 +4155,7 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
             <CompanionFanoutSummary connected={connected} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
             <CompanionTeamActivity agent={agent} agents={agents} sessions={sessions} onOpen={(sessionId) => onOpenSession?.(sessionId)} />
             <OutsideSessionPills sessions={outsideSessions} />
+            <CompanionMachineBots />
             <p className="cs-glance" title={`Reported tokens across all ${nouns}. Input ${inputTokens === null ? 'unknown' : inputTokens.toLocaleString()} · Output ${outputTokens === null ? 'unknown' : outputTokens.toLocaleString()}`}>All {nouns}: Tokens <b>{tokenGlance}</b></p>
             {activityDetails && (recentSteps.length ? <ActivitySteps items={recentSteps} /> : <p className="companion-empty">No commands, tools or file changes reported for this conversation.</p>)}
   </>

@@ -9,7 +9,9 @@ import { runtimeAuthSummary } from './launchChecks'
 import { CheckAgainButton } from './ScanRecovery'
 import { SignInHelp } from './SignInHelp'
 import { friendlyError } from './errorCopy'
-import { rpc } from '../tauri'
+import { previewBackupImport, rpc, selectBackupImportPath } from '../tauri'
+import { importResolutions, statsSentence, type BackupPreview } from './BackupPage'
+import './machines.css'
 import { parseModelCatalog, type CatalogModel } from '../executionContract'
 import { preferredConcreteModel } from './modelPreferences'
 import { LookPicker } from './LookPicker'
@@ -23,6 +25,40 @@ import { agentColorHex, previewHex } from './agentColor'
 import { createDraft, type AgentDraft } from './agentForm'
 import { useEntityNoun } from './vocabulary'
 import type { ThemeStyle } from './appearance'
+
+/** Phase 4: a second machine starts from a template of the first. Sign-ins and secrets never travel in it. */
+export function ImportTemplate({ onImported }: { onImported: () => void }) {
+  const noun = useEntityNoun()
+  const nouns = useEntityNoun({ plural: true })
+  const [preview, setPreview] = useState<BackupPreview | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const messageOf = (reason: unknown, fallback: string) => reason instanceof Error && reason.message ? reason.message : typeof reason === 'string' && reason ? reason : fallback
+  const choose = async () => {
+    setProblem(null)
+    const token = await selectBackupImportPath().catch((reason) => { setProblem(messageOf(reason, 'The file dialog could not open.')); return null })
+    if (!token) return
+    setBusy(true)
+    try { setPreview(await previewBackupImport(token)) } catch (reason) { setProblem(messageOf(reason, 'That file could not be read as a Bitbots template.')) } finally { setBusy(false) }
+  }
+  const restore = async () => {
+    if (!preview) return
+    setBusy(true); setProblem(null)
+    try {
+      await rpc('backup.import', { previewId: preview.previewId, resolutions: importResolutions({}, {}) })
+      onImported()
+    } catch (reason) { setProblem(messageOf(reason, 'The template could not be brought in.')); setBusy(false) }
+  }
+  return <div className="onboarding-template">
+    {!preview && <p>Already use Bitbots on another computer? <button type="button" className="link-btn" disabled={busy} onClick={() => void choose()}>{busy ? 'Reading…' : 'Bring your ' + nouns + ' from a template'}</button></p>}
+    {preview && <>
+      <p>This template holds {statsSentence(preview.counts, [noun, nouns])}. Schedules come in paused, and sign-ins and secrets aren't in it.</p>
+      {preview.warnings.map((warning) => <p key={warning} className="onboarding-notice">{warning}</p>)}
+      <div className="onboarding-actions split"><button type="button" className="ghost-button" disabled={busy} onClick={() => setPreview(null)}>Cancel</button><button type="button" className="primary-button" disabled={busy} onClick={() => void restore()}>{busy ? 'Bringing them in…' : 'Bring them in'}</button></div>
+    </>}
+    {problem && <p role="alert" className="onboarding-error">{problem}</p>}
+  </div>
+}
 
 export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate, onFinish, onSaveName, initialStep }: {
   runtimes: Runtime[]; scanning: boolean; error: string | null; onScan: () => void; onCreate: (draft: AgentDraft) => Promise<Agent | null>; onFinish: () => void; onSaveName: (name: string) => void; initialStep?: 0 | 1 | 2
@@ -147,6 +183,7 @@ export function FirstRunOnboarding({ runtimes, scanning, error, onScan, onCreate
         </div>
       </div>
       {error && <p role="alert" className="onboarding-error">{error}</p>}
+      <ImportTemplate onImported={finish} />
       <div className="onboarding-actions split"><button className="ghost-button" disabled={creating} onClick={() => setStep(1)}>Back</button><button className="primary-button" onClick={() => void create()} disabled={creating || !ready}>{creating ? 'Setting up…' : celebrated ? 'Ready' : 'Create Manager'}</button></div>
     </section>}
   </section></main>

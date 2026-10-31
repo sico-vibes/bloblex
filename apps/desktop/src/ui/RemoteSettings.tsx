@@ -31,7 +31,7 @@ export const TAILSCALE_FIX: Record<Exclude<RemoteTailscaleState, 'ready'>, { tit
 }
 
 function DeviceIcon({ kind }: { kind: DeviceKind }) {
-  const Icon = kind === 'phone' ? Smartphone : kind === 'tablet' ? Tablet : kind === 'computer' ? Laptop : Globe
+  const Icon = kind === 'phone' ? Smartphone : kind === 'tablet' ? Tablet : kind === 'computer' || kind === 'machine' ? Laptop : Globe
   return <Icon size={17} aria-hidden="true" />
 }
 
@@ -84,7 +84,7 @@ function DeviceRow({ device, now, busy, tierOptions, approvalsOn, onTier, onRena
     {!editing && <button type="button" className="icon-button" aria-label={`Rename ${device.name}`} title="Rename" onClick={() => { setDraft(device.name); setEditing(true) }}><Pencil size={14} aria-hidden="true" /></button>}
     <Select ariaLabel={`What ${device.name} may do`} variant="muted" value={device.tier} disabled={busy}
       onChange={(value) => { if ((REMOTE_TIERS as readonly string[]).includes(value)) onTier(value as RemoteTier) }}
-      options={(device.tier === 'operator' && !approvalsOn ? [...tierOptions, { value: 'operator', label: TIER_LABEL.operator }] : tierOptions)} />
+      options={((device.tier === 'operator' || device.kind === 'machine') && !approvalsOn ? [...tierOptions, { value: 'operator', label: TIER_LABEL.operator }] : tierOptions)} />
     <button type="button" className="icon-button" aria-label={`Remove ${device.name}`} title="Remove device" onClick={onRemove}><X size={15} aria-hidden="true" /></button>
   </div>
 }
@@ -192,10 +192,11 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
       {request && <div className="remote-request" role="alertdialog" aria-labelledby="remote-request-title">
         <span className="remote-paired-icon" aria-hidden="true"><DeviceIcon kind={request.kind} /></span>
         <div className="remote-request-copy">
-          <strong id="remote-request-title">{request.name} wants to connect</strong>
+          <strong id="remote-request-title">{request.kind === 'machine' ? `${request.name}, your other Bitbots machine, wants to link` : `${request.name} wants to connect`}</strong>
           <small>{request.platform}{request.login ? ` · signed in to Tailscale as ${request.login}` : ''}{native ? ' · signed in with your password' : ''} · answer within {countdown(request.expiresAt, now)}</small>
+          {request.kind === 'machine' && <small>It will see your {nouns} and conversations. Choose {TIER_LABEL.operator} if it may also take conversations over.</small>}
           <div className="remote-request-actions">
-            <Select ariaLabel="What this device may do" variant="field" value={requestTier} onChange={(value) => setRequestTier(value as RemoteTier)} options={tierOptions} />
+            <Select ariaLabel="What this device may do" variant="field" value={requestTier} onChange={(value) => setRequestTier(value as RemoteTier)} options={request.kind === 'machine' && !approvalsOn ? [...tierOptions, { value: 'operator', label: TIER_LABEL.operator }] : tierOptions} />
             <button type="button" className="ghost-button small" disabled={state.busy} onClick={() => void remote.rejectPairing(request.pairingId)}>Reject</button>
             <button type="button" className="primary-button small" disabled={state.busy} onClick={() => void remote.confirmPairing(request.pairingId, requestTier)}>Approve</button>
           </div>

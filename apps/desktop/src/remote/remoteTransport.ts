@@ -36,7 +36,7 @@ export type RemoteErrorCode =
   | 'network'
 
 export type RemotePairState = 'pending' | 'approved' | 'rejected' | 'expired'
-export type RemoteDeviceKind = 'phone' | 'tablet' | 'browser' | 'computer'
+export type RemoteDeviceKind = 'phone' | 'tablet' | 'browser' | 'computer' | 'machine'
 
 /** `GET /api/me` (PROTOCOL §4.4). */
 export interface RemoteMe {

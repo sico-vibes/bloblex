@@ -2,6 +2,17 @@
 
 **Every agent, whatever the model: before working in this repository, read `.claude/skills/bitbots-development/SKILL.md` and the reference it points to for your task. Before you report a task done, update that skill with anything the task taught (a fix and its root cause, a changed design rule, a new pattern, a changed tool or gate), as its "Keep this skill current" section describes. If your sandbox is read-only, put the proposed update in your report.**
 
+# Amendment (31 October 2026): machine links and handoff
+
+From the owner's plan (`docs/plans/expansion-plan-v3.md`, Phase 4), which the owner started on 31 October 2026. It adds to the Remote amendments below for this one path. The threat model is `docs/remote/THREAT_MODEL.md`, section 16.
+
+- **A machine link is a paired device.** One daemon pairs with another through its gateway, with the same owner approval and tiers. The window never talks to the other machine. No new listener and no relay.
+- **The device token** lives in a user-only file under `<data>/machines/`, never in the database, a backup, a log or a diagnostics bundle. Native links pin the certificate's fingerprint, which the owner compares before a password is sent. A password is used once and never kept.
+- **`handoff.*` is new reach through the gateway.** It needs tier `operator` and device kind `machine`. It may commit a conversation's own task copy, with the owner's consent, and push its `bitbots/` branch. It never forces, never pushes the base branch, and never carries host paths, environment values, thinking or tool output.
+- **Only one machine runs a conversation.** Another machine's conversations are read-only here. Take over is the only action. Sending a message to another machine's bot isn't part of this.
+- **A handoff never grants Full access.**
+- **`.bitbots.json`** does nothing until the owner trusts its exact content, and can never turn on Full access. All other overrides stay desktop-only.
+
 # Amendment (30 October 2026): two backend lanes, and the usage-bar sign-in read
 
 Owner directive in the live session of 30 October 2026, until the owner says otherwise. It amends the 29 October amendment below.

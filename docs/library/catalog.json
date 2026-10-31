@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "0755653",
-  "documentCount": 364,
+  "revision": "675693a",
+  "documentCount": 365,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1791,7 +1791,7 @@
       "title": "Bitbots collaboration instructions",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "adeca90cea64935b807c248a2219469d5df269cdc882f09b41f7aef7b2dda591",
+      "sha256": "17f379be498ee8ac539b09358401cdd4f2a9fdc35464f9c4e129dbb6a83ab2a6",
       "headings": [
         {
           "id": "resume-1-october-2026-evening-superseded-by-delegation-pipeline-above",
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "540cc6f02e6f9baccf83a9cf54cb41654e6c48e0957d2c6620de221b2f01bb2c",
+      "sha256": "b9d7f4ab2cde1f7ece3a8b6428653f3bd37aa74221366734a601361c4615828a",
       "headings": [
         {
           "id": "update-commands",
@@ -1924,6 +1924,11 @@
           "level": 3
         },
         {
+          "id": "phase-4-projects-31-october-2026",
+          "text": "Phase 4: projects (31 October 2026)",
+          "level": 3
+        },
+        {
           "id": "desktop-notifications",
           "text": "Desktop notifications",
           "level": 2
@@ -1961,6 +1966,11 @@
         {
           "id": "phase-1-lane-b-sign-in-read-experiments-shortcuts-and-shims-30-october-2026",
           "text": "Phase 1, Lane B: sign-in read, experiments, shortcuts and shims (30 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "phase-4-machines-31-october-2026",
+          "text": "Phase 4: machines (31 October 2026)",
           "level": 2
         }
       ]
@@ -4337,6 +4347,81 @@
         {
           "id": "keeping-the-two-lanes-apart",
           "text": "Keeping the two lanes apart",
+          "level": 2
+        },
+        {
+          "id": "rules",
+          "text": "Rules",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-4-brief",
+      "source": "docs/history/wave15/phase-4-brief.md",
+      "title": "Brief: Phase 4, machines",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "e1a5bb090ac5d0e7c17d85dfbc14ee319e576b5b81e13f0e3ed4a9eb685e5392",
+      "headings": [
+        {
+          "id": "1-machine-identity-and-links-sona-new-machinesrs-machineclientrs",
+          "text": "1. Machine identity and links (Sona, new machines.rs, machine_client.rs)",
+          "level": 2
+        },
+        {
+          "id": "2-reading-the-other-machine-sona-machinesrs",
+          "text": "2. Reading the other machine (Sona, machines.rs)",
+          "level": 2
+        },
+        {
+          "id": "3-repo-identity-gogo-new-repoidentityrs",
+          "text": "3. Repo identity (Gogo, new repo_identity.rs)",
+          "level": 2
+        },
+        {
+          "id": "4-bitbotsjson-gogo-new-sharedsettingsrs",
+          "text": "4. .bitbots.json (Gogo, new shared_settings.rs)",
+          "level": 2
+        },
+        {
+          "id": "5-handoff-building-blocks-gogo",
+          "text": "5. Handoff building blocks (Gogo)",
+          "level": 2
+        },
+        {
+          "id": "6-handoff-round-2-sona-new-handoffrs",
+          "text": "6. Handoff (Round 2, Sona, new handoff.rs)",
+          "level": 2
+        },
+        {
+          "id": "conversation-owner",
+          "text": "Conversation owner",
+          "level": 3
+        },
+        {
+          "id": "on-the-machine-giving-it-up-through-the-gateway",
+          "text": "On the machine giving it up (through the gateway)",
+          "level": 3
+        },
+        {
+          "id": "on-the-machine-taking-it-local-never-remote",
+          "text": "On the machine taking it (local, never remote)",
+          "level": 3
+        },
+        {
+          "id": "keeping-the-two-lanes-apart-in-round-1",
+          "text": "Keeping the two lanes apart in Round 1",
           "level": 2
         },
         {
@@ -18114,7 +18199,7 @@
       "title": "Remote mode: threat model",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "2ee946588019370a1fe8b62e767d8f6f0d3a8e6b8ef3f3ac31c808d0757fc576",
+      "sha256": "734f33107f7983645820d15b7ecc22ccbe644e56ec51cac09d36e8813928697b",
       "headings": [
         {
           "id": "1-the-core-fact",
@@ -18204,6 +18289,11 @@
         {
           "id": "15-task-board-and-bot-deletion-22-october-2026",
           "text": "15. Task board and bot deletion (22 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "16-machine-links-and-handoff-31-october-2026",
+          "text": "16. Machine links and handoff (31 October 2026)",
           "level": 2
         }
       ]

@@ -29,6 +29,11 @@
 .project-settings-models { display: grid; gap: 8px; }
 .project-settings-heading { color: var(--text-3); font-size: var(--fs-xs); }
 .project-setup-script { width: 100%; padding: 8px 10px; resize: vertical; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.45; }
+.project-shared { display: grid; gap: 6px; }
+.project-shared-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.project-shared-list li { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px; color: var(--text-2); font-size: var(--fs-xs); }
+.project-shared-list code { overflow-wrap: anywhere; color: var(--text-1); font: var(--fs-2xs) var(--font-mono); }
+.project-shared-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .project-settings-note { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.4; }
 .project-full-access { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--mode-bypass) 10%, transparent); }
 .keybinding-list { margin: 0; padding: 0; list-style: none; }

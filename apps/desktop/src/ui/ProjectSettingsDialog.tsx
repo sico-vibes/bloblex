@@ -1,7 +1,9 @@
 // Phase 1: per-project overrides. They are the owner's, set only here: a mode can
 // widen what bots may do in this project, and a setup script is code that runs on
-// this computer, so neither comes from the repository, a backup or the Manager.
-import { useState } from 'react'
+// this computer, so neither comes from a backup or the Manager. Phase 4: a repository's
+// `.bitbots.json` counts only once the owner has trusted that exact file, and never
+// turns on Full access.
+import { useEffect, useState } from 'react'
 import type { ApprovalMode, Project, Runtime } from '../types'
 import { parseModelCatalog } from '../executionContract'
 import { rpc } from '../tauri'
@@ -49,6 +51,54 @@ function ModelRow({ runtime, value, onChange }: { runtime: Runtime; value: strin
   if (value && !models.some((model) => model.id === value)) options.push({ value, label: value })
   const name = PROVIDER_NAMES[runtime.provider ?? ''] ?? runtime.provider ?? 'Coding agent'
   return <label className="new-project-field"><span>{name}</span><Select ariaLabel={`Model for ${name} in this project`} variant="muted" value={value} searchable={8} onChange={onChange} options={options} /></label>
+}
+
+export type SharedSettings = { found: boolean; valid: boolean; problems: string[]; settings: { setupScript?: string | null; defaultBot?: string | null; approvalMode?: string | null }; hash: string | null; trusted: boolean; state: 'none' | 'untrusted' | 'trusted' | 'invalid' }
+
+/** The repository's `.bitbots.json`: what it asks for, and whether the owner trusts it. */
+export function SharedSettingsSection({ projectId, hasOwnSettings }: { projectId: string; hasOwnSettings: boolean }) {
+  const [shared, setShared] = useState<SharedSettings | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [confirmReplace, setConfirmReplace] = useState(false)
+  useEffect(() => {
+    let live = true
+    void rpc<SharedSettings>('project.sharedSettings.get', { projectId }).then((reply) => { if (live) setShared(reply) }).catch(() => undefined)
+    return () => { live = false }
+  }, [projectId])
+  const run = async (method: string, params: Record<string, unknown>) => {
+    setBusy(true); setProblem(null)
+    try { setShared(await rpc<SharedSettings>(method, { projectId, ...params })); setConfirmReplace(false) }
+    catch (reason) {
+      const message = reason instanceof Error && reason.message ? reason.message : 'That could not be done.'
+      if (/already|exists/i.test(message) && method.endsWith('.write')) setConfirmReplace(true)
+      else setProblem(message)
+    } finally { setBusy(false) }
+  }
+  if (!shared) return null
+  const asks = shared.settings ?? {}
+  return <div className="project-shared" role="group" aria-label="Settings from the repository">
+    <span className="project-settings-heading">Settings from the repository</span>
+    {shared.state === 'none' && <small className="project-settings-note">This repository has no <code>.bitbots.json</code>. Add one to share a setup script, default bot and approvals with your other machines.</small>}
+    {shared.state === 'invalid' && <small className="new-project-error" role="alert">The repository's <code>.bitbots.json</code> can't be read, so it's ignored.</small>}
+    {(shared.state === 'untrusted' || shared.state === 'trusted') && <>
+      <ul className="project-shared-list">
+        {asks.setupScript && <li><span>Setup script</span><code>{asks.setupScript}</code></li>}
+        {asks.defaultBot && <li><span>Default bot</span><code>{asks.defaultBot}</code></li>}
+        {asks.approvalMode && <li><span>Approvals</span><code>{MODE_OPTIONS.find((option) => option.value === asks.approvalMode)?.label ?? asks.approvalMode}</code></li>}
+      </ul>
+      {shared.problems.map((item) => <small key={item} className="project-settings-note">{item}</small>)}
+      <small className="project-settings-note">{shared.state === 'trusted' ? 'In use. Your settings above come first. If this file changes, it stops counting until you check it again.' : 'Not in use. A repository can come from anyone, and a setup script is code that runs on this computer, so check it first.'}</small>
+    </>}
+    {problem && <small className="new-project-error" role="alert">{problem}</small>}
+    <div className="project-shared-actions">
+      {shared.state === 'untrusted' && <button type="button" className="secondary-button small" disabled={busy} onClick={() => void run('project.sharedSettings.trust', { hash: shared.hash, confirm: true })}>Trust this file</button>}
+      {shared.state === 'trusted' && <button type="button" className="ghost-button small" disabled={busy} onClick={() => void run('project.sharedSettings.untrust', {})}>Stop using it</button>}
+      {hasOwnSettings && (confirmReplace
+        ? <button type="button" className="secondary-button small" disabled={busy} onClick={() => void run('project.sharedSettings.write', { replace: true, confirm: true })}>Replace the file</button>
+        : <button type="button" className="ghost-button small" disabled={busy} title="Saved settings only. Full access is never written, and nothing is committed." onClick={() => void run('project.sharedSettings.write', { confirm: true })}>Write my saved settings to the file</button>)}
+    </div>
+  </div>
 }
 
 export function ProjectSettingsDialog({ project, runtimes, onClose, onSaved }: { project: Project; runtimes: readonly Runtime[]; onClose: () => void; onSaved: (project: Project) => void }) {
@@ -103,6 +153,7 @@ export function ProjectSettingsDialog({ project, runtimes, onClose, onSaved }: {
         {copy.problem && <small className="new-project-error" role="alert">{copy.problem}</small>}
       </label>
       <label className="new-project-check"><input type="checkbox" checked={submodules} onChange={(event) => setSubmodules(event.target.checked)} /><span>Set up git submodules in each new copy</span></label>
+      {project.path && <SharedSettingsSection projectId={project.id} hasOwnSettings={!!saved.setupScript || !!saved.approvalMode} />}
       {problem && <p className="new-project-error" role="alert">{problem}</p>}
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" disabled={busy} onClick={close}>Cancel</button>

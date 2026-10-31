@@ -375,6 +375,22 @@ export const previewMode = true
 const repositoryDiff = (name: string, added: string[], removed: string[]) => [`diff --git a/${name} b/${name}`, `--- a/${name}`, `+++ b/${name}`, `@@ -1,${removed.length + 2} +1,${added.length + 2} @@`, ' import { render } from "./render"', ...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`), ' export {}'].join('\n')
 const fixtureStaged = new Map<string, string>()
 const withStaged = <T extends { files: Array<Record<string, unknown>> }>(answer: T): T => ({ ...answer, files: answer.files.map((file) => ({ ...file, staged: fixtureStaged.get(String(file.repositoryPath)) ?? 'none' })) })
+// Phase 4: another machine. `?machines=1` shows one, `?machines=offline` one that can't be reached.
+let fixtureSelfName = 'Home desktop'
+let fixtureMachineList: Array<Record<string, unknown>> | null = null
+let fixturePairJob: { id: string; url: string; state: string; detail: string | null; machine: { id: string; name: string } | null } | null = null
+let fixtureTakeOver: { id: string; state: string; steps: Array<{ id: string; status: string; detail: string | null }>; sessionId: string | null; detail: string | null } | null = null
+let fixtureShared: Record<string, unknown> = { found: true, valid: true, problems: [], settings: { setupScript: 'npm install', defaultBot: 'Rae', approvalMode: 'ask' }, hash: 'preview', trusted: false, state: 'untrusted' }
+function fixtureMachines(): Array<Record<string, unknown>> {
+  if (fixtureMachineList) return fixtureMachineList
+  const wanted = flags().get('machines')
+  if (!wanted) return []
+  const online = wanted !== 'offline'
+  return [{ id: 'preview-laptop', name: 'Work laptop', url: 'https://work-laptop.example.ts.net', auth: 'code', fingerprint: null, tier: 'operator', pairedAt: new Date(Date.now() - 86_400_000).toISOString(), lastSeenAt: new Date(Date.now() - (online ? 20_000 : 7_200_000)).toISOString(), state: online ? 'online' : 'offline', detail: null, version: '0.1.0-beta.44', bots: [
+    { id: 'preview-rae', name: 'Rae', color: 'mint', role: 'Frontend', provider: 'claude', model: 'claude-sonnet-5-5', busy: online, activeSessionId: 'preview-remote-1', conversations: 2 },
+    { id: 'preview-tom', name: 'Tom', color: 'sky', role: null, provider: 'codex', model: 'gpt-6-luna', busy: false, activeSessionId: null, conversations: 0 },
+  ] }]
+}
 let fixtureAbandoned = [
   { id: 'wt-1', repo: 'C:/work/site', path: 'C:/work/site-bitbots/fix-the-header', branch: 'bitbots/fix-the-header', reason: 'conversation_deleted', dirtyFiles: 0, commitsAhead: 0, lastActivityAt: '2026-10-20T10:00:00Z' },
   { id: 'wt-2', repo: 'C:/work/site', path: 'C:/work/site-bitbots/try-a-new-rail', branch: 'bitbots/try-a-new-rail', reason: 'conversation_deleted', dirtyFiles: 2, commitsAhead: 3, lastActivityAt: '2026-10-22T10:00:00Z' },
@@ -478,6 +494,48 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     await new Promise((resolve) => window.setTimeout(resolve, 700))
     return { steps: [{ id: 'commit', status: params.commitMessage ? 'done' : 'skipped', detail: null }, { id: 'push', status: 'done', detail: null }, { id: 'pr', status: 'done', detail: null }], url: 'https://github.com/preview/site/pull/13' } as T
   }
+  if (method === 'machine.self') return { id: 'preview-self', name: fixtureSelfName, version: '0.1.0-beta.44' } as T
+  if (method === 'machine.self.rename') { fixtureSelfName = String(params.name); return { id: 'preview-self', name: fixtureSelfName, version: '0.1.0-beta.44' } as T }
+  if (method === 'machine.list') return { machines: fixtureMachines() } as T
+  if (method === 'machine.refresh' || method === 'machine.rename') return { ok: true } as T
+  if (method === 'machine.remove') { fixtureMachineList = fixtureMachines().filter((item) => item.id !== params.id); return { removed: true, signedOut: true } as T }
+  if (method === 'machine.probe') return (String(params.url).includes('ts.net')
+    ? { origin: String(params.url), reachable: true, isBitbots: true, auth: 'code', fingerprint: null, trusted: true }
+    : { origin: String(params.url), reachable: true, isBitbots: true, auth: 'password', fingerprint: 'AB:12:9F:44:0C:7E:D1:52:6A:33:BE:08:91:C4:7F:20:5D:EE:16:48:A9:02:C7:3B:60:1F:84:D5:72:96:BC:0E', trusted: false }) as T
+  if (method === 'machine.pair.begin') {
+    fixturePairJob = { id: 'preview-pair', url: String(params.url), state: 'pending', detail: null, machine: null }
+    window.setTimeout(() => { fixturePairJob = { ...fixturePairJob!, state: 'approved', machine: { id: 'preview-laptop', name: 'Work laptop' } } }, 2500)
+    return { job: fixturePairJob } as T
+  }
+  if (method === 'machine.pair.list') return { jobs: fixturePairJob ? [fixturePairJob] : [] } as T
+  if (method === 'machine.pair.cancel') { fixturePairJob = null; return { ok: true } as T }
+  if (method === 'machine.conversations') return { conversations: [
+    { id: 'preview-remote-1', title: 'Fix the invoice export', updatedAt: new Date(Date.now() - 120_000).toISOString(), projectName: 'korus', state: 'working' },
+    { id: 'preview-remote-2', title: 'Tidy the settings page', updatedAt: new Date(Date.now() - 86_400_000).toISOString(), projectName: 'korus', state: 'idle' },
+  ] } as T
+  if (method === 'machine.conversation') {
+    const working = params.sessionId === 'preview-remote-1'
+    return { session: { id: params.sessionId, title: working ? 'Fix the invoice export' : 'Tidy the settings page', state: working ? 'working' : 'idle', messages: [
+      { id: 'r1', role: 'user', content: working ? 'The invoice export drops the last row. Can you find out why?' : 'Group the settings by what they change.', createdAt: new Date(Date.now() - 600_000).toISOString() },
+      { id: 'r2', role: 'assistant', content: working ? 'Found it. The loop stops one row early because `end` is exclusive.\n\nI\'m adding a test for it now.' : 'Done. They\'re grouped under **Account**, **Appearance** and **Behaviour**.', createdAt: new Date(Date.now() - 300_000).toISOString() },
+    ] } } as T
+  }
+  if (method === 'machine.takeOver.preview') return {
+    ready: params.sessionId !== 'preview-remote-1', reason: params.sessionId === 'preview-remote-1' ? 'Rae is working. Stop it or wait, then try again.' : null,
+    title: 'Tidy the settings page', bot: { id: 'preview-rae', name: 'Rae', provider: 'claude', model: null, agentId: 'preview-rae', willCreate: flags().get('takeover') === 'newbot' },
+    repo: { identity: 'github.com/example/korus', url: 'https://github.com/example/korus.git', branch: 'bitbots/tidy-the-settings', isWorktree: true, hasRemote: true },
+    uncommitted: 2, commitsAhead: 3, project: flags().get('takeover') === 'noproject' ? null : { id: 'korus', name: 'korus' }, needsProject: flags().get('takeover') === 'noproject', runtimeReady: true,
+  } as T
+  if (method === 'machine.takeOver') {
+    fixtureTakeOver = { id: 'preview-takeover', state: 'running', steps: [{ id: 'prepare', status: 'done', detail: null }], sessionId: null, detail: null }
+    window.setTimeout(() => { fixtureTakeOver = { id: 'preview-takeover', state: 'done', steps: ['prepare', 'code', 'bot', 'import', 'commit', 'open'].map((id) => ({ id, status: 'done', detail: null })), sessionId: String(params.sessionId), detail: null } }, 2200)
+    return { job: fixtureTakeOver } as T
+  }
+  if (method === 'machine.takeOver.list') return { jobs: fixtureTakeOver ? [fixtureTakeOver] : [] } as T
+  if (method === 'project.sharedSettings.get') return fixtureShared as T
+  if (method === 'project.sharedSettings.trust') { fixtureShared = { ...fixtureShared, trusted: true, state: 'trusted' }; return fixtureShared as T }
+  if (method === 'project.sharedSettings.untrust') { fixtureShared = { ...fixtureShared, trusted: false, state: 'untrusted' }; return fixtureShared as T }
+  if (method === 'project.sharedSettings.write') return fixtureShared as T
   if (method === 'worktree.abandoned') return { items: fixtureAbandoned } as T
   if (method === 'worktree.removeAbandoned') {
     fixtureAbandoned = fixtureAbandoned.filter((item) => item.id !== params.id)

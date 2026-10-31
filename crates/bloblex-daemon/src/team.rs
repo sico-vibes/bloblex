@@ -1391,7 +1391,7 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
             }
         }
         // FIX39 P10: a task that ran in its own worktree offers a merge when its
-        // turn finishes; a task with nothing to merge just cleans up.
+        // turn finishes; a task with nothing to merge keeps its copy for the next message.
         crate::proposals::after_task_turn(&st, &session_id, &outcome).await;
         // Automation runs map the same turn outcome onto their run row.
         crate::automations::after_turn(&st, &session_id, &outcome).await;

@@ -18,6 +18,9 @@ use uuid::Uuid;
 pub const EXPIRY_HOURS: i64 = 24;
 /// The team cap carried over from the old `create_blob`.
 const MAX_TEAM: usize = 12;
+/// How long to wait before clearing a removed copy's empty folder: the ACP adapter
+/// stops an idle process after 30 seconds, and its shutdown takes a moment.
+const EMPTIED_FOLDER_HELD_FOR: std::time::Duration = std::time::Duration::from_secs(45);
 
 fn iso(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -607,16 +610,35 @@ fn validate_merge(args: &Value) -> Result<Value, String> {
     Ok(json!({"action":"merge","worktree":worktree,"repo":repo,"branch":branch,"baseBranch":base,"baseCommit":base_commit,"conversation":conversation,"botName":bot_name,"taskTitle":task_title,"files":files,"diffSummary":diff_summary}))
 }
 
+/// Close a conversation's coding agent, if it is running. An agent keeps working in
+/// the folder it started in whatever the conversation's record says, and its process
+/// may hold that folder; the next message starts it again in the conversation's folder.
+async fn close_agent(st: &AppState, conversation: &str) {
+    if st.sessions.lock().await.contains_key(conversation) { let _ = crate::close_session(st, conversation).await; }
+}
+
 /// Finish with a task copy: drop the `worktree` record from the conversation's
 /// link so the same copy is not offered again, and point the conversation back at
 /// the project folder. The copy's own folder is gone, so a follow-up that resumes
 /// the same session must not be left aimed at a deleted folder.
-fn finish_worktree(st: &AppState, conversation: &str, repo: &Path) {
+async fn finish_worktree(st: &AppState, conversation: &str, repo: &Path) {
+    close_agent(st, conversation).await;
     let Ok(row) = st.db.session_detail(conversation) else { return };
     let mut link = row["link"].clone();
     if let Some(object) = link.as_object_mut() { object.remove("worktree"); }
     let _ = st.db.set_session_link(conversation, &link);
     if repo.is_absolute() { let _ = st.db.set_session_project_path(conversation, &repo.to_string_lossy()); }
+}
+
+/// Clear away a removed copy's empty folder once its closed agent has let go of it:
+/// the ACP adapter stops an idle process after 30 seconds. `remove_dir` refuses a
+/// folder with anything in it, so this can only ever take an empty one.
+fn tidy_emptied_folder(folder: PathBuf) {
+    if !folder.exists() { return; }
+    tokio::spawn(async move {
+        tokio::time::sleep(EMPTIED_FOLDER_HELD_FOR).await;
+        let _ = std::fs::remove_dir(&folder);
+    });
 }
 
 /// Remove a rejected task's copy and branch. Only reached when the owner chooses
@@ -661,12 +683,14 @@ async fn apply_merge(st: &AppState, session_id: &str, payload: &Value) -> Result
     .await
     .map_err(|_| derr("internal", "The merge could not be run.", StatusCode::INTERNAL_SERVER_ERROR))?
     .map_err(|error| derr("conflict", &error, StatusCode::CONFLICT))?;
+    if let Some(conversation) = &conversation { close_agent(st, conversation).await; }
     let (cleanup_repo, cleanup_worktree, cleanup_branch) = (repo.clone(), worktree.clone(), branch.clone());
     let gone = tokio::task::spawn_blocking(move || crate::worktree::remove_after_merge(&cleanup_repo, &cleanup_worktree, &cleanup_branch)).await.unwrap_or(false);
     let files = payload["files"].as_array().map(Vec::len).unwrap_or(0);
     let mut summary = format!("merged {branch} into {base} ({how})");
     if gone {
-        if let Some(conversation) = &conversation { finish_worktree(st, conversation, &repo); }
+        if let Some(conversation) = &conversation { finish_worktree(st, conversation, &repo).await; }
+        tidy_emptied_folder(worktree);
     } else {
         // Keep the record so the leftover copy and branch stay tracked; never claim
         // a cleanup that did not happen.
@@ -675,9 +699,30 @@ async fn apply_merge(st: &AppState, session_id: &str, payload: &Value) -> Result
     Ok((json!({"branch": branch, "repo": repo, "how": how, "files": files, "copyRemoved": gone}), summary))
 }
 
+/// Run before every turn: a copy that lost its files while its conversation stayed
+/// open gets them back, so the bot never works in an empty folder outside the
+/// repository, where nothing it writes could be seen or merged.
+pub(crate) async fn before_task_turn(st: &AppState, session_id: &str) {
+    let Ok(row) = st.db.session_detail(session_id) else { return };
+    let worktree = &row["link"]["worktree"];
+    if !worktree.is_object() { return; }
+    let repo = PathBuf::from(worktree["repo"].as_str().unwrap_or(""));
+    let workdir = PathBuf::from(worktree["path"].as_str().unwrap_or(""));
+    let branch = worktree["branch"].as_str().unwrap_or("").to_owned();
+    let base_commit = worktree["baseCommit"].as_str().unwrap_or("").to_owned();
+    let (restore_branch, restore_base) = (branch.clone(), base_commit);
+    let repair = tokio::task::spawn_blocking(move || crate::worktree::restore(&repo, &workdir, &restore_branch, &restore_base)).await.unwrap_or(crate::worktree::Repair::Lost);
+    match repair {
+        crate::worktree::Repair::Intact => {}
+        crate::worktree::Repair::Restored => crate::team::note(st, session_id, &format!("This conversation's separate copy of the project had been emptied, so it was restored from {branch}."), json!({"kind":"worktree","direction":"restored","branch":branch})).await,
+        crate::worktree::Repair::Lost => crate::team::note(st, session_id, "This conversation's separate copy of the project is gone and could not be restored, so git isn't tracking this folder and its changes can't be merged.", json!({"kind":"worktree","direction":"lost","branch":branch})).await,
+    }
+}
+
 /// FIX39 P10: run after every turn. When a side conversation that ran in its own
-/// worktree finishes, the Manager proposes merging it back. A copy with no
-/// changes is removed quietly instead.
+/// worktree finishes, the Manager proposes merging it back. A copy with no changes
+/// stays: its conversation is still open and can get another message. It goes on
+/// the abandoned list once that conversation is deleted or archived.
 pub(crate) async fn after_task_turn(st: &AppState, session_id: &str, outcome: &str) {
     if outcome != "turn.completed" { return; }
     let Ok(row) = st.db.session_detail(session_id) else { return };
@@ -691,7 +736,7 @@ pub(crate) async fn after_task_turn(st: &AppState, session_id: &str, outcome: &s
     if !workdir.is_dir() {
         // The copy is already gone (for example, removed by hand); just repoint the
         // conversation so a follow-up does not resume in a deleted folder.
-        finish_worktree(st, session_id, &repo);
+        finish_worktree(st, session_id, &repo).await;
         return;
     }
     let (inspect_dir, inspect_base) = (workdir.clone(), base_commit.clone());
@@ -699,18 +744,7 @@ pub(crate) async fn after_task_turn(st: &AppState, session_id: &str, outcome: &s
         Ok(Ok(summary)) => summary,
         _ => return,
     };
-    if summary.files.is_empty() {
-        let (discard_repo, discard_worktree, discard_branch) = (repo.clone(), workdir.clone(), branch.clone());
-        let gone = tokio::task::spawn_blocking(move || crate::worktree::discard(&discard_repo, &discard_worktree, &discard_branch)).await.unwrap_or(false);
-        if gone {
-            finish_worktree(st, session_id, &repo);
-            crate::team::note(st, session_id, "Nothing was changed, so the separate copy was removed.", json!({"kind":"worktree","direction":"discarded"})).await;
-        } else {
-            // Keep the record: the copy is still there and must not be forgotten.
-            crate::team::note(st, session_id, "Nothing was changed, but the separate copy could not be removed.", json!({"kind":"worktree","direction":"discarded"})).await;
-        }
-        return;
-    }
+    if summary.files.is_empty() { return; }
     // One offer per copy: a second completed turn does not stack another card.
     let offered = st.db.proposals_pending().unwrap_or_default().iter()
         .any(|proposal| proposal["kind"] == "merge" && proposal["payload"]["worktree"] == worktree["path"]);
@@ -770,10 +804,13 @@ pub async fn decide(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
         // may instead choose to discard the branch and its copy.
         let mut note = format!("Rejected: {}", describe(&kind, &payload));
         if discarding {
+            let conversation = payload["conversation"].as_str().filter(|id| !id.is_empty());
+            if let Some(conversation) = conversation { close_agent(st, conversation).await; }
             if discard_task_copy(&payload).await {
-                if let Some(conversation) = payload["conversation"].as_str().filter(|id| !id.is_empty()) {
-                    finish_worktree(st, conversation, &PathBuf::from(payload["repo"].as_str().unwrap_or("")));
+                if let Some(conversation) = conversation {
+                    finish_worktree(st, conversation, &PathBuf::from(payload["repo"].as_str().unwrap_or(""))).await;
                 }
+                tidy_emptied_folder(PathBuf::from(payload["worktree"].as_str().unwrap_or("")));
             } else {
                 note.push_str(" · the separate copy could not be removed");
             }

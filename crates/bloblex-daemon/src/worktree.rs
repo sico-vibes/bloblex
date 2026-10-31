@@ -183,23 +183,38 @@ pub(crate) fn commit_all(worktree: &Path, message: &str) -> Result<(), String> {
         .map(|_| ())
 }
 
+/// Only a copy inside this repository's own `<repo>-bitbots` family is ever merged,
+/// discarded or restored, so a forged record cannot name any other folder.
+fn in_family(repo: &Path, worktree: &Path) -> bool {
+    let family = repo.file_name().map(|name| format!("{}{FAMILY_SUFFIX}", name.to_string_lossy().to_lowercase()));
+    let parent = worktree.parent().and_then(|parent| parent.file_name()).map(|name| name.to_string_lossy().to_lowercase());
+    family.is_some() && parent == family
+}
+
+/// Whether git lists this folder as one of the repository's worktrees.
+fn is_registered(repo: &Path, worktree: &Path) -> Result<bool, String> {
+    let wanted = normalize(worktree);
+    Ok(run(repo, &["worktree", "list", "--porcelain"])?.lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .any(|path| normalize(Path::new(path.trim())) == wanted))
+}
+
+/// True when the folder is gone or holds nothing. A folder that can't be read is neither.
+pub(crate) fn is_empty_or_missing(path: &Path) -> bool {
+    match std::fs::read_dir(path) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 /// Whether the copy is a registered linked worktree of `repo` with `branch`
 /// checked out. A merge refuses anything else, so a forged proposal payload
 /// cannot point at an arbitrary branch or folder.
 fn verify(repo: &Path, worktree: &Path, branch: &str) -> Result<(), String> {
     if !branch.starts_with("bitbots/") { return Err("That is not a Bitbots task branch.".to_owned()); }
     if !worktree.is_dir() { return Err("The task's separate copy is gone.".to_owned()); }
-    // Only a copy inside this repository's own `<repo>-bitbots` family is ever
-    // merged or discarded, so a forged proposal cannot name any other folder.
-    let family = repo.file_name().map(|name| format!("{}{FAMILY_SUFFIX}", name.to_string_lossy().to_lowercase()));
-    let parent = worktree.parent().and_then(|parent| parent.file_name()).map(|name| name.to_string_lossy().to_lowercase());
-    if family.is_none() || parent != family { return Err("That copy is not in this repository's task folder.".to_owned()); }
-    let listed = run(repo, &["worktree", "list", "--porcelain"])?;
-    let wanted = normalize(worktree);
-    let registered = listed.lines()
-        .filter_map(|line| line.strip_prefix("worktree "))
-        .any(|path| normalize(Path::new(path.trim())) == wanted);
-    if !registered { return Err("That copy is not a worktree of this repository.".to_owned()); }
+    if !in_family(repo, worktree) { return Err("That copy is not in this repository's task folder.".to_owned()); }
+    if !is_registered(repo, worktree)? { return Err("That copy is not a worktree of this repository.".to_owned()); }
     let head = run(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if head != branch { return Err("The task branch is not checked out in that copy.".to_owned()); }
     Ok(())
@@ -234,32 +249,64 @@ pub(crate) fn merge(repo: &Path, worktree: &Path, branch: &str, base: &str) -> R
     }
 }
 
-/// Remove a task copy and its now-merged branch. Returns whether the copy is
-/// gone: Windows refuses to delete a folder the CLI still holds open, and a
-/// leftover must never be reported as a completed cleanup.
-pub(crate) fn remove_after_merge(repo: &Path, worktree: &Path, branch: &str) -> bool {
+/// Take a task copy away. Returns whether it is gone. On Windows git deletes the
+/// files and its record, then fails on the folder itself while a process, such as
+/// the coding agent, has it as its working folder. The copy is gone by then, and
+/// the empty folder only lasts as long as that process. A folder with anything
+/// left in it is a leftover, and must never be reported as a completed cleanup.
+fn remove_copy(repo: &Path, worktree: &Path) -> bool {
     let path = worktree.to_string_lossy().into_owned();
     let _ = run(repo, &["worktree", "remove", "--force", &path]);
     let _ = run(repo, &["worktree", "prune"]);
-    if worktree.exists() { return false; }
+    is_empty_or_missing(worktree) && !is_registered(repo, worktree).unwrap_or(true)
+}
+
+/// Remove a task copy and its now-merged branch. Returns whether the copy is gone.
+pub(crate) fn remove_after_merge(repo: &Path, worktree: &Path, branch: &str) -> bool {
+    if !remove_copy(repo, worktree) { return false; }
     let _ = run(repo, &["branch", "-d", branch]);
     true
 }
 
 /// Discard a task copy the owner rejected: remove the worktree and delete the
 /// branch even though its work was never merged. Only reached on an explicit
-/// owner choice. Returns whether the copy is gone.
+/// owner choice, or for a copy no conversation ever opened. Returns whether the
+/// copy is gone.
 pub(crate) fn discard(repo: &Path, worktree: &Path, branch: &str) -> bool {
     // A rejected proposal can be edited before it is decided, so discard is
     // bounded by the same check as a merge: only this repo's own task copy and
     // branch are removed.
     if verify(repo, worktree, branch).is_err() { return false; }
-    let path = worktree.to_string_lossy().into_owned();
-    let _ = run(repo, &["worktree", "remove", "--force", &path]);
-    let _ = run(repo, &["worktree", "prune"]);
-    if worktree.exists() { return false; }
+    if !remove_copy(repo, worktree) { return false; }
     let _ = run(repo, &["branch", "-D", branch]);
     true
+}
+
+/// What a conversation's copy needed before its next turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Repair {
+    Intact,
+    Restored,
+    Lost,
+}
+
+/// Put a task copy back when its files were taken away while its conversation was
+/// still open, which versions before 31 October 2026 did after a turn that changed
+/// nothing. The branch survives that, so the copy comes back as it was. Anything in
+/// the folder could be the only copy of a bot's work, and git won't check out over
+/// it, so a folder with files in it is left alone.
+pub(crate) fn restore(repo: &Path, worktree: &Path, branch: &str, base_commit: &str) -> Repair {
+    // A linked worktree always has its `.git` file, so this runs no git in the usual case.
+    if worktree.join(".git").exists() { return Repair::Intact; }
+    if !branch.starts_with("bitbots/") || !in_family(repo, worktree) || !is_empty_or_missing(worktree) { return Repair::Lost; }
+    let _ = run(repo, &["worktree", "prune"]);
+    let path = worktree.to_string_lossy().into_owned();
+    let added = if branch_exists(repo, branch) {
+        run(repo, &["worktree", "add", &path, branch])
+    } else {
+        run(repo, &["worktree", "add", "-b", branch, &path, base_commit])
+    };
+    if added.is_ok() { Repair::Restored } else { Repair::Lost }
 }
 
 #[cfg(test)]
@@ -403,6 +450,51 @@ mod tests {
         discard(&repo, &created.path, &created.branch);
         assert!(!created.path.exists());
         assert!(!branch_exists(&repo, &created.branch));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    /// The folder as a process's working folder, as a coding agent has it.
+    #[cfg(windows)]
+    fn holder(folder: &Path) -> std::process::Child {
+        Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).current_dir(folder).spawn().unwrap()
+    }
+
+    // What Windows really does: git deletes everything, then fails on the folder itself.
+    // The work is gone and git's record with it, so that is a removal, not a failure.
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_only_held_as_a_working_folder_is_emptied_and_counts_as_gone() {
+        let Some(repo) = repo() else { return };
+        let created = create(&repo, "Held").unwrap();
+        std::fs::write(created.path.join("scratch.txt"), "x\n").unwrap();
+        commit_all(&created.path, "Bitbots task").unwrap();
+        let mut held = holder(&created.path);
+        let gone = discard(&repo, &created.path, &created.branch);
+        let contents = std::fs::read_dir(&created.path).map(|entries| entries.count());
+        let listed = run(&repo, &["worktree", "list", "--porcelain"]).unwrap();
+        let kept_branch = branch_exists(&repo, &created.branch);
+        let _ = held.kill();
+        let _ = held.wait();
+        assert_eq!(contents.unwrap(), 0, "git deleted everything inside the folder");
+        assert!(!listed.lines().filter_map(|line| line.strip_prefix("worktree ")).any(|path| normalize(Path::new(path)) == normalize(&created.path)), "and its record: {listed}");
+        assert!(gone, "so the copy is gone");
+        assert!(!kept_branch, "and its branch goes too");
+        std::fs::remove_dir_all(&created.path).ok();
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_stuck_in_the_copy_is_not_a_removal() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let Some(repo) = repo() else { return };
+        let created = create(&repo, "Stuck").unwrap();
+        // No sharing at all, so nothing can delete this file while it's open.
+        let stuck = std::fs::OpenOptions::new().read(true).share_mode(0).open(created.path.join("readme.txt")).unwrap();
+        assert!(!discard(&repo, &created.path, &created.branch), "something is left");
+        assert!(branch_exists(&repo, &created.branch), "so the branch stays");
+        drop(stuck);
+        std::fs::remove_dir_all(&created.path).ok();
         std::fs::remove_dir_all(&repo).ok();
     }
 

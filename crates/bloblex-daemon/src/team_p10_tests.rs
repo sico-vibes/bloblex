@@ -2,6 +2,8 @@
 //! repository builds one under the system temp folder and removes it again; git
 //! is required, so each such test skips when git is not on PATH.
 use super::*;
+#[cfg(windows)]
+use crate::dispatch;
 use crate::phase2a_tests::{state, TeamAdapter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -249,8 +251,10 @@ async fn p10_refuses_a_merge_or_discard_while_the_task_is_still_running() {
     std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
 }
 
+// An open conversation can always get another message, so a turn that changed
+// nothing leaves its copy exactly as it was.
 #[tokio::test]
-async fn p10_a_task_with_no_changes_cleans_up_without_a_card() {
+async fn p10_a_task_with_no_changes_keeps_its_copy_without_a_card() {
     let Some(repo) = make_repo() else { return };
     let (st, _, worker) = fixture().await;
     let worktree = crate::worktree::create(&repo, "Read only").unwrap();
@@ -259,6 +263,201 @@ async fn p10_a_task_with_no_changes_cleans_up_without_a_card() {
     st.db.update_session_state("p10-side", "idle").unwrap();
     crate::proposals::after_task_turn(&st, "p10-side", "turn.completed").await;
     assert!(st.db.proposals_pending().unwrap().iter().all(|proposal| proposal["kind"] != "merge"), "no card for nothing");
-    assert!(!worktree.path.exists(), "the empty copy is removed");
+    assert!(worktree.path.join("readme.txt").is_file(), "the copy is still there for the next message");
+    let side = st.db.session_detail("p10-side").unwrap();
+    assert_eq!(side["link"]["worktree"]["branch"], "bitbots/read-only", "the record stays");
+    assert!(side["messages"].as_array().unwrap().iter().all(|message| !message["content"].as_str().unwrap_or("").contains("separate copy")), "nothing to tell the owner: {side}");
     std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
+}
+
+/// A process with `folder` as its working folder, as a coding agent has, which
+/// stops Windows deleting the folder itself. One process, so killing it frees it.
+#[cfg(windows)]
+fn hold_as_working_folder(folder: &Path) -> std::process::Child {
+    std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).current_dir(folder).spawn().unwrap()
+}
+
+/// What the discard used to leave behind: git has deleted the files and its
+/// record of the copy, and the held folder itself is still there, empty.
+#[cfg(windows)]
+fn empty_the_copy(worktree: &crate::worktree::Worktree) {
+    let _ = std::process::Command::new("git").current_dir(&worktree.repo).args(["worktree", "remove", "--force", worktree.path.to_str().unwrap()]).output();
+    assert!(git(&worktree.repo, &["worktree", "prune"]));
+    assert!(worktree.path.is_dir(), "the held folder cannot be deleted");
+    assert_eq!(std::fs::read_dir(&worktree.path).unwrap().count(), 0, "everything in it was");
+}
+
+#[cfg(windows)]
+fn is_registered(repo: &Path, worktree: &Path) -> bool {
+    let listed = std::process::Command::new("git").current_dir(repo).args(["worktree", "list", "--porcelain"]).output().unwrap();
+    String::from_utf8_lossy(&listed.stdout).lines().filter_map(|line| line.strip_prefix("worktree ")).any(|path| crate::worktree::normalize(Path::new(path)) == crate::worktree::normalize(worktree))
+}
+
+/// A main conversation in its own copy, with its coding agent running.
+#[cfg(windows)]
+async fn live_conversation_in_a_copy(st: &AppState, repo: &Path, worker: &str, session: &str) -> crate::worktree::Worktree {
+    let worktree = crate::worktree::create(repo, "Say hello").unwrap();
+    st.db.create_session_for_agent(session, "p10-rt", "codex", &worktree.path.to_string_lossy(), "Say hello", Some(worker)).unwrap();
+    st.db.set_session_link(session, &json!({"kind":"main","worktree":worktree.to_json()})).unwrap();
+    st.db.update_session_state(session, "idle").unwrap();
+    dispatch(st, "session.resume", json!({"sessionId":session})).await.unwrap();
+    assert!(st.sessions.lock().await.contains_key(session), "the agent is running");
+    worktree
+}
+
+/// The next message, all the way through the prompt path to a finished turn.
+#[cfg(windows)]
+async fn send_and_finish(st: &AppState, session: &str) {
+    let turn = dispatch(st, "session.prompt", json!({"sessionId":session,"text":"Now do something"})).await.unwrap()["turnId"].as_str().unwrap().to_owned();
+    for _ in 0..500 {
+        if st.active_turns.lock().await.get(session).is_none_or(|active| *active != turn) { return; }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the turn did not finish");
+}
+
+// The live smoke's failure: a fan-out bot says hello, and its coding agent's
+// working folder stops Windows removing the copy. Git deleted the files anyway,
+// so the conversation was left working in an empty folder that is not a repository.
+#[cfg(windows)]
+#[tokio::test]
+async fn p10_a_turn_that_changed_nothing_leaves_a_held_copy_intact() {
+    let Some(repo) = make_repo() else { return };
+    let (st, _, worker) = fixture().await;
+    let worktree = live_conversation_in_a_copy(&st, &repo, &worker, "p10-held").await;
+    let mut holder = hold_as_working_folder(&worktree.path);
+    crate::proposals::after_task_turn(&st, "p10-held", "turn.completed").await;
+    let intact = worktree.path.join("readme.txt").is_file();
+    let registered = is_registered(&worktree.repo, &worktree.path);
+    let detail = st.db.session_detail("p10-held").unwrap();
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert!(intact, "the files are still there");
+    assert!(registered, "git still knows the copy");
+    assert_eq!(detail["projectPath"].as_str().unwrap(), worktree.path.to_string_lossy());
+    assert!(st.sessions.lock().await.contains_key("p10-held"), "the agent keeps running there");
+    assert!(detail["messages"].as_array().unwrap().iter().all(|message| !message["content"].as_str().unwrap_or("").contains("could not be removed")), "{detail}");
+    std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
+}
+
+// The same folder, held the same way, when the owner approves a merge: the work
+// is merged and the copy is gone, whatever the empty folder is still doing, so
+// nothing says otherwise and the conversation does not stay behind in it.
+#[cfg(windows)]
+#[tokio::test]
+async fn p10_a_merge_finishes_while_the_folder_is_held() {
+    let Some(repo) = make_repo() else { return };
+    let (st, _, worker) = fixture().await;
+    let worktree = side_with_change(&st, &repo, &worker, "p10-side");
+    dispatch(&st, "session.resume", json!({"sessionId":"p10-side"})).await.unwrap();
+    let proposal = offer_merge(&st, "p10-side").await;
+    let mut holder = hold_as_working_folder(&worktree.path);
+    let decided = crate::proposals::decide(&st, &json!({"id":proposal["id"],"decision":"approve"})).await;
+    let branch_left = git(&worktree.repo, &["rev-parse", "--verify", "--quiet", "refs/heads/bitbots/add-login"]);
+    let _ = holder.kill();
+    let _ = holder.wait();
+    let result = decided.unwrap();
+    assert_eq!(result["result"]["copyRemoved"], true, "{result}");
+    assert_eq!(std::fs::read_to_string(repo.join("feature.txt")).unwrap(), "one\ntwo\n");
+    assert!(!branch_left, "a merged branch goes with its copy");
+    let side = st.db.session_detail("p10-side").unwrap();
+    assert!(side["link"].get("worktree").is_none(), "the record is cleared: {side}");
+    assert_eq!(crate::worktree::normalize(Path::new(side["projectPath"].as_str().unwrap())), crate::worktree::normalize(&worktree.repo), "the next message runs in the project");
+    assert!(!st.sessions.lock().await.contains_key("p10-side"), "the old agent stays in the old folder, so it is closed");
+    std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn p10_a_discard_finishes_while_the_folder_is_held() {
+    let Some(repo) = make_repo() else { return };
+    let (st, _, worker) = fixture().await;
+    let worktree = side_with_change(&st, &repo, &worker, "p10-side");
+    dispatch(&st, "session.resume", json!({"sessionId":"p10-side"})).await.unwrap();
+    let proposal = offer_merge(&st, "p10-side").await;
+    let mut holder = hold_as_working_folder(&worktree.path);
+    let decided = crate::proposals::decide(&st, &json!({"id":proposal["id"],"decision":"reject","discard":true})).await;
+    let _ = holder.kill();
+    let _ = holder.wait();
+    decided.unwrap();
+    assert!(!git(&worktree.repo, &["rev-parse", "--verify", "--quiet", "refs/heads/bitbots/add-login"]), "a discarded branch goes with its copy");
+    let side = st.db.session_detail("p10-side").unwrap();
+    assert!(side["link"].get("worktree").is_none(), "the record is cleared: {side}");
+    let boss = st.db.session_detail("p10-boss").unwrap();
+    assert!(boss["messages"].as_array().unwrap().iter().all(|message| !message["content"].as_str().unwrap_or("").contains("could not be removed")), "{boss}");
+    assert!(!st.sessions.lock().await.contains_key("p10-side"));
+    std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
+}
+
+// A file really stuck in the copy is different: the copy survives, and the record
+// and the branch stay with it, and the owner hears about it.
+#[cfg(windows)]
+#[tokio::test]
+async fn p10_a_merge_with_a_file_stuck_in_the_copy_still_says_so() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let Some(repo) = make_repo() else { return };
+    let (st, _, worker) = fixture().await;
+    let worktree = side_with_change(&st, &repo, &worker, "p10-side");
+    let proposal = offer_merge(&st, "p10-side").await;
+    // An ignored file: the merge's `git add` never reads it, so only the removal trips on it.
+    std::fs::write(repo.join(".git").join("info").join("exclude"), "stuck.log\n").unwrap();
+    std::fs::write(worktree.path.join("stuck.log"), "x\n").unwrap();
+    // No sharing at all, so nothing can delete this file while it's open.
+    let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(worktree.path.join("stuck.log")).unwrap();
+    let result =crate::proposals::decide(&st, &json!({"id":proposal["id"],"decision":"approve"})).await.unwrap();
+    drop(held);
+    assert_eq!(result["result"]["copyRemoved"], false, "{result}");
+    assert!(st.db.session_detail("p10-side").unwrap()["link"]["worktree"].is_object(), "the leftover stays tracked");
+    assert!(git(&worktree.repo, &["rev-parse", "--verify", "--quiet", "refs/heads/bitbots/add-login"]), "the branch stays");
+    std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
+}
+
+// Conversations the old discard already emptied are still out there. The next
+// message gets its copy back, from the branch that survived, before the bot runs.
+#[cfg(windows)]
+#[tokio::test]
+async fn p10_the_next_message_restores_an_emptied_copy() {
+    let Some(repo) = make_repo() else { return };
+    let (st, _, worker) = fixture().await;
+    let worktree = live_conversation_in_a_copy(&st, &repo, &worker, "p10-emptied").await;
+    let mut holder = hold_as_working_folder(&worktree.path);
+    empty_the_copy(&worktree);
+    send_and_finish(&st, "p10-emptied").await;
+    let restored = worktree.path.join("readme.txt").is_file();
+    let registered = is_registered(&worktree.repo, &worktree.path);
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert!(restored, "the files are back");
+    assert!(registered, "git knows the copy again");
+    assert_eq!(crate::worktree::repo_root(&worktree.path).map(|root| crate::worktree::normalize(&root)), Some(crate::worktree::normalize(&worktree.path)));
+    let detail = st.db.session_detail("p10-emptied").unwrap();
+    assert!(detail["messages"].as_array().unwrap().iter().any(|message| message["content"].as_str().unwrap_or("").contains("was restored")), "{detail}");
+    std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
+}
+
+// Files a bot wrote into an emptied folder are the only copy of that work, and git
+// will not check out over them, so they are left alone and the owner is told.
+#[cfg(windows)]
+#[tokio::test]
+async fn p10_an_emptied_copy_with_files_in_it_is_left_alone_and_reported() {
+    let Some(repo) = make_repo() else { return };
+    let (st, _, worker) = fixture().await;
+    let worktree = live_conversation_in_a_copy(&st, &repo, &worker, "p10-orphan").await;
+    let mut holder = hold_as_working_folder(&worktree.path);
+    empty_the_copy(&worktree);
+    std::fs::write(worktree.path.join("orphan.txt"), "work\n").unwrap();
+    send_and_finish(&st, "p10-orphan").await;
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(std::fs::read_to_string(worktree.path.join("orphan.txt")).unwrap(), "work\n");
+    let detail = st.db.session_detail("p10-orphan").unwrap();
+    assert!(detail["messages"].as_array().unwrap().iter().any(|message| message["content"].as_str().unwrap_or("").contains("could not be restored")), "{detail}");
+    std::fs::remove_dir_all(&repo).ok();
+    std::fs::remove_dir_all(family_of(&worktree.repo)).ok();
 }

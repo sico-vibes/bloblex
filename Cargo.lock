@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-acp"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-claude"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "async-trait",
  "bloblex-agent-core",
@@ -570,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-codex"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "async-trait",
  "bloblex-agent-core",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-adapter-opencode"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "bloblex-adapter-acp",
  "bloblex-agent-core",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-budget"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-daemon"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-desktop"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-hook"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "serde_json",
  "tokio",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-process"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "tokio",
  "windows-sys 0.61.2",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-runtime"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "bloblex-process",
  "bloblex-protocol",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-security"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "rand 0.9.5",
  "subtle",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-speech"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-storage"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "bloblex-usage",
  "chrono",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-usage"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "chrono",
  "serde",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "bloblex-wsl"
-version = "0.1.0-beta.44"
+version = "0.1.0-beta.45"
 dependencies = [
  "tokio",
 ]

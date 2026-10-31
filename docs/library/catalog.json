@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "3647793",
-  "documentCount": 363,
+  "revision": "afd4682",
+  "documentCount": 364,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "c81af24f3675c7b451d43a9b76d1e5e8f2760231a7a67bfe22a1ae7c62e13c1f",
+      "sha256": "540cc6f02e6f9baccf83a9cf54cb41654e6c48e0957d2c6620de221b2f01bb2c",
       "headings": [
         {
           "id": "update-commands",
@@ -1911,6 +1911,16 @@
         {
           "id": "phase-2-31-october-2026-generated-images",
           "text": "Phase 2 (31 October 2026): generated images",
+          "level": 3
+        },
+        {
+          "id": "phase-3-review-31-october-2026-diff-stage-revert-pull-requests",
+          "text": "Phase 3: review (31 October 2026): diff, stage, revert, pull requests",
+          "level": 3
+        },
+        {
+          "id": "phase-3-projects-31-october-2026",
+          "text": "Phase 3: projects (31 October 2026)",
           "level": 3
         },
         {
@@ -4262,6 +4272,71 @@
         {
           "id": "tests",
           "text": "Tests",
+          "level": 2
+        },
+        {
+          "id": "rules",
+          "text": "Rules",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-3-brief",
+      "source": "docs/history/wave15/phase-3-brief.md",
+      "title": "Brief: Phase 3, git and review",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "ba86d62a6bc4acc296031e8fe879cb0393a599b4f07731da2906028cfccc88c2",
+      "headings": [
+        {
+          "id": "what-exists",
+          "text": "What exists",
+          "level": 2
+        },
+        {
+          "id": "1-diff-stage-revert-sona-new-gitopsrs",
+          "text": "1. Diff, stage, revert (Sona, new git_ops.rs)",
+          "level": 2
+        },
+        {
+          "id": "2-pull-requests-sona-new-pullrequestrs",
+          "text": "2. Pull requests (Sona, new pull_request.rs)",
+          "level": 2
+        },
+        {
+          "id": "3-abandoned-worktrees-gogo-new-worktreecleanuprs",
+          "text": "3. Abandoned worktrees (Gogo, new worktree_cleanup.rs)",
+          "level": 2
+        },
+        {
+          "id": "4-worktree-setup-gogo-projectsetuprs",
+          "text": "4. Worktree setup (Gogo, project_setup.rs)",
+          "level": 2
+        },
+        {
+          "id": "5-clone-and-discover-gogo-new-projectcloners",
+          "text": "5. Clone and discover (Gogo, new project_clone.rs)",
+          "level": 2
+        },
+        {
+          "id": "6-file-and-content-search-gogo-new-projectsearchrs",
+          "text": "6. File and content search (Gogo, new project_search.rs)",
+          "level": 2
+        },
+        {
+          "id": "keeping-the-two-lanes-apart",
+          "text": "Keeping the two lanes apart",
           "level": 2
         },
         {

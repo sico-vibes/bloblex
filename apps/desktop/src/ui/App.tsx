@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Sparkles, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, GitCompare, GitPullRequest, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Sparkles, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { outsideSender } from './messageOrigin'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
@@ -54,7 +54,11 @@ import { fetchCached, invalidateCatalog, useCachedRpc } from './catalogCache'
 import { ConversationsPanel, type ProjectActions } from './ConversationsPanel'
 import { SessionRail } from './SessionRail'
 import { PullRequestDialog } from './PullRequestDialog'
-import { pullRequestPrompt, type RepositoryState } from './sessionRepository'
+import { ChangesView } from './ChangesView'
+import { ProjectSearchDialog, useFileMatches, type FileMatch, type SearchTarget } from './ProjectSearch'
+import { openChangesInMainWindow, useOpenChangesRequests } from './changesChannel'
+import { DiffBody, DiffModeSwitch, useDiffMode } from './DiffBody'
+import { pullRequestPrompt, repositoryRefreshKey, useSessionRepository, type RepositoryState } from './sessionRepository'
 import { WorkingBotsPanel } from './WorkingBotsPanel'
 import { DelegationGroup } from './DelegationGroup'
 import { buildDelegationRows, delegationRuns, newestNoticeBySide, useDelegations } from './delegations'
@@ -357,6 +361,8 @@ export function App() {
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
   /** The repository the owner is about to ask a pull request for; set by the Changes card's Create PR. */
   const [pullRequestFor, setPullRequestFor] = useState<{ sessionId: string; repository: RepositoryState } | null>(null)
+  const [changesFor, setChangesFor] = useState<{ sessionId: string; path: string | null } | null>(null)
+  const [projectSearchOpen, setProjectSearchOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [pendingBlobImport, setPendingBlobImport] = useState<SharedBlob | null>(null)
@@ -642,6 +648,7 @@ export function App() {
     'app.askSeveral': () => setFanoutOpen(true),
     'conversation.new': () => shortcutHandlers.current['conversation.new']?.(),
     'conversation.togglePanel': () => shortcutHandlers.current['conversation.togglePanel']?.(),
+    'app.searchProject': () => shortcutHandlers.current['app.searchProject']?.(),
   }), [])
   useShortcutActions(!companion, shortcutBindings, stableShortcutHandlers)
   useEffect(() => { setActivityProvider(selectedSession?.provider ?? selectedRuntime?.provider ?? null) }, [selectedSession?.provider, selectedRuntime?.provider])
@@ -1776,6 +1783,23 @@ export function App() {
     setMention(null)
     requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = mention.start + agent.name.length + 2; node.focus(); node.setSelectionRange(position, position) })
   }
+  const pickFileMention = (file: FileMatch) => {
+    if (!mention) return
+    const caret = composerRef.current?.selectionStart ?? composer.length
+    const next = `${composer.slice(0, mention.start)}@${file.path} ${composer.slice(caret)}`
+    setComposer(next)
+    setMention(null)
+    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = mention.start + file.path.length + 2; node.focus(); node.setSelectionRange(position, position) })
+  }
+  /** Adds `@path:line` where the owner is typing, from the project search. */
+  const insertReference = (reference: string) => {
+    const caret = composerRef.current?.selectionStart ?? composer.length
+    const before = composer.slice(0, caret)
+    const lead = before && !/\s$/.test(before) ? ' ' : ''
+    const inserted = `${lead}@${reference} `
+    setComposer(`${before}${inserted}${composer.slice(caret)}`)
+    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = caret + inserted.length; node.focus(); node.setSelectionRange(position, position) })
+  }
   /** Runs an action chosen from the `/` menu. These never send a message. */
   const runSlashAction = (action: SlashItem['action']) => {
     if (!action) return
@@ -1863,6 +1887,10 @@ export function App() {
     }
     const generated = role === 'notice' ? generatedImageMeta(message.meta) : null
     if (generated) return <GeneratedImage key={key} id={`conversation-message-${encodeURIComponent(key)}`} sessionId={(sideSession ?? selectedSession)?.id} meta={generated} />
+    if (role === 'notice' && meta?.kind === 'pull_request' && typeof (message.meta as { url?: unknown }).url === 'string') {
+      const url = (message.meta as { url: string }).url
+      return <div key={key} className="team-chip-row"><button type="button" className="team-notice pull-request-notice" title={url} onClick={() => void openSafeLink(url)}><GitPullRequest size={11} aria-hidden="true" />Opened a pull request</button></div>
+    }
     if (role === 'notice') {
       return <div key={key} className="team-chip-row"><span className="team-notice">{text}</span></div>
     }
@@ -2032,6 +2060,16 @@ ${fileReferenceText(sentFile)}` : typed
     if (!target || isDraftSession(target)) throw new Error('Open the conversation first.')
     const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
     const sent = await sendWithDelivery(live ? 'session.queue.add' : 'session.prompt', { sessionId, text: pullRequestPrompt(repository) })
+    if (sent.queued) void loadQueue(sessionId)
+    await refresh()
+  }
+
+  /** Review comments are an ordinary message, queued if the bot is working. */
+  const sendReviewComments = async (sessionId: string, text: string) => {
+    const target = sessions.find((item) => item.id === sessionId)
+    if (!target || isDraftSession(target)) throw new Error('Open the conversation first.')
+    const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
+    const sent = await sendWithDelivery(live ? 'session.queue.add' : 'session.prompt', { sessionId, text })
     if (sent.queued) void loadQueue(sessionId)
     await refresh()
   }
@@ -2529,6 +2567,7 @@ ${fileReferenceText(sentFile)}` : typed
   const limitUntil = sessionBusy ? null : limitWaitingUntil(selectedSession, now)
   sendPromptRef.current = sendPrompt
   shortcutHandlers.current = {
+    'app.searchProject': () => { if (inDesktop) setProjectSearchOpen(true) },
     'app.shortcutSheet': () => { if (experiments.shortcuts) setShortcutsOpen(true) },
     'conversation.new': () => { if (connection === 'connected' && activeSelectedAgent) newSession() },
     'conversation.togglePanel': () => setConvosVisible(!convosOpen),
@@ -2579,6 +2618,17 @@ ${fileReferenceText(sentFile)}` : typed
   const handoffChoices = agents.filter((item) => !item.archived && !item.hidden && item.id !== activeSelectedAgent?.id).length
   const lastTurnWasPlan = planOn && !sessionBusy && (selectedSession?.messages ?? []).some((message) => message.role === 'assistant' || message.role === 'plan')
   const mentionCandidates = mention ? mentionMatches(agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden), mention.query) : []
+  const draftProjectId = selectedSession && isDraftSession(selectedSession) ? projectOfSession(selectedSession, projects)?.id ?? null : null
+  const fileSearchTarget: SearchTarget = selectedSession && !isDraftSession(selectedSession) ? { sessionId: selectedSession.id } : draftProjectId ? { projectId: draftProjectId } : null
+  const fileCandidates = useFileMatches(fileSearchTarget, mention ? mention.query : null)
+  const mentionCount = mentionCandidates.length + fileCandidates.length
+  useOpenChangesRequests(!companion, (sessionId) => {
+    const target = sessions.find((item) => item.id === sessionId)
+    if (!target) return
+    setSideSessionId(null)
+    selectSession(target)
+    setChangesFor({ sessionId, path: null })
+  })
   const blobSideSessions = activeSelectedAgent ? sideSessionsFor(sessions, activeSelectedAgent.id) : []
   const hashCandidates = hashRef ? conversationMatches(blobSideSessions, agents, hashRef.query) : []
   const slashCandidates = slash ? slashItems(slash.query, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) : []
@@ -2605,6 +2655,7 @@ ${fileReferenceText(sentFile)}` : typed
     { id: 'whats-new', kind: 'action', category: 'Help', icon: 'whats-new', title: 'What’s new', subtitle: 'Release notes', searchText: 'What is new changelog release notes version' },
     { id: 'export-diagnostics', kind: 'action', category: 'Help', icon: 'details', title: 'Export diagnostics', subtitle: 'Logs, versions and settings', searchText: 'Export diagnostics logs support report problem bug' },
     { id: 'take-tour', kind: 'action', category: 'Help', icon: 'tour', title: 'Take the tour', subtitle: 'Six quick stops', searchText: 'Take the tour guide onboarding help' },
+    ...(inDesktop && fileSearchTarget ? [{ id: 'search-project', kind: 'action' as const, category: 'Go to' as const, icon: 'search' as const, title: 'Search this project', subtitle: 'Find text in its files', hint: 'Ctrl+Shift+F', searchText: 'Search this project find text content grep' }] : []),
     { id: 'shortcuts', kind: 'action', category: 'Help', icon: 'shortcuts', title: 'Keyboard shortcuts', subtitle: '', hint: 'Ctrl+/', searchText: 'Keyboard shortcuts keys hotkeys' },
   ]
   const chooseQuickSwitcherItem = (item: QuickSwitcherItem) => {
@@ -2635,6 +2686,7 @@ ${fileReferenceText(sentFile)}` : typed
       else if (item.id === 'change-look') { setSettingsInitialPage('Appearance'); setSettingsFocus(null); setSettingsSheet(true) }
       else if (item.id === 'remote-devices') { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }
       else if (item.id === 'take-tour') startTour()
+      else if (item.id === 'search-project') setProjectSearchOpen(true)
       else if (item.id === 'shortcuts') setShortcutsOpen(true)
       else if (item.id === 'export-diagnostics') { setQuickSwitcherOpen(false); setDiagnosticsOpen(true) }
     }
@@ -2864,7 +2916,7 @@ ${fileReferenceText(sentFile)}` : typed
               {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
               {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
               {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
-              {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} />}
+              {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} files={fileCandidates} onPickFile={pickFileMention} />}
               <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true; setDraftFocus(composerKey, true) }} onBlur={() => { composerTypingRef.current = false; setDraftFocus(composerKey, false) }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
                 if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
                 if (slash && slashCandidates.length) {
@@ -2872,9 +2924,15 @@ ${fileReferenceText(sentFile)}` : typed
                   if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickSlash(slashCandidates[Math.min(slash.index, slashCandidates.length - 1)]); return }
                   if (event.key === 'Escape') { event.preventDefault(); setSlash(null); return }
                 }
-                if (mention && mentionCandidates.length) {
-                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMention({ ...mention, index: (mention.index + (event.key === 'ArrowDown' ? 1 : mentionCandidates.length - 1)) % mentionCandidates.length }); return }
-                  if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickMention(mentionCandidates[Math.min(mention.index, mentionCandidates.length - 1)]); return }
+                if (mention && mentionCount) {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setMention({ ...mention, index: (mention.index + (event.key === 'ArrowDown' ? 1 : mentionCount - 1)) % mentionCount }); return }
+                  if (event.key === 'Enter' || event.key === 'Tab') {
+                    event.preventDefault()
+                    const picked = Math.min(mention.index, mentionCount - 1)
+                    if (picked < mentionCandidates.length) pickMention(mentionCandidates[picked]!)
+                    else pickFileMention(fileCandidates[picked - mentionCandidates.length]!)
+                    return
+                  }
                   if (event.key === 'Escape') { event.preventDefault(); setMention(null); return }
                 }
                 if (hashRef && hashCandidates.length) {
@@ -2915,7 +2973,7 @@ ${fileReferenceText(sentFile)}` : typed
           <h2>{agentName}</h2>
           <p>{selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected')}</p>
         </section>
-        <SessionRail agents={agents} isManager={activeSelectedAgent?.systemRole === 'manager'} onOpenSessionById={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} onOpenSchedules={() => setSchedulesOpen(true)} active={detailsVisible} botName={activeSelectedAgent?.name ?? 'The bot'} canCreatePr={connection === 'connected' && !!selectedSession && !isDraftSession(selectedSession) && !selectedSession.archived && runtimeUsable(selectedRuntime)} onCreatePr={(repository) => selectedSession && setPullRequestFor({ sessionId: selectedSession.id, repository })} workingBots={<WorkingBotsPanel sessions={sessions} agents={agents} selectedId={sideSessionId} onOpen={openSideConversation} />} session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
+        <SessionRail agents={agents} isManager={activeSelectedAgent?.systemRole === 'manager'} onOpenSessionById={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} onOpenSchedules={() => setSchedulesOpen(true)} active={detailsVisible} botName={activeSelectedAgent?.name ?? 'The bot'} canCreatePr={connection === 'connected' && !!selectedSession && !isDraftSession(selectedSession) && !selectedSession.archived && runtimeUsable(selectedRuntime)} onCreatePr={(repository) => selectedSession && setPullRequestFor({ sessionId: selectedSession.id, repository })} onReview={inDesktop && selectedSession && !isDraftSession(selectedSession) ? (path) => setChangesFor({ sessionId: selectedSession.id, path }) : undefined} workingBots={<WorkingBotsPanel sessions={sessions} agents={agents} selectedId={sideSessionId} onOpen={openSideConversation} />} session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
       {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet && !quickSwitcherOpen && !whatsNewOpen} />}
@@ -2985,7 +3043,9 @@ ${fileReferenceText(sentFile)}` : typed
         }
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
-      {pullRequestFor && selectedSession?.id === pullRequestFor.sessionId && <PullRequestDialog repository={pullRequestFor.repository} botName={activeSelectedAgent?.name ?? 'The bot'} busy={['working', 'starting', 'waiting_permission', 'cancelling'].includes(selectedSession.state ?? '')} onSend={() => requestPullRequest(pullRequestFor.sessionId, pullRequestFor.repository)} onClose={() => setPullRequestFor(null)} />}
+      {projectSearchOpen && !companion && <ProjectSearchDialog target={fileSearchTarget} canPreview={!!selectedSession && !isDraftSession(selectedSession)} onClose={() => setProjectSearchOpen(false)} onMention={insertReference} />}
+      {changesFor && selectedSession?.id === changesFor.sessionId && !companion && <ChangesView sessionId={changesFor.sessionId} initialPath={changesFor.path} botName={activeSelectedAgent?.name ?? 'The bot'} onClose={() => setChangesFor(null)} onSendComments={(text) => sendReviewComments(changesFor.sessionId, text)} onCreatePr={(repository) => { setChangesFor(null); setPullRequestFor({ sessionId: changesFor.sessionId, repository }) }} />}
+      {pullRequestFor && selectedSession?.id === pullRequestFor.sessionId && <PullRequestDialog sessionId={pullRequestFor.sessionId} onCreated={() => void refresh()} repository={pullRequestFor.repository} botName={activeSelectedAgent?.name ?? 'The bot'} busy={['working', 'starting', 'waiting_permission', 'cancelling'].includes(selectedSession.state ?? '')} onSend={() => requestPullRequest(pullRequestFor.sessionId, pullRequestFor.repository)} onClose={() => setPullRequestFor(null)} />}
       {archivedBotsOpen && <ArchivedBots onClose={() => setArchivedBotsOpen(false)} onRestore={restoreAgent} onDelete={setPurgeTarget} />}
       {purgeTarget && <ConfirmDialog title={`Permanently delete ${agents.find((agent) => agent.id === purgeTarget.id)?.name || purgeTarget.name || 'this bot'}?`} body="This permanently removes the bot, all its conversations, and every side-conversation it took part in, including those shown under other bots. Its scheduled automations and private memory are also removed. This cannot be undone. Project files and the coding agent's own history are kept. Stop any running work first." confirmLabel="Delete bot and conversations" cancelLabel="Keep bot" holdToConfirm successTitle="Bot deleted" successBody="The bot and its conversations were permanently removed from Bitbots." onConfirm={async () => { await rpc('agent.purge', { agentId: purgeTarget.id, confirm: true }); await refresh() }} onComplete={() => setPurgeTarget(null)} onCancel={() => setPurgeTarget(null)} />}
       {archiveTarget && <ConfirmDialog title={`Archive ${archiveTarget.name}?`} body={experiments.undo ? "It leaves the sidebar and companion. Its conversations stay saved. You can undo this for eight seconds." : "It leaves the sidebar and companion. Its conversations stay saved. Restore it from Archived bots in your profile menu."} confirmLabel={`Archive ${noun}`} cancelLabel="Keep it" tone="warning" icon={<BlobCanvas decorative color={agentColorHex(archiveTarget.color)} size={34} mood="sleeping" look={agentLook(archiveTarget)} label={`${archiveTarget.name} preview`} />} onConfirm={() => void confirmArchive()} onCancel={() => setArchiveTarget(null)} />}
@@ -3288,8 +3348,9 @@ function SafeMessageText({ text }: { text: string }) {
 function DiffViewer({ path, content, onClose }: { path: string; content: string; onClose: () => void }) {
   const { ref: dialogRef, close } = useDialogAccessibility(onClose)
   const parsed = parseUnifiedDiff(content)
-  return <div className="sheet-backdrop diff-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="diff-sheet" role="dialog" aria-modal="true" aria-labelledby="diff-title"><header><div><p className="eyebrow">FILE CHANGE</p><h2 id="diff-title">{fileNameForPath(path)}</h2><small>{path}</small></div><span className="diff-counts"><em>+{parsed.additions}</em><i>−{parsed.deletions}</i></span><button className="icon-button" data-dialog-initial-focus aria-label="Close diff" onClick={close}><X size={17} /></button></header>
-    <div className="diff-content" role="region" aria-label={`Diff for ${path}`} tabIndex={0}>{parsed.empty ? <p className="diff-empty">No diff content was reported.</p> : parsed.binary ? <p className="diff-empty">Binary file change. Text lines are unavailable.</p> : <pre>{parsed.lines.map((line, index) => <span className={`diff-line ${line.kind}`} key={`${index}-${line.text}`}><span className="diff-number">{line.oldNumber ?? ''}</span><span className="diff-number">{line.newNumber ?? ''}</span><code>{line.text}</code></span>)}</pre>}</div>
+  const [mode, setMode] = useDiffMode()
+  return <div className="sheet-backdrop diff-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="diff-sheet" role="dialog" aria-modal="true" aria-labelledby="diff-title"><header><div><p className="eyebrow">FILE CHANGE</p><h2 id="diff-title">{fileNameForPath(path)}</h2><small>{path}</small></div><span className="diff-counts"><em>+{parsed.additions}</em><i>−{parsed.deletions}</i></span>{!parsed.empty && !parsed.binary && <DiffModeSwitch mode={mode} onChange={setMode} />}<button className="icon-button" data-dialog-initial-focus aria-label="Close diff" onClick={close}><X size={17} /></button></header>
+    <div className="diff-content" role="region" aria-label={`Diff for ${path}`} tabIndex={0}><DiffBody content={content} mode={mode} path={path} /></div>
   </section></div>
 }
 
@@ -3981,6 +4042,12 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
   // Phase 1A: a bot works in every project, so the pill names the one it is working in.
   const workingProject = shimmering && session && !visibleError ? projectOfSession(session, projects)?.name ?? null : null
   const sessionBusy = !!session && ['working', 'starting', 'waiting_permission'].includes(session.state ?? '')
+  const realSession = inDesktop && session && !isDraftSession(session) ? session : null
+  const changes = useSessionRepository(realSession, repositoryRefreshKey(realSession), sessionBusy, !!realSession)
+  const changedFiles = changes.data?.files.length ?? 0
+  const changesKey = realSession && changes.data ? `${realSession.id}:${changedFiles}:${changes.data.addedLines}:${changes.data.removedLines}` : ''
+  const [dismissedChanges, setDismissedChanges] = useState('')
+  const changesReady = !!realSession && !sessionBusy && changedFiles > 0 && dismissedChanges !== changesKey
   useEffect(() => { setActivityProvider(session?.provider ?? runtime?.provider ?? null) }, [session?.provider, runtime?.provider])
   // The companion window is its own page, so it sets its own conversation for local file previews.
   useEffect(() => { setMediaScope(session && !isDraftSession(session) ? { sessionId: session.id, projectPath: session.projectPath ?? null } : null) }, [session?.id, session?.projectPath])
@@ -4026,6 +4093,7 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
               {visibleError && <p className="companion-drop-error" role="alert" tabIndex={-1} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); dismissError() } }}><span>{visibleError}</span><button type="button" className="icon-btn" aria-label="Dismiss error" onClick={dismissError}><X size={10} /></button></p>}
               {dictating && dictationIsland}
               {usageTip && onDismissUsageTip && <UsageTip tip={usageTip} onDismiss={() => onDismissUsageTip(usageTip)} />}
+              {changesReady && realSession && <div className="chip settled companion-changes-ready" role="status"><button type="button" className="companion-changes-open" onClick={() => void openChangesInMainWindow(realSession.id).catch(() => undefined)}><GitCompare size={12} aria-hidden="true" /><span>Changes ready · {changedFiles} {changedFiles === 1 ? 'file' : 'files'}</span></button><button type="button" aria-label="Dismiss" onClick={() => setDismissedChanges(changesKey)}><X size={11} aria-hidden="true" /></button></div>}
               {queuedCount > 0 && <p className="companion-queue-note" role="status">{queuedCount} queued · sends when this turn ends</p>}
               {!sessionBusy && limitWaitingUntil(session, clock) && <p className="companion-queue-note" role="status">{name} is at its usage limit. A message goes out at {limitResetTime(limitWaitingUntil(session, clock) as string)}.</p>}
               <ReplyAnnotator container={chatLogRef} full={companionNotes.length >= MAX_ANNOTATIONS} onAdd={(note) => setCompanionNotes((current) => current.length >= MAX_ANNOTATIONS ? current : [...current, note])} />

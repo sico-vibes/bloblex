@@ -82,3 +82,7 @@ Then connect to the page's `webSocketDebuggerUrl` with a small Node script (`new
 Both supported looks (Bitbots and Blobots), in dark and light; selected, hover, focus and disabled states; text contrast of 4.5:1 or more; no pill or circle controls in the new looks (the Manager and lock badges and the look orbs excepted); companion and dictation windows if styles changed; reduced motion; the production build when styles or assets load differently.
 
 **Checking `bloblex-desktop` from a lane worktree.** It needs three things a worktree lacks: a path with no apostrophe (else `tauri-winres` fails with `RC2135`), `apps/desktop/dist`, and the staged `binaries/bitbotsd-*.exe`. Copy the tree without `target`, `node_modules`, `.git` and `dist` to a short path, run `cargo check -p bloblex-desktop` there with `TAURI_CONFIG='{"bundle":{"externalBin":[]},"build":{"frontendDist":"../dist-remote"}}'`, and delete the copy afterwards. The build also rewrites `src-tauri/gen/schemas/*.json`: revert those.
+
+**Flaky under load, besides the known one:** `stopping_a_turn_stops_its_setup_script`. It failed once with five parallel git tests running and passed alone. Mounted UI tests time out if run during cargo builds.
+
+**Check D's free space before starting lanes.** A daemon test build needs about 6 GB. If a lane must build elsewhere, `$env:CARGO_TARGET_DIR` works.

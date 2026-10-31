@@ -1,0 +1,26 @@
+/* Phase 3: file mentions and the project search dialog. */
+.mention-file { min-height: 30px; color: var(--text-2); }
+.mention-file > svg { flex: none; color: var(--text-3); }
+.mention-file-path { min-width: 0; overflow: hidden; font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.mention-file-path > * { direction: ltr; unicode-bidi: embed; }
+.mention-file-path b { color: var(--text-1); font-weight: 600; }
+
+.project-search { width: min(760px, calc(100% - 32px)); height: min(620px, calc(100% - 32px)); display: flex; flex-direction: column; overflow: hidden; border-radius: var(--radius-lg); background: var(--surface-overlay); box-shadow: var(--shadow-pop); }
+.project-search-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; color: var(--text-3); border-bottom: 1px solid var(--line); }
+.project-search-head input { flex: 1; min-width: 0; height: 30px; color: var(--text-1); border: 0; outline: none; background: transparent; font: inherit; font-size: var(--fs-sm); }
+.project-search-toggle { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; color: var(--text-3); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.project-search-toggle:hover { color: var(--text-1); background: var(--surface-hover); }
+.project-search-toggle[aria-pressed="true"] { color: var(--text-1); background: var(--surface-raised); }
+.project-search-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.project-search-body { flex: 1; min-height: 0; padding: 4px 6px; overflow-y: auto; }
+.project-search-note { margin: 0; padding: 28px 16px; color: var(--text-3); font-size: var(--fs-sm); text-align: center; }
+.project-search-group h3 { margin: 8px 0 2px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; color: var(--text-2); font: 500 var(--fs-xs) var(--font-mono); }
+.project-search-group h3 > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-search-group h3 .icon-button { flex: none; width: 22px; height: 22px; }
+.project-search-group ul { margin: 0; padding: 0; list-style: none; }
+.project-search-group li button { width: 100%; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; padding: 3px 8px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: var(--fs-xs)/1.5 var(--font-mono); text-align: left; cursor: pointer; }
+.project-search-group li button:hover { color: var(--text-1); background: var(--surface-hover); }
+.project-search-group li button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.project-search-group code { overflow: hidden; font: inherit; text-overflow: ellipsis; white-space: pre; }
+.project-search-line { color: var(--text-3); text-align: right; }
+.project-search-foot { padding: 7px 14px; color: var(--text-3); border-top: 1px solid var(--line); font-size: var(--fs-2xs); }

@@ -103,7 +103,7 @@ export function diffUnavailableReason(file: RailFile): string | null {
 /** How many changed files the Changes card lists before "Show all". */
 const CHANGE_LIMIT = 8
 
-export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote, workingBots, botName = 'The bot', canCreatePr = false, onCreatePr, active = true, agents = [], isManager = false, onOpenSessionById, onOpenSchedules }: {
+export function SessionRail({ session, usage, appliedModel, onOpenFile, onRevealFile, onCopyPath, onDiff, onOpenFolder, runtimeFacts, onOpenRemote, workingBots, botName = 'The bot', canCreatePr = false, onCreatePr, onReview, active = true, agents = [], isManager = false, onOpenSessionById, onOpenSchedules }: {
   /** Every bot, so a schedule can name the bot it wakes. */
   agents?: readonly Agent[]
   /** The Manager sees every schedule; any other bot sees its own and its project's. */
@@ -119,6 +119,8 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   onRevealFile: (path: string) => void
   onCopyPath: (path: string) => void
   onDiff: (path: string, diff: string) => void
+  /** Opens the review screen, on this file when one is named. Desktop only. */
+  onReview?: (repositoryPath: string | null) => void
   onOpenFolder: (path: string) => void
   /** Coding agent facts (version, sign-in, executable) for the Environment card's "?" tip. */
   runtimeFacts?: string
@@ -159,8 +161,10 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   // A folder that is not a Git repository is a state to explain, not a failure to retry.
   const notRepo = !!repo && repo.gitRepo === false
   const readFailed = repository.failed || (!!repo && !!repo.error && !notRepo)
-  const canPr = !!onCreatePr && canCreatePr && view.fromRepository && !!repo && repo.files.length > 0 && !repository.failed
-  const prTitle = !onCreatePr || !repo ? undefined : repository.failed ? 'The repository could not be read just now, so these changes may be out of date. Try again first.' : !view.fromRepository ? 'Pull requests need a Git repository that can be read.' : repo.files.length === 0 ? 'There are no changes to put in a pull request.' : !canCreatePr ? 'Reconnect, or pick a working coding agent, to ask for a pull request.' : `Ask ${botName} to open a pull request for these changes.`
+  // A conversation in its own git copy can have finished commits and nothing uncommitted.
+  const ownCopy = !!session?.link?.worktree
+  const canPr = !!onCreatePr && canCreatePr && view.fromRepository && !!repo && (repo.files.length > 0 || ownCopy) && !repository.failed
+  const prTitle = !onCreatePr || !repo ? undefined : repository.failed ? 'The repository could not be read just now, so these changes may be out of date. Try again first.' : !view.fromRepository ? 'Pull requests need a Git repository that can be read.' : repo.files.length === 0 && !ownCopy ? 'There are no changes to put in a pull request.' : !canCreatePr ? 'Reconnect, or pick a working coding agent, to ask for a pull request.' : `Ask ${botName} to open a pull request for these changes.`
   const total = view.repository.length + view.earlier.length
   const openFolder = projectPath && platform.editor ? <button type="button" className="rail-link" onClick={() => onOpenFolder(projectPath)}>Open the folder</button> : null
   const fileButtons = (file: RailFile) => <span className="rail-file-actions">
@@ -171,8 +175,10 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
   const changeRow = (file: RailFile) => {
     const reason = diffUnavailableReason(file)
     const note = fileNote(file)
+    // Anything Git lists opens in the review screen, which reads the whole diff itself.
+    const reviewable = !!onReview && file.source === 'repository' && !!file.relative
     return <li key={file.key} className="rail-file" data-source={file.source}>
-      <button type="button" className="rail-file-open" title={reason ?? (file.truncated ? `View the shortened diff for ${file.relative ?? file.path}` : `View the diff for ${file.relative ?? file.path}`)} aria-disabled={reason ? true : undefined} disabled={!!reason} onClick={() => file.diff && onDiff(file.path, file.diff)}>
+      <button type="button" className="rail-file-open" title={reviewable ? `Review ${file.relative}` : reason ?? (file.truncated ? `View the shortened diff for ${file.relative ?? file.path}` : `View the diff for ${file.relative ?? file.path}`)} aria-disabled={reason && !reviewable ? true : undefined} disabled={!!reason && !reviewable} onClick={() => { if (reviewable && file.relative) onReview?.(file.relative); else if (file.diff) onDiff(file.path, file.diff) }}>
         <FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.relative ?? file.path}>{file.name}</span>{note && <span className="rail-tag" title={reason ?? undefined}>{note}</span>}
       </button>
       {!file.binary && file.added !== null && <em className="rail-add">+{lines(file.added)}</em>}
@@ -184,6 +190,7 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
     ? <span className="rail-card-aside">
       {view.fromRepository && total > 0 && <span className="rail-diffstat" aria-label={`${lines(view.added)} lines added, ${lines(view.removed)} removed`}><em>+{lines(view.added)}</em> <i>−{lines(view.removed)}</i></span>}
       {!view.fromRepository && view.earlier.length > 0 && <span className="rail-diffstat"><em>+{lines(view.added)}</em> <i>−{lines(view.removed)}</i></span>}
+      {onReview && view.fromRepository && view.repository.length > 0 && <button type="button" className="rail-pr" title="Review these changes, stage them and comment for the bot" onClick={() => onReview(null)}>Review</button>}
       {onCreatePr && view.fromRepository && <button type="button" className="rail-pr" disabled={!canPr} title={prTitle} onClick={() => repo && onCreatePr(repo)}>Create PR</button>}
     </span>
     : undefined

@@ -48,3 +48,45 @@
 .report-problem-note { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.45; }
 .report-actions { justify-content: space-between; }
 .report-actions > span { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+
+/* Phase 3: where a project comes from, the pull request form and leftover task copies. */
+.new-project-source { justify-self: start; align-self: flex-start; width: fit-content; }
+.new-project-field textarea { width: 100%; padding: 7px 10px; color: var(--text-1); border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); font: inherit; font-size: var(--fs-sm); line-height: 1.45; resize: vertical; }
+.new-project-field textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.clone-running { margin: 0; display: flex; align-items: center; gap: 7px; color: var(--text-2); font-size: var(--fs-xs); }
+.clone-result { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-sm); line-height: 1.35; }
+.clone-result > svg { flex: none; margin-top: 1px; color: var(--text-3); }
+.clone-result[data-state="done"] > svg { color: var(--status-success-text, var(--text-2)); }
+.clone-result[data-state="failed"] > svg { color: var(--status-danger-text); }
+.clone-result span { min-width: 0; display: grid; gap: 1px; }
+.clone-result strong { font-weight: 500; }
+.clone-result small { color: var(--text-3); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.discover-list { max-height: 260px; margin: 0; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--line); border-radius: 8px; }
+.discover-list li + li { border-top: 1px solid var(--line); }
+.discover-list label { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; }
+.discover-list label[data-added] { cursor: default; opacity: 0.65; }
+.discover-list input { flex: none; margin: 0; }
+.discover-name { flex: 1; min-width: 0; display: grid; }
+.discover-name strong, .discover-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discover-name strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; }
+.discover-name small { color: var(--text-3); font-size: var(--fs-2xs); }
+.discover-branch { flex: none; max-width: 120px; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); white-space: nowrap; }
+.blob-dialog.pr-form { width: min(560px, calc(100% - 32px)); }
+.pr-ask { margin-right: auto; }
+.pr-open { display: inline-flex; align-items: center; gap: 6px; }
+.blob-dialog p.pr-existing { color: var(--text-2); font-size: var(--fs-sm); }
+.pull-request-notice { display: inline-flex; align-items: center; gap: 5px; border: 0; cursor: pointer; }
+.pull-request-notice:hover { color: var(--text-1); }
+.pull-request-notice:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.worktree-list { margin: 0; padding: 0; list-style: none; }
+.worktree-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 0; }
+.worktree-row + .worktree-row { border-top: 1px solid var(--line); }
+.worktree-copy { flex: 1 1 240px; min-width: 0; display: grid; gap: 1px; }
+.worktree-copy strong { overflow: hidden; color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.worktree-copy small { color: var(--text-3); font-size: var(--fs-xs); }
+.worktree-branch { overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.worktree-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.worktree-branch-choice { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); cursor: pointer; }
+.worktree-branch-choice input { margin: 0; }
+.worktree-confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); }
+.worktree-remove { color: var(--danger-ink); }

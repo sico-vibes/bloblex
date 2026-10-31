@@ -20,6 +20,8 @@ export type RepositoryFile = {
   diff: string | null
   binary: boolean
   truncated: boolean
+  /** How much of this file's change is in the index. */
+  staged: 'none' | 'partial' | 'all'
 }
 export type RepositoryState = {
   projectPath: string | null
@@ -50,7 +52,8 @@ export function normalizeRepository(raw: unknown): RepositoryState | null {
     const path = text(file.path) ?? text(file.repositoryPath)
     if (!path) continue
     const change = CHANGES.includes(file.change as RepositoryChange) ? file.change as RepositoryChange : 'modified'
-    files.push({ path, repositoryPath: text(file.repositoryPath) ?? path, change, addedLines: count(file.addedLines), removedLines: count(file.removedLines), diff: text(file.diff), binary: file.binary === true, truncated: file.truncated === true })
+    const staged = file.staged === 'all' || file.staged === 'partial' ? file.staged : 'none'
+    files.push({ path, repositoryPath: text(file.repositoryPath) ?? path, change, addedLines: count(file.addedLines), removedLines: count(file.removedLines), diff: text(file.diff), binary: file.binary === true, truncated: file.truncated === true, staged })
   }
   const added = count(value.addedLines) ?? files.reduce((sum, file) => sum + (file.addedLines ?? 0), 0)
   const removed = count(value.removedLines) ?? files.reduce((sum, file) => sum + (file.removedLines ?? 0), 0)

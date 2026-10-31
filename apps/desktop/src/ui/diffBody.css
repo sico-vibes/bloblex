@@ -1,0 +1,40 @@
+/* Phase 3: the diff layouts and line comments. The line colours are in styles.css. */
+.diff-mode { display: inline-flex; padding: 2px; gap: 2px; border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.diff-mode button { height: 24px; padding: 0 9px; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font-size: var(--fs-2xs); cursor: pointer; }
+.diff-mode button:hover { color: var(--text-1); }
+.diff-mode button[aria-pressed="true"] { color: var(--text-1); background: var(--surface-raised); }
+.diff-mode button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Unified: each line sits in a group, so a comment can go below it. */
+.diff-content .diff-unified-group { display: block; }
+.diff-line { position: relative; }
+
+/* In the gutter, so it stays on screen when a long line scrolls sideways. */
+.diff-comment-add { position: absolute; top: 0; left: 3px; display: grid; place-items: center; width: 20px; height: 19px; padding: 0; color: var(--text-3); border: 0; border-radius: 5px; background: var(--surface-raised); opacity: 0; cursor: pointer; }
+.diff-line:hover > .diff-comment-add, .diff-split-cell:hover > .diff-comment-add, .diff-comment-add:focus-visible { opacity: 1; }
+.diff-comment-add:hover { color: var(--text-1); }
+.diff-comment-add:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.diff-comments { display: grid; gap: 6px; padding: 8px 12px 10px 104px; font-family: var(--font-ui); white-space: normal; background: var(--surface-subtle); }
+.diff-comment { display: flex; align-items: flex-start; gap: 8px; max-width: 640px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); }
+.diff-comment p { flex: 1; margin: 0; color: var(--text-1); font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
+.diff-comment .icon-button { flex: none; width: 20px; height: 20px; }
+.diff-comment-composer { display: grid; gap: 6px; max-width: 640px; }
+.diff-comment-composer textarea { width: 100%; padding: 7px 9px; color: var(--text-1); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); font: inherit; font-size: var(--fs-xs); resize: vertical; }
+.diff-comment-composer textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.diff-comment-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* Side by side: two equal columns that wrap long lines rather than scrolling apart. */
+.diff-split { padding: 10px 0; font: var(--fs-xs)/1.6 var(--font-mono); }
+.diff-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.diff-split-cell { position: relative; min-width: 0; min-height: 19px; display: grid; grid-template-columns: 46px minmax(0, 1fr); color: var(--text-2); }
+.diff-split-cell + .diff-split-cell { border-left: 1px solid var(--line); }
+.diff-split-cell code { padding: 0 10px; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-split-cell.added { color: var(--status-success); background: color-mix(in srgb, var(--status-success) 12%, transparent); }
+.diff-split-cell.removed { color: var(--status-danger); background: color-mix(in srgb, var(--status-danger) 12%, transparent); }
+.diff-split-cell.blank { background: var(--surface-subtle); }
+.diff-split .diff-comments { padding-left: 12px; }
+
+@media (max-width: 720px) {
+  .diff-comments { padding-left: 12px; }
+}

@@ -10,6 +10,7 @@ import { agentColorHex } from './agentColor'
 import { providerBrand } from './providerBrand'
 import { sideTitle } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
+import { FileMentionOptions, type FileMatch } from './ProjectSearch'
 
 function MiniBlob({ agent, name, size = 18 }: { agent: Agent | null | undefined; name: string; size?: number }) {
   return agent
@@ -298,16 +299,17 @@ export function QuestionCard({ request, onAnswer, onDismiss }: { request: Permis
 }
 
 /** Autocomplete for @mentions in the composer. */
-export function MentionPicker({ agents, query, activeIndex, onPick, onHover }: { agents: Agent[]; query: string; activeIndex: number; onPick: (agent: Agent) => void; onHover: (index: number) => void }) {
+export function MentionPicker({ agents, query, activeIndex, onPick, onHover, files = [], onPickFile }: { agents: Agent[]; query: string; activeIndex: number; onPick: (agent: Agent) => void; onHover: (index: number) => void; files?: readonly FileMatch[]; onPickFile?: (file: FileMatch) => void }) {
   const matches = useMemo(() => mentionMatches(agents, query), [agents, query])
   const noun = useEntityNoun()
-  if (!matches.length) return null
-  return <div className="mention-picker" role="listbox" aria-label={`Mention a ${noun}`}>
+  if (!matches.length && !files.length) return null
+  return <div className="mention-picker" role="listbox" aria-label={files.length ? `Mention a ${noun} or a file` : `Mention a ${noun}`}>
     {matches.map((agent, index) => <button key={agent.id} type="button" role="option" aria-selected={index === activeIndex} className={`mention-option ${index === activeIndex ? 'active' : ''}`} onMouseDown={(event) => { event.preventDefault(); onPick(agent) }} onMouseEnter={() => onHover(index)}>
       <MiniBlob agent={agent} name={agent.name} size={22} />
       <strong>{agent.name}</strong>
       {agent.role && <span className="role-chip">{agent.role}</span>}
     </button>)}
+    {onPickFile && <FileMentionOptions files={files} firstIndex={matches.length} activeIndex={activeIndex} onPick={onPickFile} onHover={onHover} />}
   </div>
 }
 

@@ -12,6 +12,25 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 - **PowerShell calls don't share environment changes:** remove `BITBOTS_HOOK_BRIDGE` and `BITBOTS_REMOTE_WEB_DIR` in the same command that runs `cargo test`, or the two known env tests fail.
 - **Python in a Bash heredoc is fine for text without backslashes** (it handled the CRLF `tiers.json`); put anything with Windows paths in a file.
 
+## 2026-10-31 · Phase 3: git and review
+
+- **An action that destroys two things must check the first really happened before the second.** `worktree.removeAbandoned` deleted the branch after a failed removal, losing the only handle on those commits. The unit tests all passed, and only the live smoke showed it, because a real coding agent held the folder open. Test a failed removal by holding a file with `share_mode(0)`.
+- **On Windows, `git worktree remove --force` deletes the files and then fails on the empty folder while a process has it as its working folder,** and each OpenCode process's working folder is its first conversation's. So git's failure doesn't mean the copy survived, and retries keep failing. Check whether the folder is empty, then `git worktree prune`. Only a folder with files left counts as not removed.
+- **A safety rule built on a list fails open when the list can't be read.** `session_list(...).unwrap_or_default()` would have made every live conversation's copy look abandoned. Return nothing when the source can't be read, not an empty list that means "nothing is using this".
+- **An archived conversation can still have a running turn,** so archived alone doesn't mean its folder is free.
+- **When the base branch is unknown, the default branch looks like any other.** A clone with no `refs/remotes/origin/HEAD` passed every check on `main` and would have pushed it before `gh` refused. Ask `gh repo view` for the default, and refuse `main`, `master`, `trunk` and `develop` when nothing knows.
+- **Old and new line numbers overlap in a diff.** A comment placed by number alone showed up on two lines. Keep which side it belongs to.
+- **A turn that changes nothing has its task copy discarded, an older rule.** This made a smoke test look flaky, because the discard races any check of the copy. Give the bot a real change. On Windows the discard can also leave an emptied folder and the notice "the separate copy could not be removed".
+- **A refusal test must not hold a URL the validator could rescue.** `project.clone` trimmed before checking, so a refusal case with a leading space became a real network clone. Validate the exact bytes sent, and treat a stray space as a refusal.
+- **A clone URL's host can read as an option:** `ssh://-oProxyCommand=...`. Refuse a host starting with a dash, on top of git's own check.
+- **`Path::canonicalize()` gives `\\?\C:\...` on Windows, and git refuses that as a clone or worktree target.** Don't canonicalise temp folders in tests.
+- **Walking many repositories must not spawn git per repository.** It blew a 10-second budget under load. Read `.git/HEAD` directly, following `gitdir:` for a worktree.
+- **Git pathspecs:** with the global `--literal-pathspecs`, `:(literal)path` is taken literally and matches nothing, so use one or the other. In `git rev-list --remotes`, `--exclude=` globs are relative to `refs/remotes/`.
+- **A `gh` stub on Windows is a `.cmd`,** so keep its arguments free of `&`, `|` and `%`.
+- **A multi-line anchor in a patch script fails on CRLF files,** and a script that fails halfway has already applied its first edits. Match each file's line ending, and don't rerun an edit that landed.
+- **Running the UI tests during two cargo builds failed 66 mounted tests by timeout;** the same files pass alone. Run them again when the lanes finish before looking for a bug.
+- **Lanes fill D quickly:** each worktree's `target` is 12 to 16 GB, and D reached 1.9 GB free, which made a lane stop with `no space on device`. Delete the `target` of a lane once it's merged, rather than waiting for the release cleanup.
+
 ## 2026-10-31 · Phase 2: images from any path, and the OpenCode timer
 
 - **Read the tool before trusting the plan.** The plan said to parse "Saved image: <file>" from OpenCode's tool result. OpenCode 2.2.2's npm binary holds its JavaScript as plain text, and it shows the tool returns at once, before the image exists, with a path that has no extension. A plan's description of a third-party tool is a guess until it is read.

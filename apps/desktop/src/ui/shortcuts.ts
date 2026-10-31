@@ -9,6 +9,7 @@ export const SHORTCUT_ACTIONS = [
   { id: 'conversation.togglePanel', label: 'Show or hide conversations', keys: null },
   { id: 'app.terminal', label: 'Show or hide the terminal', keys: 'Ctrl+`' },
   { id: 'app.askSeveral', label: 'Ask several bots', keys: null },
+  { id: 'app.searchProject', label: 'Search this project', keys: 'Ctrl+Shift+F' },
   { id: 'app.settings', label: 'Open Settings', keys: null },
   { id: 'app.shortcutSheet', label: 'Show keyboard shortcuts', keys: 'Ctrl+/' },
 ] as const

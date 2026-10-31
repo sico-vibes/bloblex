@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CircleAlert, CircleCheck, TriangleAlert } from 'lucide-react'
 import { rpc } from '../tauri'
+import { AbandonedWorktrees } from './AbandonedWorktrees'
 import { ReportProblemDialog } from './ReportProblemDialog'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
 
@@ -47,6 +48,7 @@ export function HealthPage() {
         {check.fix && check.status !== 'ok' && <button type="button" className="ghost-button small" disabled={!!fixing} onClick={() => void fix(check)}>{fixing === check.id ? 'Working…' : check.fix.label}</button>}
       </li>)}</ul>
     </SettingsGroup>)}
+    <AbandonedWorktrees />
     <SettingsGroup title="Something still wrong?">
       <SettingsRow label="Report a problem" hint="Drafts a GitHub issue with your versions and these results. You read and edit it first, and nothing is sent until you choose.">
         <button type="button" className="secondary-button small" onClick={() => setReporting(true)}>Report a problem</button>

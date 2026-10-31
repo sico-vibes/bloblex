@@ -282,7 +282,7 @@ describe('rail Create PR and a failed read', () => {
 describe('pull request review', () => {
   const state = normalizeRepository(repo())!
   const mountDialog = async (onSend: () => Promise<void>, onClose = vi.fn(), busy = false) => {
-    await act(async () => { reactRoot.render(<PullRequestDialog repository={state} botName="Coco" busy={busy} onSend={onSend} onClose={onClose} />); await settle() })
+    await act(async () => { reactRoot.render(<PullRequestDialog sessionId="s1" repository={state} botName="Coco" busy={busy} onSend={onSend} onClose={onClose} />); await settle() })
     return onClose
   }
 
@@ -369,7 +369,7 @@ describe('repository reply parsing', () => {
     expect(normalizeRepository(null)).toBeNull()
     expect(normalizeRepository('nope')).toBeNull()
     const parsed = normalizeRepository({ gitRepo: true, files: [{ path: 'a.ts', change: 'weird', addedLines: -1 }, 5, { nothing: true }], truncated: 'yes' })!
-    expect(parsed.files).toEqual([{ path: 'a.ts', repositoryPath: 'a.ts', change: 'modified', addedLines: null, removedLines: null, diff: null, binary: false, truncated: false }])
+    expect(parsed.files).toEqual([{ path: 'a.ts', repositoryPath: 'a.ts', change: 'modified', addedLines: null, removedLines: null, diff: null, binary: false, truncated: false, staged: 'none' }])
     expect(parsed.truncated).toBe(false)
     expect(parsed.addedLines).toBe(0)
   })

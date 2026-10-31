@@ -10,9 +10,17 @@ import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { Select } from './Select'
 import './newProject.css'
 
-export type ProjectOverrides = { models: Record<string, string>; approvalMode: ApprovalMode | null; setupScript: string | null }
+export type ProjectOverrides = { models: Record<string, string>; approvalMode: ApprovalMode | null; setupScript: string | null; copyFiles: string[]; initSubmodules: boolean }
 
 export const MAX_SETUP_SCRIPT_CHARS = 4_000
+
+/** The paths in the box, one per line, and why any of them can't be used. The daemon checks again. */
+export function parseCopyFiles(text: string): { paths: string[]; problem: string | null } {
+  const paths = [...new Set(text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))]
+  if (paths.length > 50) return { paths, problem: 'List at most 50 files.' }
+  const bad = paths.find((path) => path.length > 260 || /^[\\/]|^[a-z]:|(^|[\\/])\.\.([\\/]|$)|[*?]/i.test(path))
+  return { paths, problem: bad ? `"${bad}" must be a path inside the project, with no .. or wildcards.` : null }
+}
 
 /** Whatever the daemon sent, as a complete object. */
 export function normalizeOverrides(raw: unknown): ProjectOverrides {
@@ -21,7 +29,7 @@ export function normalizeOverrides(raw: unknown): ProjectOverrides {
     ? Object.fromEntries(Object.entries(item.models).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && !!entry[1]))
     : {}
   const mode = item.approvalMode
-  return { models, approvalMode: mode === 'ask' || mode === 'auto' || mode === 'accept_edits' || mode === 'bypass' ? mode : null, setupScript: typeof item.setupScript === 'string' && item.setupScript.trim() ? item.setupScript : null }
+  return { models, approvalMode: mode === 'ask' || mode === 'auto' || mode === 'accept_edits' || mode === 'bypass' ? mode : null, setupScript: typeof item.setupScript === 'string' && item.setupScript.trim() ? item.setupScript : null, copyFiles: Array.isArray(item.copyFiles) ? item.copyFiles.filter((path): path is string => typeof path === 'string' && !!path) : [], initSubmodules: item.initSubmodules === true }
 }
 
 const MODE_OPTIONS = [
@@ -51,16 +59,19 @@ export function ProjectSettingsDialog({ project, runtimes, onClose, onSaved }: {
   const [models, setModels] = useState(saved.models)
   const [mode, setMode] = useState<string>(saved.approvalMode ?? '')
   const [script, setScript] = useState(saved.setupScript ?? '')
+  const [copyText, setCopyText] = useState(saved.copyFiles.join('\n'))
+  const [submodules, setSubmodules] = useState(saved.initSubmodules)
+  const copy = parseCopyFiles(copyText)
   const [accepted, setAccepted] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   // One row per kind of coding agent, because model ids belong to a provider.
   const providers = runtimes.filter((runtime, index) => !!runtime.provider && runtimes.findIndex((other) => other.provider === runtime.provider) === index)
   const newlyFullAccess = mode === 'bypass' && saved.approvalMode !== 'bypass'
-  const ready = !busy && (!newlyFullAccess || accepted)
+  const ready = !busy && (!newlyFullAccess || accepted) && !copy.problem
   const save = async () => {
     if (!ready) return
     setBusy(true); setProblem(null)
-    const overrides: ProjectOverrides = { models: Object.fromEntries(Object.entries(models).filter(([, id]) => !!id)), approvalMode: (mode || null) as ApprovalMode | null, setupScript: script.trim() ? script : null }
+    const overrides: ProjectOverrides = { models: Object.fromEntries(Object.entries(models).filter(([, id]) => !!id)), approvalMode: (mode || null) as ApprovalMode | null, setupScript: script.trim() ? script : null, copyFiles: copy.paths, initSubmodules: submodules }
     try {
       const result = await rpc<{ project?: Project }>('project.update', { projectId: project.id, overrides, ...(mode === 'bypass' ? { confirm: true } : {}) })
       onSaved(result?.project ?? { ...project, overrides })
@@ -86,6 +97,12 @@ export function ProjectSettingsDialog({ project, runtimes, onClose, onSaved }: {
         <textarea className="project-setup-script" rows={3} value={script} maxLength={MAX_SETUP_SCRIPT_CHARS} spellCheck={false} placeholder="npm install" onChange={(event) => setScript(event.target.value)} />
         <small className="project-settings-note">Runs with cmd on this computer each time a conversation gets its own copy of this repository, before its first turn. If it fails, the bot is told and carries on.</small>
       </label>
+      <label className="new-project-field"><span>Files to copy into each new copy</span>
+        <textarea className="project-setup-script" rows={2} value={copyText} spellCheck={false} placeholder=".env.local" aria-invalid={!!copy.problem} onChange={(event) => setCopyText(event.target.value)} />
+        <small className="project-settings-note">One path per line, inside the project. Git doesn't copy ignored files like these. An existing file is never overwritten.</small>
+        {copy.problem && <small className="new-project-error" role="alert">{copy.problem}</small>}
+      </label>
+      <label className="new-project-check"><input type="checkbox" checked={submodules} onChange={(event) => setSubmodules(event.target.checked)} /><span>Set up git submodules in each new copy</span></label>
       {problem && <p className="new-project-error" role="alert">{problem}</p>}
       <div className="blob-dialog-actions">
         <button type="button" className="secondary-button" disabled={busy} onClick={close}>Cancel</button>

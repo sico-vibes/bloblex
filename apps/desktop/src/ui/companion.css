@@ -471,3 +471,8 @@ button.compact-copy:active { transform: none; }
 
 /* Wave 14: a message sent through the Bitbots MCP names its sender. */
 .companion-via { display: block; margin-bottom: 2px; opacity: .7; font: 500 var(--fs-2xs) var(--c-font); }
+
+/* Phase 3: "Changes ready" opens the review screen in the full app. */
+.chip.companion-changes-ready { padding: 2px 4px 2px 3px; }
+.chip.companion-changes-ready .companion-changes-open { width: auto; height: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px; color: inherit; border-radius: var(--radius-pill); font-size: inherit; cursor: pointer; }
+.chip.companion-changes-ready .companion-changes-open:hover { background: var(--surface-hover); }

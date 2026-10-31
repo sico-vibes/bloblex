@@ -1,0 +1,46 @@
+/* Phase 3: the review screen. */
+.changes-view { width: min(1240px, calc(100% - 32px)); height: min(860px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: hidden; border-radius: var(--radius-lg); background: var(--surface-overlay); box-shadow: var(--shadow-pop); }
+.changes-head { display: flex; align-items: center; gap: 10px; }
+.changes-title { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.changes-title h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+.changes-title small { color: var(--text-3); font-size: var(--fs-2xs); }
+.changes-head .secondary-button { display: inline-flex; align-items: center; gap: 5px; }
+.changes-error { margin: 0; padding: 7px 10px; color: var(--danger-ink); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--status-danger) 10%, transparent); font-size: var(--fs-xs); }
+.changes-view > .diff-empty { display: flex; align-items: center; gap: 8px; }
+
+.changes-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 12px; }
+.changes-files { min-height: 0; display: flex; flex-direction: column; gap: 4px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.changes-stage-all { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text-3); border-bottom: 1px solid var(--line); font-size: var(--fs-2xs); cursor: pointer; }
+.changes-files ul { flex: 1; min-height: 0; margin: 0; padding: 4px; overflow-y: auto; list-style: none; }
+.changes-files li { display: flex; align-items: center; gap: 2px; padding-left: 6px; border-radius: var(--radius-sm); }
+.changes-files li:hover { background: var(--surface-hover); }
+.changes-files li.selected { background: var(--surface-selected, var(--surface-hover)); }
+.changes-stage { flex: none; width: 14px; height: 14px; margin: 0; accent-color: var(--accent, currentColor); cursor: pointer; }
+.changes-file { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 6px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; text-align: left; cursor: pointer; }
+.changes-file:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.changes-letter { flex: none; width: 14px; color: var(--text-3); font: 600 var(--fs-2xs) var(--font-mono); text-align: center; }
+.changes-letter[data-change="added"] { color: var(--status-success); }
+.changes-letter[data-change="deleted"] { color: var(--status-danger); }
+.changes-name { flex: 1; min-width: 0; display: grid; }
+.changes-name strong, .changes-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-name strong { color: var(--text-1); font-size: var(--fs-xs); font-weight: 500; }
+.changes-name small { color: var(--text-3); font-size: var(--fs-2xs); }
+.changes-comment-count { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-3); font-size: var(--fs-2xs); }
+
+.changes-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.changes-file-bar { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--fs-xs); }
+.changes-file-bar code { min-width: 0; overflow: hidden; color: var(--text-2); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.changes-file-bar em, .changes-file-bar i { flex: none; font: var(--fs-2xs) var(--font-mono); font-style: normal; }
+.changes-spacer { flex: 1; }
+.changes-file-bar .ghost-button { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.changes-confirm { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.changes-confirm .danger { color: var(--danger-ink); }
+.changes-diff { flex: 1; min-height: 0; margin-top: 0; }
+.changes-diff > .diff-empty { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.changes-note { margin: 0; padding: 6px 12px; color: var(--text-3); border-bottom: 1px solid var(--line); font-size: var(--fs-2xs); }
+.changes-comments-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); font-size: var(--fs-xs); }
+.changes-comments-bar > span { flex: 1; color: var(--text-2); }
+
+@media (max-width: 760px) {
+  .changes-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 30%) minmax(0, 1fr); }
+}

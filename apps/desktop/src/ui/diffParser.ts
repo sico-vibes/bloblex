@@ -1,6 +1,34 @@
 export type DiffLine = { kind: 'context' | 'added' | 'removed' | 'meta' | 'hunk'; text: string; oldNumber: number | null; newNumber: number | null }
 export type ParsedDiff = { lines: DiffLine[]; additions: number; deletions: number; binary: boolean; empty: boolean }
 
+export type SideRow = { kind: 'hunk' | 'meta'; text: string } | { kind: 'pair'; left: DiffLine | null; right: DiffLine | null }
+
+/** Rows for the side-by-side view: a removal and the addition that follows it share a row, in order. */
+export function sideBySideRows(lines: readonly DiffLine[]): SideRow[] {
+  const rows: SideRow[] = []
+  let removed: DiffLine[] = []
+  let added: DiffLine[] = []
+  const flush = () => {
+    for (let index = 0; index < Math.max(removed.length, added.length); index += 1) rows.push({ kind: 'pair', left: removed[index] ?? null, right: added[index] ?? null })
+    removed = []
+    added = []
+  }
+  for (const line of lines) {
+    if (line.kind === 'removed') {
+      // A removal after an addition starts a new change.
+      if (added.length) flush()
+      removed.push(line)
+    } else if (line.kind === 'added') added.push(line)
+    else {
+      flush()
+      if (line.kind === 'context') rows.push({ kind: 'pair', left: line, right: line })
+      else rows.push({ kind: line.kind, text: line.text })
+    }
+  }
+  flush()
+  return rows
+}
+
 export function parseUnifiedDiff(content: string): ParsedDiff {
   const lines: DiffLine[] = []
   let oldNumber: number | null = null

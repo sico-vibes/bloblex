@@ -373,6 +373,15 @@ export const previewMode = true
  * Visual fixtures only; no Git runs and nothing is ever written.
  */
 const repositoryDiff = (name: string, added: string[], removed: string[]) => [`diff --git a/${name} b/${name}`, `--- a/${name}`, `+++ b/${name}`, `@@ -1,${removed.length + 2} +1,${added.length + 2} @@`, ' import { render } from "./render"', ...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`), ' export {}'].join('\n')
+const fixtureStaged = new Map<string, string>()
+const withStaged = <T extends { files: Array<Record<string, unknown>> }>(answer: T): T => ({ ...answer, files: answer.files.map((file) => ({ ...file, staged: fixtureStaged.get(String(file.repositoryPath)) ?? 'none' })) })
+let fixtureAbandoned = [
+  { id: 'wt-1', repo: 'C:/work/site', path: 'C:/work/site-bitbots/fix-the-header', branch: 'bitbots/fix-the-header', reason: 'conversation_deleted', dirtyFiles: 0, commitsAhead: 0, lastActivityAt: '2026-10-20T10:00:00Z' },
+  { id: 'wt-2', repo: 'C:/work/site', path: 'C:/work/site-bitbots/try-a-new-rail', branch: 'bitbots/try-a-new-rail', reason: 'conversation_deleted', dirtyFiles: 2, commitsAhead: 3, lastActivityAt: '2026-10-22T10:00:00Z' },
+  { id: 'wt-3', repo: 'C:/work/korus', path: 'C:/work/korus-bitbots/invoice-tests', branch: 'bitbots/invoice-tests', reason: 'conversation_archived', dirtyFiles: 0, commitsAhead: 1, lastActivityAt: '2026-10-25T10:00:00Z' },
+]
+let fixtureClone: { id: string; url: string; target: string; state: string; detail: string | null; project: null } | null = null
+
 async function fixtureRepository(sessionId: string) {
   const mode = flags().get('repo') ?? 'changes'
   if (mode === 'slow') await new Promise((resolve) => window.setTimeout(resolve, 2000))
@@ -447,7 +456,66 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     fixtureSettings[String(params.key)] = params.value
     return { saved: true } as T
   }
-  if (method === 'session.repository') return fixtureRepository(String(params.sessionId ?? '')) as T
+  if (method === 'session.repository') return withStaged(await fixtureRepository(String(params.sessionId ?? ''))) as T
+  if (method === 'session.git.diff') {
+    const file = (await fixtureRepository(String(params.sessionId ?? ''))).files.find((item) => item.repositoryPath === params.repositoryPath)
+    if (!file) return { repositoryPath: params.repositoryPath, previousPath: null, change: 'modified', diff: null, truncated: false, binary: false, addedLines: null, removedLines: null, staged: 'none' } as T
+    const long = ['import { render } from "./render"', '', ...Array.from({ length: 6 }, (_, index) => ` const line${index} = ${index}`)]
+    const diff = file.diff ? `${file.diff}\n@@ -40,6 +42,7 @@${'\n'}${long.map((line) => line.startsWith(' ') ? line : ` ${line}`).join('\n')}\n-const oldest = load("the old value that was on a very long line which keeps going so wrapping can be seen in the side by side layout")\n+const newest = load("the new value")\n+const extra = true` : null
+    return { ...file, previousPath: null, diff, staged: fixtureStaged.get(String(params.repositoryPath)) ?? 'none' } as T
+  }
+  if (method === 'session.git.stage') {
+    for (const path of params.paths as string[]) fixtureStaged.set(path, params.staged === true ? 'all' : 'none')
+    return { files: withStaged(await fixtureRepository(String(params.sessionId ?? ''))).files } as T
+  }
+  if (method === 'session.git.revert') return { undoId: 'preview-undo', name: String(params.repositoryPath), files: withStaged(await fixtureRepository(String(params.sessionId ?? ''))).files } as T
+  if (method === 'session.git.revertUndo') return { files: withStaged(await fixtureRepository(String(params.sessionId ?? ''))).files } as T
+  if (method === 'session.pr.draft') {
+    const reason = flags().get('pr') === 'nogh' ? "The GitHub CLI isn't signed in." : null
+    return { ready: !reason, reason, gh: { available: !reason, login: reason ? null : 'preview-user' }, repoRoot: 'C:/Users/me/work/site', branch: 'feature/rail', base: 'main', isWorktree: true, remote: 'origin', commitsAhead: 2, uncommitted: 6, title: 'Tidy the rail', body: '## Changes\n- Tidy the rail\n- Fix the header\n\n## Files\n6 files, +10,407 \u2212105\n\nMade with Bitbots.', existingUrl: flags().get('pr') === 'open' ? 'https://github.com/preview/site/pull/12' : null } as T
+  }
+  if (method === 'session.pr.create') {
+    await new Promise((resolve) => window.setTimeout(resolve, 700))
+    return { steps: [{ id: 'commit', status: params.commitMessage ? 'done' : 'skipped', detail: null }, { id: 'push', status: 'done', detail: null }, { id: 'pr', status: 'done', detail: null }], url: 'https://github.com/preview/site/pull/13' } as T
+  }
+  if (method === 'worktree.abandoned') return { items: fixtureAbandoned } as T
+  if (method === 'worktree.removeAbandoned') {
+    fixtureAbandoned = fixtureAbandoned.filter((item) => item.id !== params.id)
+    return { removed: true, branchDeleted: params.deleteBranch === true, detail: null } as T
+  }
+  if (method === 'project.clone') {
+    fixtureClone = { id: 'preview-clone', url: String(params.url), target: `${params.parent}\\${params.name ?? String(params.url).split('/').pop()?.replace(/\.git$/, '')}`, state: 'running', detail: null, project: null }
+    window.setTimeout(() => { if (fixtureClone?.state === 'running') fixtureClone = { ...fixtureClone, state: flags().get('clone') === 'fail' ? 'failed' : 'done', detail: flags().get('clone') === 'fail' ? 'Repository not found.' : null } }, 2500)
+    return { job: fixtureClone } as T
+  }
+  if (method === 'project.clone.list') return { jobs: fixtureClone ? [fixtureClone] : [] } as T
+  if (method === 'project.clone.cancel') { if (fixtureClone) fixtureClone = { ...fixtureClone, state: 'cancelled' }; return { ok: true } as T }
+  if (method === 'project.discover') return { folder: params.folder, truncated: false, repos: [
+    { path: `${params.folder}\\korus`, name: 'korus', branch: 'main', alreadyAdded: true },
+    { path: `${params.folder}\\site`, name: 'site', branch: 'feature/rail', alreadyAdded: false },
+    { path: `${params.folder}\\tools\\scripts`, name: 'scripts', branch: 'main', alreadyAdded: false },
+  ] } as T
+  if (method === 'project.files.search') {
+    const query = String(params.query ?? '').toLowerCase()
+    const files = ['src/App.tsx', 'src/ui/ChangesView.tsx', 'src/ui/DiffBody.tsx', 'docs/notes.md', 'README.md', 'package.json']
+    const found = files.flatMap((path) => {
+      let at = 0
+      const matches: number[] = []
+      for (let index = 0; index < path.length && at < query.length; index += 1) if (path[index]!.toLowerCase() === query[at]) { matches.push(index); at += 1 }
+      return at === query.length ? [{ path, name: path.split('/').pop() ?? path, score: 100 - path.length, matches }] : []
+    })
+    return { files: found.slice(0, Number(params.limit ?? 20)), truncated: false, source: 'git' } as T
+  }
+  if (method === 'project.content.search') {
+    if (params.regex === true && /[[(]$/.test(String(params.query))) return { results: [], truncated: false, source: 'git', reason: "That isn't a valid search pattern." } as T
+    const query = String(params.query ?? '')
+    if (query === 'nothing') return { results: [], truncated: false, source: 'git', reason: null } as T
+    return { truncated: false, source: 'git', reason: null, results: [
+      { path: 'src/App.tsx', line: 12, preview: `const title = "${query}"` },
+      { path: 'src/App.tsx', line: 88, preview: `render(${query})` },
+      { path: 'src/ui/DiffBody.tsx', line: 41, preview: `  // Uses ${query} when the mode changes` },
+    ] } as T
+  }
   if (method === 'session.list') return { sessions: sessions.filter((session) => params.includeArchived === true || !session.archived).map((session) => ({ ...session })) } as T
   if (method === 'session.rename') {
     const session = sessions.find((item) => item.id === params.sessionId)

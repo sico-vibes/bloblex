@@ -237,6 +237,9 @@ function configureRepository(reply: () => unknown) {
   })
 }
 
+/** The rail also has a Review button beside it. */
+const createPrButton = (host: Element) => [...host.querySelectorAll<HTMLButtonElement>('.rail-pr')].find((item) => item.textContent === 'Create PR') ?? null
+
 describe('FIX45 Create PR from the rail', () => {
   beforeEach(() => memory.set('bloblex.inspector.open', '1'))
 
@@ -244,8 +247,7 @@ describe('FIX45 Create PR from the rail', () => {
     configureRepository(() => repository())
     const view = startApp()
     await view.settle()
-    const button = view.host.querySelector<HTMLButtonElement>('.rail-pr')
-    expect(button?.textContent).toBe('Create PR')
+    const button = createPrButton(view.host)
     expect(button?.disabled).toBe(false)
     expect(view.host.querySelector('.context-pane')?.textContent).toContain('a.ts')
     await click(button)
@@ -277,7 +279,7 @@ describe('FIX45 Create PR from the rail', () => {
     })
     const view = startApp()
     await view.settle()
-    await click(view.host.querySelector('.rail-pr'))
+    await click(createPrButton(view.host))
     expect(view.host.querySelector('.pr-dialog')?.textContent).toContain('waits until the current turn ends')
     await click(view.host.querySelector('.pr-dialog .primary-button'))
     await view.settle()

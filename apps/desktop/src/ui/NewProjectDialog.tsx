@@ -7,7 +7,9 @@ import { CircleAlert, CircleCheck, CircleMinus, FolderOpen, LoaderCircle } from 
 import type { Project } from '../types'
 import { openProjectFolder, rpc } from '../tauri'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
+import { CloneProject, DiscoverProjects } from './ProjectSources'
 import './newProject.css'
+import './diffBody.css'
 
 export type ScaffoldStatus = { git: boolean; gh: { available: boolean; login: string | null } }
 export type ScaffoldStep = { id: string; status: 'done' | 'failed' | 'skipped'; detail: string | null }
@@ -43,8 +45,10 @@ const messageOf = (reason: unknown, fallback: string) => reason instanceof Error
 export function NewProjectDialog({ onCancel, onDone }: { onCancel: () => void; onDone: (project: Project | null) => void }) {
   const entered = useDialogEntered()
   const [busy, setBusy] = useState(false)
+  const [source, setSource] = useState<'new' | 'clone' | 'discover'>('new')
+  const [cloning, setCloning] = useState(false)
   const [result, setResult] = useState<ScaffoldResult | null>(null)
-  const { ref, close } = useDialogAccessibility(() => { if (result) onDone(result.project); else onCancel() }, () => !busy)
+  const { ref, close } = useDialogAccessibility(() => { if (result) onDone(result.project); else onCancel() }, () => !busy && !cloning)
   const [status, setStatus] = useState<ScaffoldStatus | null>(null)
   const [name, setName] = useState('')
   const [parent, setParent] = useState('')
@@ -74,8 +78,13 @@ export function NewProjectDialog({ onCancel, onDone }: { onCancel: () => void; o
   }
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className="blob-dialog new-project" role="dialog" aria-modal="true" aria-labelledby="new-project-title" tabIndex={-1}>
-      <h2 id="new-project-title">{result ? (result.steps.some((step) => step.status === 'failed') ? 'Not everything worked' : 'Project created') : 'New project'}</h2>
-      {result
+      <h2 id="new-project-title">{result ? (result.steps.some((step) => step.status === 'failed') ? 'Not everything worked' : 'Project created') : source === 'clone' ? 'Clone a repository' : source === 'discover' ? 'Find repositories' : 'New project'}</h2>
+      {!result && <div className="diff-mode new-project-source" role="group" aria-label="How to add the project">
+        {([['new', 'Create'], ['clone', 'Clone'], ['discover', 'Find']] as const).map(([id, label]) => <button key={id} type="button" aria-pressed={source === id} disabled={busy || cloning} onClick={() => setSource(id)}>{label}</button>)}
+      </div>}
+      {!result && source === 'clone' && <CloneProject onCancel={close} onDone={onDone} onBusy={setCloning} />}
+      {!result && source === 'discover' && <DiscoverProjects onCancel={close} onDone={onDone} />}
+      {source !== 'new' && !result ? null : result
         ? <>
           <ul className="scaffold-steps">{result.steps.map((step) => <li key={step.id} data-status={step.status}>
             {step.status === 'done' ? <CircleCheck size={15} aria-hidden="true" /> : step.status === 'failed' ? <CircleAlert size={15} aria-hidden="true" /> : <CircleMinus size={15} aria-hidden="true" />}

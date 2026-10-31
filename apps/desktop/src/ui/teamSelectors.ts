@@ -191,7 +191,7 @@ export function mentionedAgents(text: string, agents: readonly Agent[]): Agent[]
 /** The `@query` being typed at the caret, if any. */
 export function mentionQuery(text: string, caret: number): { start: number; query: string } | null {
   const before = text.slice(0, caret)
-  const match = /(^|\s)@([\p{L}\p{N}_ .-]{0,40})$/u.exec(before)
+  const match = /(^|\s)@([\p{L}\p{N}_ .\-/\\]{0,80})$/u.exec(before)
   if (!match) return null
   const query = match[2]
   if (/\s{2,}|\s$/.test(query) && query.trim().split(/\s+/).length > 2) return null

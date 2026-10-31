@@ -66,6 +66,7 @@ describe('team selectors', () => {
 
   it('finds the @mention being typed and the blobs a prompt mentions', () => {
     expect(mentionQuery('Ask @Po', 7)).toEqual({ start: 4, query: 'Po' })
+    expect(mentionQuery('See @src/ui/App', 15)).toEqual({ start: 4, query: 'src/ui/App' })
     expect(mentionQuery('@', 1)).toEqual({ start: 0, query: '' })
     expect(mentionQuery('mail@example', 12)).toBeNull()
     expect(mentionQuery('Ask Po', 6)).toBeNull()

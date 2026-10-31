@@ -146,8 +146,8 @@ describe('project settings', () => {
   const runtimes = [{ id: 'r1', provider: 'claude', status: 'online' }, { id: 'r2', provider: 'claude', status: 'online' }] as Runtime[]
 
   it('reads only a well-formed object', () => {
-    expect(normalizeOverrides(null)).toEqual({ models: {}, approvalMode: null, setupScript: null })
-    expect(normalizeOverrides({ models: { claude: 'x', codex: 5 }, approvalMode: 'nope', setupScript: '   ' })).toEqual({ models: { claude: 'x' }, approvalMode: null, setupScript: null })
+    expect(normalizeOverrides(null)).toEqual({ models: {}, approvalMode: null, setupScript: null, copyFiles: [], initSubmodules: false })
+    expect(normalizeOverrides({ models: { claude: 'x', codex: 5 }, approvalMode: 'nope', setupScript: '   ' })).toEqual({ models: { claude: 'x' }, approvalMode: null, setupScript: null, copyFiles: [], initSubmodules: false })
   })
 
   it('saves the whole object, and needs an explicit yes before Full access', async () => {
@@ -160,7 +160,7 @@ describe('project settings', () => {
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(script, 'npm install'); script.dispatchEvent(new Event('input', { bubbles: true })) })
     const save = () => [...view.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Save')!
     await act(async () => { save().click() }); await settle()
-    expect(h.rpc).toHaveBeenCalledWith('project.update', { projectId: 'p1', overrides: { models: {}, approvalMode: null, setupScript: 'npm install' } })
+    expect(h.rpc).toHaveBeenCalledWith('project.update', { projectId: 'p1', overrides: { models: {}, approvalMode: null, setupScript: 'npm install', copyFiles: [], initSubmodules: false } })
     expect(onSaved).toHaveBeenCalled()
   })
 
@@ -170,7 +170,7 @@ describe('project settings', () => {
     // Already Full access: reopening doesn't ask again.
     expect(view.querySelector('.project-full-access')).toBeNull()
     await act(async () => { [...view.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Save')!.click() }); await settle()
-    expect(h.rpc).toHaveBeenCalledWith('project.update', { projectId: 'p1', overrides: { models: {}, approvalMode: 'bypass', setupScript: null }, confirm: true })
+    expect(h.rpc).toHaveBeenCalledWith('project.update', { projectId: 'p1', overrides: { models: {}, approvalMode: 'bypass', setupScript: null, copyFiles: [], initSubmodules: false }, confirm: true })
   })
 
   it('shows a refusal and stays open', async () => {

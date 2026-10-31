@@ -134,7 +134,7 @@ export function ChangesView({ sessionId, initialPath, botName, onClose, onSendCo
         <button type="button" className="icon-button" data-dialog-initial-focus="" aria-label="Close changes" onClick={close}><X size={17} aria-hidden="true" /></button>
       </header>
       {failure && <p className="changes-error" role="alert">{failure}</p>}
-      {repository && !repository.gitRepo
+      {repository && (!repository.gitRepo || repository.error)
         ? <p className="diff-empty">{repository.error ?? 'This project is not a git repository.'}</p>
         : repository && files.length === 0
           ? <p className="diff-empty"><Check size={15} aria-hidden="true" /> No changes against the last commit.</p>

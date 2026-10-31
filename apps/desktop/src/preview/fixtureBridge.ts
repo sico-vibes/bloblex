@@ -14,6 +14,7 @@ import { themeStyle } from '../blob/bitbots'
 import { REMOTE_METHODS } from '../remote/remoteContract'
 import type { RemoteMethod, RemoteStatus, RemoteTailscaleState } from '../remote/remoteContract'
 import { createRemoteSimulator } from './remoteFixture'
+import { SCENE_SESSION_ID, sceneFor } from './fixtureScenes'
 import type { RemoteSeed } from './remoteFixture'
 
 type Unlisten = () => void
@@ -124,6 +125,7 @@ const fixturePlaybookVersions: Array<Record<string, unknown>> = [
   { version: 1, text: fixturePlaybookSeed, author: 'default', createdAt: '2026-10-16T08:00:00Z' },
 ]
 const composerPreviewStorageKey = 'bloblex.preview.composer-session.v1'
+const PREVIEW_HINTS = ['companion.drag', 'approval.first', 'plan.first', 'context.high', 'team.first']
 
 let agents: Agent[] = [
   { id: 'agent-claude', name: 'Claude', look: { shape: 'cloud', seed: 'claude' }, description: 'Default agent for Claude.', instructions: '', color: '#f38c6f', runtimeId: 'runtime-claude', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: minutesAgo(4000), updatedAt: minutesAgo(4000) },
@@ -263,6 +265,24 @@ sessions.push({
     { id: 'side2-a1', sequence: 2, role: 'assistant', content: 'GPT-5.5 at High effort.', createdAt: minutesAgo(95) },
   ],
 })
+// `?scene=<id>`: the inspector's conversations, one per state the App can show.
+const fixtureScene = sceneFor(flags().get('scene'))
+let sceneQueueSeeded = false
+if (fixtureScene) {
+  setPreviewSelection('agent-codex')
+  sessions.push({ id: SCENE_SESSION_ID, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: fixtureScene.title ?? 'Preview', projectPath: 'C:/work/korus', state: fixtureScene.state ?? 'idle', model: 'gpt-6.1-sol', updatedAt: new Date().toISOString(), messages: fixtureScene.messages ?? [], tools: fixtureScene.tools ?? [], files: fixtureScene.files ?? [], ...fixtureScene.session } as Session)
+  for (const extra of fixtureScene.extraSessions ?? []) sessions.push(extra as unknown as Session)
+}
+// `?clean`: no first-run hints, tour or What's New over the screen being inspected.
+if (flags().has('clean')) {
+  try {
+    localStorage.setItem('bitbots.whatsNew.seen', '9.9.9')
+    localStorage.setItem('bitbots.tour', JSON.stringify({ version: 1, done: true, step: 0 }))
+    localStorage.setItem('bloblex.firstRun.complete', '1')
+    localStorage.removeItem('bitbots.drafts.v1')
+    localStorage.setItem('bloblex.inspector.open', '0')
+  } catch { /* Preview storage is optional. */ }
+}
 const teamQuestion: PermissionRequest = { id: 'perm-question', sessionId: teamMainId, runtimeId: 'runtime-codex', status: 'pending', kind: 'question', title: 'Codex has a question', choices: ['answer', 'dismiss'], questions: [{ id: 'q-direction', header: 'Direction', question: 'Which direction should the effort picker follow?', options: [{ label: 'PostHog fork', description: 'Closest behaviour, MIT licensed' }, { label: '21st.dev model select', description: 'One popover for effort, context and fast' }, { label: 'Build our own' }], multiSelect: false, allowOther: true }] }
 // FIX36 D2: a Manager proposal surfaces as a `kind: "proposal"` permission card.
 let fixtureProposalPending = true
@@ -315,6 +335,10 @@ function currentSnapshot(): Snapshot {
       ? []
       : search.has('approval')
       ? [{ id: 'perm-1', sessionId: 'session-codex', runtimeId: 'runtime-codex', status: 'pending', title: 'Run shell command', command: 'npm test -- invoice', choices: ['allow_once', 'allow_session', 'deny'] }]
+      : fixtureScene
+      ? (fixtureScene.permissions ?? []).map((permission) => ({ sessionId: SCENE_SESSION_ID, runtimeId: 'runtime-codex', status: 'pending', ...permission } as unknown as PermissionRequest))
+      // A pending approval pulls the window to its conversation, so a request for another conversation clears them.
+      : search.get('session') && search.get('session') !== teamMainId ? []
       : [...(fixtureProposalPending ? [teamProposal] : []), ...(sessions.some((session) => session.id === teamMainId && session.state === 'waiting_permission') ? [teamQuestion] : [])],
     projects: projects.map((project) => ({ ...project })),
     usageSummary: { inputTokens: 182_400, outputTokens: 24_900 },
@@ -482,6 +506,9 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (flags().get('font')) localStorage.setItem('bitbots.font', String(flags().get('font')))
     if (flags().get('monoFont')) localStorage.setItem('bitbots.monoFont', String(flags().get('monoFont')))
     if (flags().has('seen-hints')) fixtureSettings['hints.seen'] = ['companion.drag']
+    if (flags().has('clean')) { fixtureSettings['hints.seen'] = PREVIEW_HINTS; fixtureSettings['onboarding.tour'] = { version: 1, done: true, step: 0 } }
+    if (flags().has('hints-reset')) fixtureSettings['hints.seen'] = []
+    if (flags().has('tour-invite')) fixtureSettings['onboarding.tour'] = { version: 0, done: false, step: 0 }
     if (flags().has('tour')) fixtureSettings['onboarding.tour'] = { version: 1, done: false, step: 2 }
     if (flags().has('focus')) fixtureSettings['companion.focusMode'] = true
     if (flags().has('positions')) fixtureSettings['companion.positions'] = { [String(flags().get('positions') ?? 'display')]: { x: 120, y: 900 } }
@@ -519,6 +546,7 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
   if (method === 'automation.webhook.enable' || method === 'automation.webhook.rotate') return { url: 'https://example.ts.net/api/hook/' + String(params.id), secret: 'preview-secret-shown-once', webhook: { enabled: true, includeBody: false } } as T
   if (method === 'automation.webhook.update') return { webhook: { enabled: true, includeBody: params.includeBody === true } } as T
   if (method === 'automation.webhook.disable') return { webhook: { enabled: false, includeBody: false } } as T
+  if (method === 'delegation.list' && fixtureScene?.delegations && params.originSessionId === SCENE_SESSION_ID) return { delegations: fixtureScene.delegations } as T
   if (method === 'subbot.list') return { subbots: flags().get('subbots') && (params.sessionId === 'session-codex' || params.agentId === 'agent-codex') ? fixtureSubbots() : [] } as T
   if (method === 'account.list') return { accounts: fixtureAccounts } as T
   if (method === 'account.create') { const account = { id: `preview-account-${fixtureAccounts.length + 1}`, provider: String(params.provider), name: String(params.name), signedIn: false, label: null, plan: null, bots: 0 }; fixtureAccounts = [...fixtureAccounts, account]; return { account } as T }
@@ -1071,6 +1099,11 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     const publish = () => {
       items.items.forEach((entry, index) => { entry.position = index })
       notifyFixtureDaemon('queue.changed', { sessionId: session.id, items: items.items.map((entry) => ({ ...entry })), paused: items.paused })
+    }
+    if (session.id === SCENE_SESSION_ID && fixtureScene?.queue && !sceneQueueSeeded) {
+      sceneQueueSeeded = true
+      items.items = fixtureScene.queue.map((entry, position) => ({ status: 'queued', dueAt: null, error: null, ...entry, sessionId: session.id, position }))
+      items.paused = fixtureScene.queuePaused === true
     }
     if (method === 'session.queue.list') return { items: items.items.map((entry) => ({ ...entry })), paused: items.paused } as T
     if (method === 'session.queue.add') {

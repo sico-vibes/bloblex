@@ -1,0 +1,71 @@
+/* The inspector's own chrome. It stays quiet and neutral so the app in the frame is what you look at. */
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; margin: 0; }
+body { background: #111214; color: #e8e8ea; font: 13px/1.4 system-ui, "Segoe UI", sans-serif; }
+.ins-app { --ins-line: #2a2c30; --ins-panel: #17181b; --ins-text-2: #a4a7ae; --ins-text-3: #74777e; --ins-accent: #8fb4ff; display: grid; grid-template-columns: 272px minmax(0, 1fr); height: 100%; background: #111214; }
+.ins-app button, .ins-app select, .ins-app a, .ins-app input, .ins-app textarea { font: inherit; color: inherit; }
+.ins-app button:focus-visible, .ins-app a:focus-visible, .ins-app input:focus-visible, .ins-app textarea:focus-visible, .ins-app select:focus-visible { outline: 2px solid var(--ins-accent); outline-offset: 1px; }
+
+.ins-index { overflow-y: auto; border-right: 1px solid var(--ins-line); background: var(--ins-panel); padding-bottom: 24px; }
+.ins-index header { position: sticky; top: 0; z-index: 1; padding: 14px 12px 10px; background: var(--ins-panel); border-bottom: 1px solid var(--ins-line); }
+.ins-index h1 { margin: 0; font-size: 15px; font-weight: 600; }
+.ins-index header p { margin: 2px 0 8px; color: var(--ins-text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ins-index input { box-sizing: border-box; width: 100%; padding: 6px 9px; border: 1px solid var(--ins-line); border-radius: 7px; background: #0f1012; }
+.ins-index h2 { display: flex; justify-content: space-between; margin: 14px 12px 4px; color: var(--ins-text-3); font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.ins-index h2 span { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.ins-index ul { margin: 0; padding: 0 6px; list-style: none; }
+.ins-index li button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 7px; border: 0; border-radius: 6px; background: none; color: var(--ins-text-2); text-align: left; cursor: pointer; }
+.ins-index li button:hover { background: #1f2024; color: #fff; }
+.ins-index li button[aria-current="true"] { background: #262a33; color: #fff; }
+.ins-index li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-index li i { flex: none; width: 7px; height: 7px; border: 1px solid var(--ins-text-3); border-radius: 50%; }
+.ins-index li i.done { border-color: #6fd19a; background: #6fd19a; }
+.ins-index li em { flex: none; color: var(--ins-accent); font-size: 10px; font-style: normal; }
+.ins-index li b { flex: none; width: 15px; height: 15px; border-radius: 50%; background: #d9534f; color: #fff; font-size: 11px; line-height: 15px; text-align: center; }
+.ins-none { padding: 12px; color: var(--ins-text-3); }
+
+.ins-main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.ins-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 7px 12px; border-bottom: 1px solid var(--ins-line); background: var(--ins-panel); }
+.ins-choice { display: inline-flex; align-items: center; }
+.ins-choice span, .ins-size { margin-right: 6px; color: var(--ins-text-3); font-size: 12px; }
+.ins-choice button { padding: 3px 9px; border: 1px solid var(--ins-line); border-left-width: 0; background: none; color: var(--ins-text-2); cursor: pointer; }
+.ins-choice span + button { border-left-width: 1px; border-radius: 6px 0 0 6px; }
+.ins-choice button:last-child { border-radius: 0 6px 6px 0; }
+.ins-choice button[aria-pressed="true"] { background: #2d3240; color: #fff; }
+.ins-choice button:disabled { opacity: .45; cursor: default; }
+.ins-size select { margin-left: 6px; padding: 3px 6px; border: 1px solid var(--ins-line); border-radius: 6px; background: #0f1012; color: #e8e8ea; }
+.ins-spacer { flex: 1; }
+.ins-bar > button, .ins-bar > a, .ins-actions button { padding: 3px 10px; border: 1px solid var(--ins-line); border-radius: 6px; background: none; color: var(--ins-text-2); text-decoration: none; cursor: pointer; }
+.ins-bar > button:hover, .ins-bar > a:hover, .ins-actions button:hover { background: #1f2024; color: #fff; }
+
+.ins-stage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-height: 0; padding: 8px; background: #0b0c0e; }
+.ins-stage.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ins-frame-cell { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.ins-frame-label { padding: 0 2px 4px; color: var(--ins-text-3); font-size: 12px; }
+.ins-frame-host { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: auto; }
+.ins-frame-box { flex: none; overflow: hidden; border: 1px solid var(--ins-line); border-radius: 8px; background: #000; }
+.ins-frame-box iframe { display: block; border: 0; transform-origin: 0 0; background: transparent; }
+.ins-step-problem { margin: 0; color: #f0a8a5; font-size: 12px; }
+.ins-frame-host > .ins-step-problem { position: absolute; top: 6px; left: 6px; z-index: 1; padding: 4px 8px; border-radius: 6px; background: #2a1414; }
+.ins-check-frame { position: fixed; top: 0; left: -3000px; border: 0; visibility: hidden; }
+
+.ins-foot { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.6fr) auto; gap: 14px; padding: 8px 12px; border-top: 1px solid var(--ins-line); background: var(--ins-panel); }
+.ins-about { min-width: 0; }
+.ins-about small { display: block; color: var(--ins-text-3); font-size: 11px; }
+.ins-about strong { display: block; font-size: 13px; font-weight: 600; }
+.ins-about p { margin: 2px 0 0; color: var(--ins-text-2); font-size: 12px; }
+.ins-note { display: grid; gap: 3px; color: var(--ins-text-3); font-size: 11px; }
+.ins-note textarea { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--ins-line); border-radius: 7px; background: #0f1012; color: #e8e8ea; font-size: 13px; resize: vertical; }
+.ins-actions { display: flex; flex-direction: column; align-items: stretch; gap: 5px; width: 150px; }
+.ins-actions button[aria-pressed="true"] { border-color: #6fd19a; color: #6fd19a; }
+.ins-actions button.primary { border-color: transparent; background: #e8e8ea; color: #111; }
+.ins-actions button.primary:hover { background: #fff; color: #000; }
+.ins-actions span { color: var(--ins-text-2); font-size: 11px; }
+.ins-copy-fallback { height: 60px; }
+
+@media (max-width: 860px) {
+  .ins-app { grid-template-columns: 1fr; grid-template-rows: 34vh minmax(0, 1fr); }
+  .ins-index { border-right: 0; border-bottom: 1px solid var(--ins-line); }
+  .ins-foot { grid-template-columns: 1fr; }
+  .ins-actions { flex-direction: row; flex-wrap: wrap; width: auto; }
+}

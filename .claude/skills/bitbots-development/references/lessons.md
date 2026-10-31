@@ -2,6 +2,10 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-31 · Release · A gate that printed its result never exited
+
+The beta.46 release sat for 41 minutes on `npm run perf` after it printed "every budget holds". A `claude.exe --help` probe outlived the daemon the gate had killed, and it had inherited the gate's stdout pipe, so Node waited on the pipe. `bounded_output` puts its probes in a job, so why this one survived isn't known; it's on the polish list. The gate now calls `process.exit(0)`. **To avoid it:** when a release script goes quiet, read its log's timestamp, and look at what's still running under it. CI on GitHub uses a newer Rust than this machine (1.94), so a clippy failure there may not reproduce here.
+
 ## 2026-10-31 · Phase 8: sub-bots, what to remember
 
 - **`hidden` isn't enough to keep a sub-bot off a screen.** The sidebar, phone and companion respect `hidden`, but automations, memory, "Ask several bots", settings, search and the archived list didn't. Any new screen that offers bots as a choice must leave out `parentAgentId`.

@@ -114,6 +114,14 @@ describe('ChangesView', () => {
     expect(document.querySelector('.changes-diff .diff-line.added')?.textContent).toContain('new line')
   })
 
+  it("says git failed rather than claiming there's nothing to review", async () => {
+    answers({ 'session.repository': { ...repository(), files: [], error: 'git is not installed or could not be started.' } })
+    await render(view())
+    await flush()
+    expect(document.body.textContent).toContain('git is not installed')
+    expect(document.body.textContent).not.toContain('No changes against the last commit')
+  })
+
   it('opens on the file it was asked for', async () => {
     answers()
     await render(<ChangesView sessionId="s1" initialPath="src/b.ts" botName="Sona" onClose={vi.fn()} onSendComments={vi.fn()} />)

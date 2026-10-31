@@ -278,7 +278,7 @@ export function App() {
   const [schedulesPaused, setSchedulesPaused] = useState(false)
   const [keepAwakeEnabled, setKeepAwakeEnabled] = useState(false)
   const [schedulesError, setSchedulesError] = useState<string | null>(null)
-  const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test')
+  const [launchVisible, setLaunchVisible] = useState(() => inDesktop && !companion && import.meta.env.MODE !== 'test' && !(previewMode && new URLSearchParams(location.search).has('no-intro')))
   const [launchChecks, setLaunchChecks] = useState<LaunchCheck[]>([])
   const [launchServiceDown, setLaunchServiceDown] = useState(false)
   const [launchRunId, setLaunchRunId] = useState(0)
@@ -1403,9 +1403,9 @@ export function App() {
     if (!agent) return
     setSelectedAgentId(agent.id)
     setSelectedRuntimeId(agent.runtimeId)
-    const linkPreviewSession = previewMode && new URLSearchParams(location.search).get('preset') === 'message-links'
-      ? (snapshot.sessions ?? []).find((session) => session.id === 'session-codex')
-      : undefined
+    const previewParams = previewMode ? new URLSearchParams(location.search) : null
+    const previewSessionId = previewParams?.get('preset') === 'message-links' ? 'session-codex' : previewParams?.has('scene') ? 'session-scene' : previewParams?.get('session')
+    const linkPreviewSession = previewSessionId ? (snapshot.sessions ?? []).find((session) => session.id === previewSessionId) : undefined
     const storedSession = (snapshot.sessions ?? []).find((session) => session.id === activeSessionIdRef.current)
     const storedOk = !!storedSession && (storedSession.agentId === agent.id || ((storedSession.agentId == null) && storedSession.runtimeId === agent.runtimeId))
     const nextSession = linkPreviewSession ?? (storedOk ? storedSession : agentSessions(snapshot.sessions ?? [], agent.id)[0])
@@ -1569,6 +1569,51 @@ export function App() {
     if (!previewMode || companion || previewImportStarted.current || !snapshot || !new URLSearchParams(location.search).has('preview-import')) return
     previewImportStarted.current = true
     void importBlob()
+  })
+  // Browser preview only: /?open=<screen> goes straight to one screen, for the inspector.
+  const previewOpened = useRef(false)
+  useEffect(() => {
+    if (!previewMode || companion || previewOpened.current || !snapshot) return
+    const params = new URLSearchParams(location.search)
+    const [what, detail] = (params.get('open') ?? '').split(':')
+    if (!what) return
+    const agent = agents.find((item) => item.id === detail) ?? agents.find((item) => item.id === 'agent-codex') ?? agents[0]
+    const needsSession = ['changes', 'pull-request', 'handoff', 'delete-conversation'].includes(what)
+    const wanted = params.get('session')
+    if (needsSession && (!selectedSession || (wanted && selectedSession.id !== wanted))) return
+    previewOpened.current = true
+    const open: Record<string, () => void> = {
+      settings: () => { setSettingsInitialPage((detail || 'General') as SettingsPageId); setSettingsSheet(true) },
+      usage: () => setAnalyticsOpen(true),
+      schedules: () => setSchedulesOpen(true),
+      tasks: () => setTasksOpen(true),
+      compare: () => setCompareOpen(true),
+      archived: () => setArchivedBotsOpen(true),
+      'whats-new': () => setWhatsNewOpen(true),
+      shortcuts: () => setShortcutsOpen(true),
+      diagnostics: () => setDiagnosticsOpen(true),
+      search: () => setMessageSearchOpen(true),
+      'quick-switcher': () => setQuickSwitcherOpen(true),
+      'ask-several': () => setFanoutOpen(true),
+      'new-project': () => { void openNewProject() },
+      'project-search': () => setProjectSearchOpen(true),
+      'project-settings': () => setProjectSettings(projects[0] ?? null),
+      'delete-project': () => setProjectDelete(projects[0] ?? null),
+      terminal: () => setTerminalDockOpen(true),
+      side: () => { if (detail) void openSideConversation(detail) },
+      handoff: () => setHandoffOpen(true),
+      'more-menu': () => setMoreOpen(true),
+      'create-menu': () => setCreateMenuOpen(true),
+      inspector: () => setInspectorOpen(true),
+      'bot-create': () => openCreate(),
+      'bot-edit': () => { if (agent) openEdit(agent) },
+      'archive-bot': () => setArchiveTarget(agent ?? null),
+      'delete-bot': () => setPurgeTarget(agent ?? null),
+      'delete-conversation': () => setSessionDeleteTarget(selectedSession ?? null),
+      changes: () => setChangesFor({ sessionId: selectedSession!.id, path: null }),
+      'pull-request': () => { void rpc<RepositoryState>('session.repository', { sessionId: selectedSession!.id }).then((repository) => setPullRequestFor({ sessionId: selectedSession!.id, repository })) },
+    }
+    open[what]?.()
   })
   // Browser preview only: /?preview-settings opens Settings on the General page.
   useEffect(() => {
@@ -3247,7 +3292,11 @@ function storageFlag(key: string) {
 }
 
 function readStoredAgentId() {
-  if (previewMode && new URLSearchParams(location.search).get('preset') === 'message-links') return 'agent-codex'
+  if (previewMode) {
+    const params = new URLSearchParams(location.search)
+    if (params.get('preset') === 'message-links' || params.has('scene')) return 'agent-codex'
+    if (params.get('agent')) return params.get('agent')
+  }
   try { return localStorage.getItem('bloblex.selectedAgentId') } catch { return null }
 }
 

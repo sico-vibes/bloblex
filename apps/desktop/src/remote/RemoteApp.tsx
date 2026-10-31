@@ -16,7 +16,7 @@ import { BUCKET_LABEL, queuedLabel, useDelegations, type DelegationRecord } from
 import logo from '../assets/bloblex-128.png'
 import type { RemoteMethodId, RemoteTier } from './remoteContract'
 import type { RemoteConnectionStatus, RemoteMe } from './remoteTransport'
-import { codeFromHash, createPreviewDeviceApi, describeThisDevice, errorCode, type RemoteDeviceApi } from './deviceApi'
+import { codeFromHash, createPreviewDeviceApi, describeThisDevice, errorCode, previewDeviceOptionsFromUrl, type RemoteDeviceApi } from './deviceApi'
 import { applyUpdate, onUpdateReady } from './serviceWorker'
 import { PushCard } from './PushCard'
 
@@ -115,7 +115,7 @@ function sendProblem(reason: unknown, hostName: string): string {
  * answers who this device is, pairing and the connection state.
  */
 export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { device?: RemoteDeviceApi; pollMs?: number } = {}) {
-  const device = useMemo(() => deviceProp ?? createPreviewDeviceApi(), [deviceProp])
+  const device = useMemo(() => deviceProp ?? createPreviewDeviceApi(previewDeviceOptionsFromUrl()), [deviceProp])
   const { layout, override, changeOverride } = useRemoteLayout()
   const wide = layout === 'wide'
   const [rosterQuery, setRosterQuery] = useState('')

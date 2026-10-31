@@ -64,6 +64,15 @@ The app plays a launch intro and fades the shell in; screenshots taken in the fi
 
 **The preview is Vite's dev server, not the production bundle.** Anything that depends on bundling (dynamic imports, CSS chunking, asset URLs, preloads), on native APIs or on WebView2 must also be checked in `npm run build` output or in the installed app.
 
+## The inspector (31 October 2026)
+
+`npm run inspect` opens `/inspector.html`: every screen and state of the frontend, in the real App with fixture data, with look, theme, window size, side by side, and a note on each state that Copy all notes returns as one list.
+
+- **Add a state:** one row in `src/preview/inspector/scenarios.ts`, with `expect` text that proves it appeared. A conversation state is one entry in `src/preview/fixtureScenes.ts` (`?scene=<id>`). A screen is one line in App's `?open=` table. A state only a click reaches uses `steps`, not a new App hook.
+- **Check all** opens every state in a hidden frame, runs its steps and looks for its text. Run `window.__inspector.run()` and read `window.__inspector.checks` from a script. A state with no `expect` only proves the page didn't go blank.
+- **`&clean`** (added by the index for the main window) turns off first-run hints, the tour and What's New. Mark a scenario `raw` to keep them.
+- It runs on the Vite dev server, so it doesn't prove the production bundle or WebView2.
+
 ## Checking the installed app (read-only)
 
 To see what the real window has (attributes, loaded stylesheets, console errors), restart Bitbots with the WebView2 debugging port. Restarting stops the daemon and interrupts any bot that is working, so first get the owner's explicit permission at a moment when nothing they care about is running; never restart it as a side effect of another check. Then:

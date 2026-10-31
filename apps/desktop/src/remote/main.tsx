@@ -17,7 +17,7 @@ try {
   document.documentElement.dataset.theme = light ? 'light' : 'dark'
 } catch { /* default dark */ }
 
-registerRemoteServiceWorker()
+if (!previewMode) registerRemoteServiceWorker()
 
 export { applyUpdate, onUpdateReady, updateIsReady } from './serviceWorker'
 

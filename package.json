@@ -18,6 +18,7 @@
     "docs:build": "node scripts/docs-library.mjs build",
     "docs:check": "node scripts/docs-library.mjs check",
     "docs:serve": "node scripts/docs-library.mjs serve",
+    "inspect": "vite --config apps/desktop/vite.preview.config.ts apps/desktop --port 5174 --strictPort --host 127.0.0.1 --open /inspector.html",
     "perf": "node scripts/perf-gate.mjs",
     "perf:render": "node scripts/perf-render.mjs"
   },

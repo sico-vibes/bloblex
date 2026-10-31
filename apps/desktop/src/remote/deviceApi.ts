@@ -42,6 +42,19 @@ const PREVIEW_KEY = 'bitbots.remote.preview.device'
 /** The preview's password: any username works, this is the password that does not. */
 export const PREVIEW_PASSPHRASE = 'preview-passphrase'
 
+/** The inspector's phone states: `?phone=connect|paired`, `&tier=`, `&method=`. Only the preview reads these. */
+export function previewDeviceOptionsFromUrl(): { tier?: RemoteTier; method?: RemoteMethodId } {
+  const params = new URLSearchParams(typeof location === 'undefined' ? '' : location.search)
+  const phone = params.get('phone')
+  try {
+    if (phone === 'paired') localStorage.setItem(PREVIEW_KEY, JSON.stringify({ name: 'This phone' }))
+    if (phone === 'connect') localStorage.removeItem(PREVIEW_KEY)
+  } catch { /* Preview storage is optional. */ }
+  const tier = params.get('tier')
+  const method = params.get('method')
+  return { ...(tier === 'viewer' || tier === 'chat' || tier === 'operator' ? { tier } : {}), ...(method === 'native' || method === 'tailscale' ? { method } : {}) }
+}
+
 /**
  * The preview's stand-in host: any 8 characters pair, the computer "approves"
  * after a short wait, and the device is remembered in localStorage. Native

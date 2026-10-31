@@ -1,0 +1,5 @@
+# One Rust for this machine, CI and releases, so a gate that passes here passes there.
+# Move it on purpose, with clippy run on the new version, in its own commit.
+[toolchain]
+channel = "1.94.0"
+components = ["clippy", "rustfmt"]

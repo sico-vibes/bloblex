@@ -435,6 +435,23 @@ impl CodexAdapter {
                         }
                     }
                     match method {
+                        // An image finished: the tool row finishes with no bytes
+                        // in it, and the request (its file, or its failure) is
+                        // reported as its own event.
+                        "item/completed" if p["item"]["type"].as_str() == Some("imageGeneration") => {
+                            let item = &p["item"];
+                            let _ = r.events.enqueue(AgentEvent::ToolCompleted {
+                                tool_call_id: item["id"].as_str().unwrap_or("image").into(),
+                                raw: without_image_bytes(item),
+                            });
+                            if let Some(event) = image_generation_request(item) {
+                                let _ = r.events.enqueue(event);
+                            }
+                        }
+                        // The raw response item repeats the same image as base64.
+                        // It is never stored: the thread item above is the one
+                        // source, and this method deliberately maps to nothing.
+                        "rawResponseItem/completed" => {}
                         "thread/tokenUsage/updated"
                             if expected.as_deref() == p["turnId"].as_str() =>
                         {
@@ -950,6 +967,48 @@ fn codex_item_title(item: &Value) -> String {
     }
 }
 
+/// The item's own record with any image bytes and the saved file's path removed:
+/// Codex returns the image as base64 in `result`, and neither that nor where the
+/// file is may reach a tool row, a message, an event log or a log line.
+fn without_image_bytes(item: &Value) -> Value {
+    let mut clean = item.clone();
+    if let Some(object) = clean.as_object_mut() {
+        for key in ["result", "image", "data", "base64", "savedPath"] {
+            object.remove(key);
+        }
+    }
+    clean
+}
+
+/// A one-line, bounded reason from Codex's failure shape (a string or an object
+/// with a message), so nothing multi-line or unbounded is stored.
+fn image_failure_reason(failure: &Value) -> Option<String> {
+    let text = failure.as_str().or_else(|| failure["message"].as_str())?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.lines().next().unwrap_or("").chars().take(200).collect())
+}
+
+/// `imageGeneration/completed`: where the image is (`savedPath`), the image
+/// itself (`result`, base64) or why it failed.
+fn image_generation_request(item: &Value) -> Option<AgentEvent> {
+    let tool_call_id = item["id"].as_str().unwrap_or("image").to_owned();
+    let saved_path = item["savedPath"].as_str().filter(|path| !path.trim().is_empty()).map(str::to_owned);
+    let inline_base64 = item["result"].as_str().filter(|data| !data.trim().is_empty()).map(str::to_owned);
+    let failure = item.get("failure").and_then(image_failure_reason);
+    let failed = failure.is_some() || item["status"].as_str() == Some("failed");
+    let failure = if failed { failure.or_else(|| Some("The image request failed.".to_owned())) } else { None };
+    // A request with nothing to point at is not an image request.
+    (saved_path.is_some() || inline_base64.is_some() || failure.is_some()).then_some(AgentEvent::ImageRequested {
+        tool_call_id,
+        stem: None,
+        saved_path,
+        inline_base64,
+        failure,
+    })
+}
+
 fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
     match method {
         "thread/name/updated" => p["threadName"]
@@ -974,6 +1033,14 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                     .map(|text| AgentEvent::AssistantDelta { text: text.into() }),
                 // Reasoning items carry no user-facing content here; they are not activity.
                 "userMessage" | "plan" | "reasoning" => None,
+                // The image is still being made: the row shows it as pending, and
+                // a started item never carries the bytes into its raw record.
+                "imageGeneration" => Some(AgentEvent::ToolStarted {
+                    tool_call_id: i["id"].as_str().unwrap_or("image").into(),
+                    kind: "imageGeneration".into(),
+                    title: "Generating an image".into(),
+                    raw: without_image_bytes(i),
+                }),
                 _ => Some(AgentEvent::ToolStarted {
                     tool_call_id: i["id"].as_str().unwrap_or("item").into(),
                     kind: i["type"].as_str().unwrap_or("other").into(),
@@ -999,6 +1066,9 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                         path: path.into(),
                         raw: i.clone(),
                     }),
+                // Never the default arm: the base64 image would be stored in the
+                // tool row. The request names where the image is, or why it failed.
+                "imageGeneration" => image_generation_request(i),
                 _ => Some(AgentEvent::ToolCompleted {
                     tool_call_id: i["id"].as_str().unwrap_or("item").into(),
                     raw: i.clone(),
@@ -1853,6 +1923,42 @@ mod tests {
         assert_eq!(title(json!({"type":"dynamicToolCall","id":"d","namespace":"search","tool":"find_page"})), "search · find_page");
         assert_eq!(title(json!({"type":"webSearch","id":"w","query":"tauri drag"})), "Searched tauri drag");
         assert_eq!(title(json!({"type":"somethingNew","id":"x"})), "Something new");
+    }
+
+    /// The completed image item names its file, and the tool row it leaves
+    /// behind carries no base64 image.
+    #[test]
+    fn a_completed_image_item_reports_its_path_and_stores_no_bytes() {
+        let item = json!({"type":"imageGeneration","id":"img-1","status":"completed","savedPath":"D:/out/cat.png","result":"iVBORw0KGgo=","revisedPrompt":"a cat"});
+        match map_notification("item/completed", &json!({"item":item})) {
+            Some(AgentEvent::ImageRequested { tool_call_id, stem, saved_path, inline_base64, failure }) => {
+                assert_eq!(tool_call_id, "img-1");
+                assert!(stem.is_none() && failure.is_none());
+                assert_eq!(saved_path.as_deref(), Some("D:/out/cat.png"));
+                assert_eq!(inline_base64.as_deref(), Some("iVBORw0KGgo="));
+            }
+            other => panic!("an image request was expected, not {other:?}"),
+        }
+        let clean = without_image_bytes(&item);
+        assert!(clean.get("result").is_none(), "no bytes in the tool row");
+        assert!(clean.get("savedPath").is_none(), "no path in the tool row either");
+        assert_eq!(clean["revisedPrompt"], "a cat", "the rest of the item is kept");
+        // The raw response item repeats the image; it maps to nothing.
+        assert!(map_notification("rawResponseItem/completed", &json!({"item":{"type":"image_generation_call","result":"iVBORw0KGgo="}})).is_none());
+    }
+
+    /// A failed image reports a one-line reason, and an item with nothing to
+    /// point at is not an image request.
+    #[test]
+    fn a_failed_image_item_reports_the_reason() {
+        match map_notification("item/completed", &json!({"item":{"type":"imageGeneration","id":"img-2","status":"failed","failure":{"message":"quota exhausted\ntry later"}}})) {
+            Some(AgentEvent::ImageRequested { saved_path, inline_base64, failure, .. }) => {
+                assert_eq!(failure.as_deref(), Some("quota exhausted"));
+                assert!(saved_path.is_none() && inline_base64.is_none());
+            }
+            other => panic!("a failed image was expected, not {other:?}"),
+        }
+        assert!(map_notification("item/completed", &json!({"item":{"type":"imageGeneration","id":"img-3","status":"inProgress"}})).is_none());
     }
 
     #[test]

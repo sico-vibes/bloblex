@@ -1167,6 +1167,19 @@ pub enum AgentEvent {
         path: String,
         raw: Value,
     },
+    /// A provider asked for an image. Exactly one of `saved_path`,
+    /// `inline_base64` or `stem` describes where the result is expected, and
+    /// `failure` says the request already failed. `inline_base64` is the only
+    /// place image bytes ever appear in an event: the daemon must strip it
+    /// before anything stores, logs or forwards the event, so it never reaches
+    /// an event log, a tool row, a message or a transcript.
+    ImageRequested {
+        tool_call_id: String,
+        stem: Option<String>,
+        saved_path: Option<String>,
+        inline_base64: Option<String>,
+        failure: Option<String>,
+    },
     PermissionRequested {
         provider_request_id: String,
         title: String,

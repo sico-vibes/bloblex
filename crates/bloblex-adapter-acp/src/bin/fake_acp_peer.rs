@@ -70,6 +70,7 @@ struct Flags {
     v2_all_answer: bool,
     v2_stop_after: Option<u32>,
     pid_log: Option<PathBuf>,
+    image_stem: Option<String>,
 }
 
 impl Flags {
@@ -89,6 +90,7 @@ impl Flags {
         let mut v2_all_answer = false;
         let mut v2_stop_after = None;
         let mut pid_log = None;
+        let mut image_stem = None;
         let mut index = 0;
         while index < args.len() {
             let arg = &args[index];
@@ -109,9 +111,10 @@ impl Flags {
                 "--v2-all-answer" => v2_all_answer = true,
                 "--v2-stop-after" => v2_stop_after = next.and_then(|value| value.parse().ok()),
                 "--pid-log" => pid_log = next.map(PathBuf::from),
+                "--image-stem" => image_stem = next.map(str::to_owned),
                 _ => {}
             }
-            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--stale-effort" | "--fail-load" | "--usage" | "--v2-stop-after" | "--pid-log") {
+            index += if matches!(arg.as_str(), "--record" | "--models" | "--variant-models" | "--efforts" | "--effort-id" | "--reject-effort" | "--stale-effort" | "--fail-load" | "--usage" | "--v2-stop-after" | "--pid-log" | "--image-stem") {
                 2
             } else {
                 1
@@ -133,6 +136,7 @@ impl Flags {
             v2_all_answer,
             v2_stop_after,
             pid_log,
+            image_stem,
         }
     }
 }
@@ -447,6 +451,7 @@ fn next_effort(session: &mut Session, wanted: &str) -> String {
 }
 
 fn handle_prompt(stdout: &mut impl Write, flags: &Flags, session: &mut Session, id: &Value) {
+    prompt_delay();
     session.turns += 1;
     let turn = session.turns;
     if flags.permission {
@@ -473,12 +478,23 @@ fn handle_prompt(stdout: &mut impl Write, flags: &Flags, session: &mut Session, 
         notify(stdout, &chunk("fixture response"));
         return;
     }
+    if turn == 1 {
+        if let Some(stem) = flags.image_stem.as_deref() {
+            for line in image_tool_updates(stem) {
+                notify(stdout, &line);
+            }
+        }
+    }
     match flags.usage.as_str() {
         "partial" => notify(stdout, &usage_line(4000, 200000, "0.0015894")),
         "none" => {}
         "failed" => notify(stdout, &usage_line(0, 200000, "0")),
         "error" => {
             error(stdout, id, -32000, "provider failed");
+            return;
+        }
+        "busy" => {
+            error(stdout, id, -32000, "Session is busy");
             return;
         }
         _ => {
@@ -524,6 +540,46 @@ fn chunk(text: &str) -> String {
         "params": {"sessionId": "native-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}
     }))
     .unwrap_or_default()
+}
+
+/// Exactly the two updates OpenCode 2.2.2 sends for its image tool: the started
+/// update names the tool in `title` (no `name`, no path), and the finished one
+/// carries `{path, model, jobID}` in `rawOutput.metadata` and no tool name at
+/// all. Read from `opencode.exe` 2.2.2: `yt(...)` builds the first, `hn(...)`
+/// the second.
+fn image_tool_updates(stem: &str) -> Vec<String> {
+    let started = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "native-session",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool_img_1",
+                "status": "in_progress",
+                "kind": "other",
+                "title": "experimental_image_generate",
+                "locations": [],
+                "rawInput": {"prompt": "a cat", "path": null}
+            }
+        }
+    });
+    let finished = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "native-session",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tool_img_1",
+                "status": "completed",
+                "locations": [],
+                "content": [{"type": "content", "content": {"type": "text", "text": "Image job started."}}],
+                "rawOutput": {"metadata": {"path": stem, "model": "opencode-go/image-model", "jobID": "img_job_1"}}
+            }
+        }
+    });
+    vec![serde_json::to_string(&started).unwrap_or_default(), serde_json::to_string(&finished).unwrap_or_default()]
 }
 
 fn respond(stdout: &mut impl Write, id: &Value, result: Value) {
@@ -604,4 +660,12 @@ fn config_shape() -> Value {
         "prompt_present": !prompt.is_empty(),
         "prompt_sha256": if prompt.is_empty() { Value::Null } else { json!(sha256_hex(prompt.as_bytes())) },
     })
+}
+
+/// `--prompt-delay-ms N`: answer a prompt after N milliseconds, so a test can model a long turn.
+fn prompt_delay() {
+    let args: Vec<String> = env::args().collect();
+    if let Some(ms) = args.iter().position(|arg| arg == "--prompt-delay-ms").and_then(|at| args.get(at + 1)).and_then(|value| value.parse::<u64>().ok()) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
 }

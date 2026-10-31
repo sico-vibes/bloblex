@@ -1199,6 +1199,13 @@
       "params": null
     },
     {
+      "method": "media.reveal",
+      "class": "never",
+      "minTier": null,
+      "why": "It opens the host's own file manager at a generated image, which only makes sense at the computer and names a host path to do it.",
+      "params": null
+    },
+    {
       "method": "session.checkpoints",
       "class": "never",
       "minTier": null,
@@ -1292,6 +1299,7 @@
     "delegation.updated": "allow",
     "outside.sessions.changed": "drop",
     "external.changed": "drop",
+    "media.generated": "drop",
     "fanout.changed": "drop",
     "stash.changed": "drop"
   },

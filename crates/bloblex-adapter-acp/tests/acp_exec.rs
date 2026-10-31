@@ -301,6 +301,51 @@ async fn session_setup_order_is_model_then_mode_then_effort_before_prompt() {
     adapter.close_session(&handle).await.unwrap();
 }
 
+/// The exact updates OpenCode 2.2.2 sends for its image tool become one
+/// `ImageRequested` naming the stem the agent chose, with no path in the event
+/// for any other tool.
+#[tokio::test]
+async fn an_image_tool_call_becomes_an_image_request_with_its_stem() {
+    let temp = Temp::new();
+    let adapter = AcpAdapter::default();
+    let stem = std::env::temp_dir().join("bitbots-generated-image").to_string_lossy().into_owned();
+    let args = vec![
+        "--record".into(),
+        temp.record().to_string_lossy().into(),
+        "--image-stem".into(),
+        stem.clone(),
+    ];
+    let (handle, mut events) = open_session(&adapter, args, options(None, None, None)).await;
+    let result = adapter
+        .prompt(
+            &handle,
+            PromptRequest { attachments: Vec::new(), turn_id: "turn-1".into(), text: "draw a cat".into(), exec_options: options(None, None, None) },
+        )
+        .await;
+    assert!(result.is_ok());
+    let mut seen = Vec::new();
+    let expected = stem.clone();
+    let collected = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while let Some(event) = events.recv().await {
+            let done = matches!(event, AgentEvent::TurnCompleted);
+            seen.push(event);
+            if done { break; }
+        }
+    })
+    .await;
+    assert!(collected.is_ok(), "the fixture turn did not finish");
+    let request = seen.iter().find_map(|event| match event {
+        AgentEvent::ImageRequested { tool_call_id, stem: Some(stem), saved_path, inline_base64, failure } => {
+            Some((tool_call_id.clone(), stem.clone(), saved_path.is_none(), inline_base64.is_none(), failure.is_none()))
+        }
+        _ => None,
+    });
+    assert_eq!(request, Some(("tool_img_1".to_owned(), expected, true, true, true)));
+    let requests = seen.iter().filter(|event| matches!(event, AgentEvent::ImageRequested { .. })).count();
+    assert_eq!(requests, 1, "the started and finished updates make one request");
+    adapter.close_session(&handle).await.unwrap();
+}
+
 #[tokio::test]
 async fn mode_and_effort_are_not_selected_without_instructions_or_thinking() {
     let temp = Temp::new();

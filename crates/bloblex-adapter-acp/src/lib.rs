@@ -53,6 +53,7 @@ struct Conn {
     turn_lifecycle: Mutex<()>,
     prompt_ack_pending: AtomicBool,
     question_calls: Mutex<std::collections::HashSet<String>>,
+    image_calls: Mutex<ImageCalls>,
     local_session_id: String,
     events: SessionEventSink,
     spawned_instructions: Option<String>,
@@ -157,6 +158,11 @@ impl SessionEventSink {
 }
 
 const SHARED_PROCESS_IDLE_SHUTDOWN: Duration = Duration::from_secs(30);
+
+/// Test only: when above zero, every request except `session/prompt` times out after this many
+/// milliseconds instead of 20 seconds. A prompt has no timer, so the tests set it small to show that.
+#[doc(hidden)]
+pub static TEST_REQUEST_TIMEOUT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const SESSION_FORWARD_QUEUE_COALESCE_CAP: usize = 128;
 
 fn is_stream_event(event: &AgentEvent) -> bool {
@@ -286,6 +292,7 @@ impl AcpAdapter {
             turn_lifecycle: Mutex::new(()),
             prompt_ack_pending: AtomicBool::new(false),
             question_calls: Mutex::new(std::collections::HashSet::new()),
+            image_calls: Mutex::new(ImageCalls::default()),
             local_session_id: local_session_id.to_owned(),
             events: SessionEventSink::new(events),
             spawned_instructions: secret,
@@ -438,6 +445,10 @@ impl AcpAdapter {
                             if prompt_accepted { let _ = session.events.enqueue(AgentEvent::PromptAccepted); }
                             continue;
                         }
+                        // Phase 2: a request for an image, or its completion, is
+                        // reported as its own event; the tool row is unchanged
+                        // and nothing here depends on a turn being active.
+                        emit_image_request(&session.events, &params["update"], &session.image_calls).await;
                         let context_model = session.applied.lock().await.model.clone();
                         emit_update(&session.events, &params, context_model).await;
                         if prompt_accepted { let _ = session.events.enqueue(AgentEvent::PromptAccepted); }
@@ -588,6 +599,7 @@ impl AcpAdapter {
             turn_lifecycle: Mutex::new(()),
             prompt_ack_pending: AtomicBool::new(false),
             question_calls: Mutex::new(std::collections::HashSet::new()),
+            image_calls: Mutex::new(ImageCalls::default()),
             local_session_id: old.local_session_id.clone(),
             events: old.events.clone(),
             spawned_instructions: exec::normalize_instructions(&options.instructions),
@@ -706,19 +718,35 @@ impl AcpAdapter {
             c.process.pending.lock().await.remove(&id);
             return Err(AdapterError::Process(e.to_string()));
         }
-        let request_timeout = if method == "session/prompt" {
-            Duration::from_secs(30 * 60)
-        } else {
-            Duration::from_secs(20)
-        };
-        match tokio::time::timeout(request_timeout, rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => Err(AdapterError::Process("ACP connection closed".into())),
-            Err(_) => {
-                c.process.pending.lock().await.remove(&id);
-                Err(AdapterError::Timeout)
-            }
+        // A turn has no time limit: a long one is legitimate, and the daemon's silence watchdog decides
+        // when a quiet one is stuck. Every other request keeps a short timeout.
+        match Self::request_timeout(method) {
+            None => match rx.await {
+                Ok(r) => r,
+                Err(_) => Err(AdapterError::Process("ACP connection closed".into())),
+            },
+            Some(limit) => match tokio::time::timeout(limit, rx).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(_)) => Err(AdapterError::Process("ACP connection closed".into())),
+                Err(_) => {
+                    c.process.pending.lock().await.remove(&id);
+                    Err(AdapterError::Timeout)
+                }
+            },
         }
+    }
+
+    /// How long a request may wait for its answer. `session/prompt` waits as long as the turn runs.
+    fn request_timeout(method: &str) -> Option<Duration> {
+        let test_ms = TEST_REQUEST_TIMEOUT_MS.load(Ordering::Relaxed);
+        if method == "session/prompt" { return None; }
+        Some(if test_ms > 0 { Duration::from_millis(test_ms) } else { Duration::from_secs(20) })
+    }
+
+    /// Best effort: tells OpenCode to stop `provider_id`'s turn, so no work carries on unseen after
+    /// Bitbots has stopped waiting for it.
+    async fn stop_provider_turn(c: &Conn, provider_id: &str) {
+        let _ = tokio::time::timeout(Duration::from_secs(2), Self::notify(c, "session/cancel", json!({"sessionId": provider_id}))).await;
     }
 
     async fn notify(c: &Conn, method: &str, params: Value) -> Result<(), AdapterError> {
@@ -1015,6 +1043,24 @@ impl AcpAdapter {
     }
 }
 
+/// Whether a refused prompt means the agent is still running the previous turn.
+fn is_busy_reason(reason: &str) -> bool {
+    reason.to_ascii_lowercase().contains("busy")
+}
+
+/// What the owner reads for a failed prompt: the provider's own reason, on one line, or the plain
+/// fallback. A busy agent gets a plain sentence instead of a bare protocol error. The daemon redacts
+/// credentials from this line before it is shown.
+fn failed_prompt_message(reason: &str) -> String {
+    let one_line = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    let one_line: String = one_line.chars().take(200).collect();
+    if one_line.is_empty() || one_line == "OpenCode prompt failed" { return "OpenCode prompt failed".to_owned(); }
+    if is_busy_reason(&one_line) {
+        return "OpenCode is still working on the previous message. Wait for it to finish or press Stop, then send this again.".to_owned();
+    }
+    format!("OpenCode prompt failed: {one_line}")
+}
+
 /// The terminal error for a failed `session/prompt`. When an `Error` event was
 /// queued for an active turn the event stream owns the turn
 /// (`TurnErrorReported`); when there was no active turn nothing was queued, so
@@ -1044,6 +1090,155 @@ fn hides_question_card(calls: &mut std::collections::HashSet<String>, update: &V
         Some("tool_call_update") => calls.contains(id),
         _ => false,
     }
+}
+
+/// The one tool whose structured output may name a file: OpenCode's image tool.
+const IMAGE_TOOL: &str = "experimental_image_generate";
+
+/// What this session has already reported about images.
+///
+/// OpenCode 2.2.2 names the tool only in the *started* update (`title` is the
+/// tool name, `name` is absent) and puts `{path, model, jobID}` in
+/// `rawOutput.metadata` of the *finished* one, which carries no name at all. So
+/// the call id is remembered when the tool is named, and the finished update is
+/// only read for a call that was named.
+#[derive(Default)]
+struct ImageCalls {
+    /// Call ids this session identified as the image tool.
+    known: std::collections::HashSet<String>,
+    /// Calls whose stem was already reported, so a repeated update reports once.
+    reported: std::collections::HashSet<String>,
+    /// Calls whose failure was already reported.
+    failed: std::collections::HashSet<String>,
+    /// Every known call id, in order, so a completion notice can be attached to
+    /// its request when there is exactly one candidate.
+    ids: Vec<String>,
+}
+
+impl ImageCalls {
+    fn remember(&mut self, id: &str) {
+        if self.known.insert(id.to_owned()) { self.ids.push(id.to_owned()); }
+    }
+    /// The call a completion notice belongs to. A notice may only finish a call
+    /// this session already knows: its own id, or the only call there is. Any
+    /// other notice is ignored — it must never create a record or name a file,
+    /// and the sweep finds the file on its own.
+    fn call_for_notice(&self, job: Option<&str>) -> Option<String> {
+        if let Some(job) = job {
+            if self.ids.iter().any(|id| id == job) { return Some(job.to_owned()); }
+        }
+        (self.ids.len() == 1).then(|| self.ids[0].clone())
+    }
+}
+
+/// Whether this update names OpenCode's image tool. Only the exact tool name
+/// counts, and a shell call can never be it: OpenCode takes a shell call's title
+/// from the model, so a model could title its own command after the tool. A bot
+/// cannot get a file named by printing text either.
+fn names_image_tool(u: &Value) -> bool {
+    if u["kind"].as_str() == Some("execute") { return false; }
+    let exact = |value: Option<&Value>| value.and_then(Value::as_str).is_some_and(|text| text.trim().eq_ignore_ascii_case(IMAGE_TOOL));
+    exact(u.get("name"))
+        || exact(u.get("toolName"))
+        || exact(u.get("title"))
+        || exact(u.get("rawInput").and_then(|input| input.get("tool")))
+        || exact(u.get("rawInput").and_then(|input| input.get("name")))
+        || exact(u.get("_meta").and_then(|meta| meta.get("opencode/tool")))
+}
+
+/// The stem from the tool's finished update. Only the real shape counts:
+/// `rawOutput.metadata` is the tool's own `{path, model, jobID}`, and a job id
+/// beside the path is what makes it that structured output. Nothing is ever
+/// parsed out of text, and there is no other key this will read.
+fn image_stem(u: &Value) -> Option<String> {
+    let meta = u.get("rawOutput")?.get("metadata")?;
+    meta.get("jobID").and_then(Value::as_str).filter(|job| !job.is_empty())?;
+    meta.get("path").and_then(Value::as_str).map(str::trim).filter(|path| !path.is_empty()).map(str::to_owned)
+}
+
+/// The failure of a finished image tool call, as the runtime reports it.
+fn image_failure(u: &Value) -> Option<String> {
+    if u["status"].as_str() != Some("failed") { return None; }
+    let reason = u["rawOutput"]["error"].as_str()
+        .or_else(|| u["rawOutput"]["metadata"]["error"].as_str())
+        .or_else(|| u["error"].as_str())
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
+    Some(reason.map(|reason| reason.lines().next().unwrap_or("").chars().take(200).collect())
+        .unwrap_or_else(|| "The image request failed.".to_owned()))
+}
+
+/// Text a completion notice may carry, from the runtime's own fixed wording.
+fn notice_text(description: &str) -> (Option<String>, Option<String>) {
+    const SAVED: &str = "Image request finished. Saved image: ";
+    const FAILED: &str = "Image request failed for ";
+    if let Some(rest) = description.strip_prefix(SAVED) {
+        // `<file> (<model>)`: the file is everything before the last " (".
+        let file = rest.rsplit_once(" (").map(|(file, _)| file).unwrap_or(rest).trim();
+        if std::path::Path::new(file).is_absolute() { return (Some(file.to_owned()), None); }
+        return (None, None);
+    }
+    if let Some(rest) = description.strip_prefix(FAILED) {
+        // `<stem>: <reason>`; the stem is a path and is never kept.
+        let reason = rest.split_once(": ").map(|(_, reason)| reason).unwrap_or("").trim();
+        let reason = if reason.is_empty() { "The image request failed." } else { reason };
+        return (None, Some(reason.chars().take(200).collect()));
+    }
+    (None, None)
+}
+
+/// A completion notice, when one arrives. OpenCode's `notice` update carries a
+/// title and description only; the structured metadata is on the session part,
+/// not on the ACP update. The notice is never required: the daemon's sweep finds
+/// the file when no notice arrives.
+fn image_notice(u: &Value) -> Option<(Option<String>, Option<String>)> {
+    if u["sessionUpdate"].as_str() != Some("notice") || u["title"].as_str() != Some("Image generation") { return None; }
+    let meta = u.get("metadata").or_else(|| u.get("_meta"));
+    if let Some(meta) = meta.filter(|meta| meta["source"].as_str() == Some(IMAGE_TOOL)) {
+        let failed = meta["state"].as_str().is_some_and(|state| matches!(state, "failed" | "error" | "cancelled"));
+        let path = meta["path"].as_str().filter(|path| std::path::Path::new(path).is_absolute());
+        let failure = failed.then(|| meta["error"].as_str().unwrap_or("The image request failed.").chars().take(200).collect::<String>());
+        if let (Some(path), false) = (path, failed) { return Some((Some(path.to_owned()), None)); }
+        if failure.is_some() { return Some((None, failure)); }
+    }
+    let (saved, failure) = notice_text(u["description"].as_str().unwrap_or(""));
+    (saved.is_some() || failure.is_some()).then_some((saved, failure))
+}
+
+/// Reports a request for an image, and nothing else: the tool row is left as it
+/// is, a relative or absent path records nothing, and a notice is used when one
+/// arrives. The event carries no image bytes; `inline_base64` is only for
+/// providers that return the image itself.
+async fn emit_image_request(tx: &SessionEventSink, u: &Value, calls: &tokio::sync::Mutex<ImageCalls>) {
+    let mut state = calls.lock().await;
+    if let Some((saved, failure)) = image_notice(u) {
+        let job = u["metadata"]["jobID"].as_str().or_else(|| u["_meta"]["jobID"].as_str()).map(str::to_owned);
+        // No known call means no record: the notice is dropped, not turned into one.
+        let Some(tool_call_id) = state.call_for_notice(job.as_deref()) else { return; };
+        let _ = tx.enqueue(AgentEvent::ImageRequested { tool_call_id, stem: None, saved_path: saved, inline_base64: None, failure });
+        return;
+    }
+    let Some(tool_call_id) = u["toolCallId"].as_str().filter(|id| !id.is_empty()) else { return; };
+    if names_image_tool(u) { state.remember(tool_call_id); }
+    // The finished update carries no tool name, so only a call named earlier is read.
+    if !state.known.contains(tool_call_id) { return; }
+    if let Some(failure) = image_failure(u) {
+        if !state.failed.insert(tool_call_id.to_owned()) { return; }
+        let _ = tx.enqueue(AgentEvent::ImageRequested { tool_call_id: tool_call_id.to_owned(), stem: None, saved_path: None, inline_base64: None, failure: Some(failure) });
+        return;
+    }
+    if state.reported.contains(tool_call_id) { return; }
+    let Some(stem) = image_stem(u) else { return; };
+    // A stem that is not absolute records nothing at all.
+    if !std::path::Path::new(&stem).is_absolute() { return; }
+    state.reported.insert(tool_call_id.to_owned());
+    let _ = tx.enqueue(AgentEvent::ImageRequested {
+        tool_call_id: tool_call_id.to_owned(),
+        stem: Some(stem),
+        saved_path: None,
+        inline_base64: None,
+        failure: None,
+    });
 }
 
 async fn emit_update(tx: &SessionEventSink, p: &Value, context_model: Option<String>) {
@@ -1361,6 +1556,10 @@ impl AgentAdapter for AcpAdapter {
                     (c.cancelled_turn.swap(false, Ordering::AcqRel), c.active_turn_id.lock().await.take().is_some())
                 };
                 if was_cancelled { return Ok(()); }
+                // Bitbots is giving this turn up. If the agent is still running it (the request failed on
+                // our side, not because it answered), tell it to stop so nothing carries on unseen.
+                // A "busy" refusal is about the previous turn, which must keep running.
+                if !matches!(error, AdapterError::Process(_)) && !is_busy_reason(&Self::rpc_error_message(&error)) { Self::stop_provider_turn(&c, &provider_id).await; }
                 if had_active_turn {
                     // The hint and the terminal event share one ordered stream,
                     // and the hint is only sent when an Error actually follows
@@ -1371,7 +1570,7 @@ impl AgentAdapter for AcpAdapter {
                     Self::emit_turn_evidence(&c, &req.turn_id, &req.exec_options, None).await;
                     // TurnErrorReported keeps Result failure for callers while
                     // making that stream the daemon's only terminal owner.
-                    let _ = c.events.send(AgentEvent::Error { message: "OpenCode prompt failed".into() }).await;
+                    let _ = c.events.send(AgentEvent::Error { message: failed_prompt_message(&Self::rpc_error_message(&error)) }).await;
                     return Err(failed_prompt_terminal(true));
                 }
                 // No active turn: no Error was queued, so the event stream has
@@ -1494,6 +1693,11 @@ impl AgentAdapter for AcpAdapter {
         if let Some(c) = self.sessions.lock().await.remove(&handle.session_id) {
             let provider_id = c.session_id.lock().await.clone().unwrap_or_else(|| handle.provider_session_id.clone());
             if c.process.alive.load(Ordering::Acquire) {
+                // Closing a conversation whose turn is still running (the watchdog does this when it gives
+                // up on a quiet turn) must stop that turn first, or OpenCode keeps working on it unseen.
+                if c.active_turn_id.lock().await.is_some() || c.process.active_turns.lock().await.contains(&provider_id) {
+                    Self::stop_provider_turn(&c, &provider_id).await;
+                }
                 let _ = tokio::time::timeout(
                     Duration::from_secs(2),
                     Self::request(&c, "session/close", json!({"sessionId": provider_id})),
@@ -1562,6 +1766,131 @@ mod tests {
         }
     }
 
+    /// The image tool's finished update carries `rawOutput.metadata.path` (the
+    /// stem, without an extension) and no tool name; the name arrives once, in
+    /// the started update. The same call is reported once.
+    #[tokio::test]
+    async fn an_image_tool_update_reports_its_stem_once() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        let stem = std::env::temp_dir().join("bitbots-image-test").to_string_lossy().into_owned();
+        let started = json!({"sessionUpdate":"tool_call","toolCallId":"img-1","status":"in_progress","kind":"other","title":"experimental_image_generate","locations":[],"rawInput":{"prompt":"a cat"}});
+        emit_image_request(&sink, &started, &calls).await;
+        assert!(rx.try_recv().is_err(), "a started call has no path yet");
+        let finished = json!({"sessionUpdate":"tool_call_update","toolCallId":"img-1","status":"completed","locations":[],"content":[{"type":"content","content":{"type":"text","text":"Image job started."}}],"rawOutput":{"metadata":{"path":stem,"model":"provider/model","jobID":"job-1"}}});
+        emit_image_request(&sink, &finished, &calls).await;
+        let Some(AgentEvent::ImageRequested { tool_call_id, stem: reported, saved_path, inline_base64, failure }) = rx.recv().await else { panic!("an image request was expected") };
+        assert_eq!(tool_call_id, "img-1");
+        assert_eq!(reported.as_deref(), Some(stem.as_str()));
+        assert!(saved_path.is_none() && inline_base64.is_none() && failure.is_none());
+        emit_image_request(&sink, &finished, &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Only that tool's structured output counts: a tool that merely mentions a
+    /// saved image in its text, or names a path in its own output, does not.
+    #[tokio::test]
+    async fn only_the_image_tool_can_name_an_image() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        let absolute = std::env::temp_dir().join("bitbots-not-an-image.png").to_string_lossy().into_owned();
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call","toolCallId":"cmd-1","status":"in_progress","kind":"execute","title":"Ran a command"}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"cmd-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":format!("Saved image: {absolute}")}}]}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call","toolCallId":"read-1","status":"in_progress","kind":"read","title":"read"}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"read-1","status":"completed","rawOutput":{"metadata":{"path":absolute}}}), &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A finished update for a call id that was never named as the image tool
+    /// records nothing, even though it carries a structured path.
+    #[tokio::test]
+    async fn a_finished_update_for_an_unnamed_call_records_nothing() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        let stem = std::env::temp_dir().join("bitbots-unnamed").to_string_lossy().into_owned();
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"other-9","status":"completed","rawOutput":{"metadata":{"path":stem,"model":"m","jobID":"j"}}}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"other-9","status":"completed","rawOutput":{"path":stem}}), &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A shell call's title comes from the model, so a command titled after the
+    /// image tool must never name a file — not even with JSON in its output.
+    #[tokio::test]
+    async fn a_shell_call_titled_like_the_image_tool_names_nothing() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        let stem = std::env::temp_dir().join("bitbots-shell-claim").to_string_lossy().into_owned();
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call","toolCallId":"sh-1","status":"in_progress","kind":"execute","title":"experimental_image_generate","rawInput":{"command":"echo hi"}}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"sh-1","status":"completed","kind":"execute","title":"experimental_image_generate","content":[{"type":"content","content":{"type":"text","text":format!(r#"{{"path":"{stem}"}}"#)}}],"rawOutput":{"metadata":{"path":stem,"jobID":"j-1"}}}), &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A notice may only finish a call this session already knows; alone, it
+    /// records nothing and names no file.
+    #[tokio::test]
+    async fn a_notice_with_no_known_call_records_nothing() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        let file = std::env::temp_dir().join("bitbots-orphan.png").to_string_lossy().into_owned();
+        emit_image_request(&sink, &json!({"sessionUpdate":"notice","severity":"info","title":"Image generation","description":format!("Image request finished. Saved image: {file} (provider/model).")}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"notice","severity":"error","title":"Image generation","description":"Image request failed for /tmp/x: nope"}), &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A stem that is not absolute records nothing at all.
+    #[tokio::test]
+    async fn a_relative_image_stem_records_nothing() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call","toolCallId":"img-2","status":"in_progress","title":"experimental_image_generate"}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"img-2","status":"completed","rawOutput":{"metadata":{"path":"images/out"}}}), &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A failed image names its reason, from the error the runtime put in the
+    /// structured output.
+    #[tokio::test]
+    async fn a_failed_image_tool_update_reports_the_reason() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call","toolCallId":"img-3","status":"in_progress","title":"experimental_image_generate"}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"img-3","status":"failed","title":"experimental_image_generate","rawOutput":{"metadata":{},"error":"No image model is available.\ntry later"}}), &calls).await;
+        let Some(AgentEvent::ImageRequested { failure, stem, .. }) = rx.recv().await else { panic!("a failed image was expected") };
+        assert_eq!(failure.as_deref(), Some("No image model is available."));
+        assert!(stem.is_none());
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"img-3","status":"failed","rawOutput":{"error":"No image model is available."}}), &calls).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A completion notice, when one arrives, gives the exact file or the reason;
+    /// it is attached to the only request this session reported.
+    #[tokio::test]
+    async fn an_image_completion_notice_names_the_exact_file_or_the_failure() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let sink = SessionEventSink::new(tx);
+        let calls = tokio::sync::Mutex::new(ImageCalls::default());
+        let stem = std::env::temp_dir().join("bitbots-notice").to_string_lossy().into_owned();
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call","toolCallId":"img-4","status":"in_progress","title":"experimental_image_generate"}), &calls).await;
+        emit_image_request(&sink, &json!({"sessionUpdate":"tool_call_update","toolCallId":"img-4","status":"completed","rawOutput":{"metadata":{"path":stem,"model":"provider/model","jobID":"job-9"}}}), &calls).await;
+        let _ = rx.recv().await;
+        let file = std::env::temp_dir().join("bitbots-notice.png").to_string_lossy().into_owned();
+        emit_image_request(&sink, &json!({"sessionUpdate":"notice","severity":"info","title":"Image generation","description":format!("Image request finished. Saved image: {file} (provider/model).")}), &calls).await;
+        let Some(AgentEvent::ImageRequested { tool_call_id, saved_path, failure, .. }) = rx.recv().await else { panic!("a finished image was expected") };
+        assert_eq!(tool_call_id, "img-4");
+        assert_eq!(saved_path.as_deref(), Some(file.as_str()));
+        assert!(failure.is_none());
+        emit_image_request(&sink, &json!({"sessionUpdate":"notice","severity":"error","title":"Image generation","description":"Image request failed for something: quota exhausted"}), &calls).await;
+        let Some(AgentEvent::ImageRequested { failure, .. }) = rx.recv().await else { panic!("a failed image was expected") };
+        assert_eq!(failure.as_deref(), Some("quota exhausted"));
+    }
+
     /// A failed prompt with no active turn queues no `Error` event, so the
     /// adapter must not claim the stream owns the turn: it returns `Protocol`
     /// and lets the daemon finalize it. With an active turn the queued `Error`
@@ -1576,6 +1905,28 @@ mod tests {
             matches!(failed_prompt_terminal(true), AdapterError::TurnErrorReported(_)),
             "the queued Error event owns the turn"
         );
+    }
+
+    #[test]
+    fn a_prompt_has_no_timer_and_other_requests_keep_theirs() {
+        assert_eq!(AcpAdapter::request_timeout("session/prompt"), None);
+        assert_eq!(AcpAdapter::request_timeout("session/new"), Some(Duration::from_secs(20)));
+        TEST_REQUEST_TIMEOUT_MS.store(300, Ordering::Relaxed);
+        let (prompt, other) = (AcpAdapter::request_timeout("session/prompt"), AcpAdapter::request_timeout("session/set_config_option"));
+        TEST_REQUEST_TIMEOUT_MS.store(0, Ordering::Relaxed);
+        assert_eq!(prompt, None, "no setting gives a turn a timer");
+        assert_eq!(other, Some(Duration::from_millis(300)));
+    }
+
+    #[test]
+    fn a_failed_prompt_message_gives_the_reason_a_busy_sentence_or_the_fallback() {
+        assert_eq!(failed_prompt_message("provider failed"), "OpenCode prompt failed: provider failed");
+        assert_eq!(failed_prompt_message("first line\n  second   line"), "OpenCode prompt failed: first line second line");
+        assert_eq!(failed_prompt_message(""), "OpenCode prompt failed");
+        assert_eq!(failed_prompt_message("   "), "OpenCode prompt failed");
+        assert_eq!(failed_prompt_message(&"x".repeat(500)).chars().count(), "OpenCode prompt failed: ".len() + 200);
+        let busy = failed_prompt_message("Session is busy");
+        assert!(busy.starts_with("OpenCode is still working on the previous message.") && !busy.contains("Session is busy"), "{busy}");
     }
 
     #[tokio::test]

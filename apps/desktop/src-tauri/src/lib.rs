@@ -1355,6 +1355,52 @@ async fn diagnostics_export_write(state: State<'_, AppState>, selection_token: S
     }))
 }
 
+/// Phase 2: saves one generated image where the owner chooses, in one call.
+///
+/// The renderer names a conversation and a record, never a path: the daemon
+/// reads the bytes through `media.preview` (which refuses anything but a
+/// complete record of that conversation), the save dialog suggests the file's
+/// own name, and only a path the owner picked in the dialog is written.
+/// `Ok(false)` means the dialog was cancelled.
+#[tauri::command]
+async fn save_generated_image(app: AppHandle, state: State<'_, AppState>, session_id: String, media_id: String) -> Result<bool, String> {
+    let conn = connection(&state)?;
+    let preview = rpc_call(&conn, "media.preview", json!({ "sessionId": session_id, "mediaId": media_id })).await?;
+    if preview.get("status").and_then(Value::as_str) != Some("ok") {
+        let reason = preview.get("reason").and_then(Value::as_str).unwrap_or("That image can't be saved.");
+        return Err(reason.to_string());
+    }
+    let encoded = preview.get("dataUrl").and_then(Value::as_str).unwrap_or("");
+    let base64_text = encoded.split_once(',').map(|(_, text)| text).unwrap_or("");
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(base64_text).map_err(|_| "That image can't be saved.".to_string())?;
+    if bytes.is_empty() {
+        return Err("That image can't be saved.".to_string());
+    }
+    let name = preview.get("name").and_then(Value::as_str).filter(|name| !name.is_empty()).unwrap_or("image.png");
+    let extension = std::path::Path::new(name).extension().and_then(|ext| ext.to_str()).unwrap_or("png").to_ascii_lowercase();
+    let filter = match extension.as_str() {
+        "jpg" | "jpeg" => ("JPEG image", "jpg"),
+        "webp" => ("WebP image", "webp"),
+        "gif" => ("GIF image", "gif"),
+        _ => ("PNG image", "png"),
+    };
+    use tauri_plugin_dialog::DialogExt;
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_title("Save the image")
+        .set_file_name(name)
+        .add_filter(filter.0, &[filter.1])
+        .blocking_save_file()
+    else {
+        return Ok(false);
+    };
+    let path = selected.into_path().map_err(|_| "The selected file path is unavailable.".to_string())?;
+    write_bytes_file(&path, &bytes, "image")?;
+    Ok(true)
+}
+
 const MAX_STAGED_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const STAGED_ATTACHMENT_RETENTION: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -3291,6 +3337,7 @@ pub fn run() {
             backup_import_preview,
             select_diagnostics_export_path,
             diagnostics_export_write,
+            save_generated_image,
             inspect_local_file,
             stage_prompt_attachment,
             open_in_editor,

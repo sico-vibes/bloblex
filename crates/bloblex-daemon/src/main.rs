@@ -1116,6 +1116,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "message.image" => message_image(st, &p),
         "media.preview" => media::preview(st, &p).await,
+        "media.reveal" => media::reveal(st, &p).await,
         "search.messages" => {
             let query = p["query"].as_str().filter(|q| q.chars().count() <= 200).ok_or_else(|| derr("invalid_argument", "query must be at most 200 characters", StatusCode::BAD_REQUEST))?;
             st.db.search_messages(query).map(|results| json!({"results":results})).map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))
@@ -2243,7 +2244,15 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
     if agent_id.is_none(){for a in st.db.agent_list(false,Some(runtime_id)).map_err(agent_error)?{let id=a["id"].as_str().unwrap_or("");let configured=a["maxConcurrency"].as_u64().unwrap_or(1) as u32;agents.push(json!({"agentId":id,"configuredMaxConcurrency":configured,"effectiveMaxConcurrency":global_limit as u32,"active":active_for_agent(st,id).await}));}}
     let provider_version = runtime["version"].as_str().unwrap_or("");
     let version_recognized = recognized_cli_version(provider, provider_version);
-    let mut result=json!({"runtimeId":runtime_id,"versionRecognized":version_recognized,"settings":reported,"globalConcurrency":{"limit":global_limit,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true});
+    // Phase 2: whether this runtime can make an image for the owner. Codex
+    // returns the image in its own thread item; Claude Code has no image tool;
+    // OpenCode offers `experimental_image_generate` only while a connected
+    // provider has an image model, and nothing it exposes over ACP says so
+    // (`session/new` configOptions carry models, effort and mode only), so it
+    // stays false rather than offering a button that would fail. A bot that uses
+    // the tool anyway still gets its image card.
+    let generates_images = matches!(provider, "codex");
+    let mut result=json!({"runtimeId":runtime_id,"versionRecognized":version_recognized,"generatesImages":generates_images,"settings":reported,"globalConcurrency":{"limit":global_limit,"active":active},"agentConcurrency":agent_concurrency,"agentConcurrencies":agents,"hostDependent":true});
     if agent_runtime_mismatch{result["agentRuntimeMismatch"]=json!(true);}
     Ok(result)
 }
@@ -4262,7 +4271,9 @@ fn prompt_attachments(value: &Value) -> Result<Vec<PromptAttachment>, DispatchEr
     }).collect()
 }
 
-fn image_media_type(header: &[u8]) -> Option<&'static str> {
+/// The image type from its first bytes. Shared with the generated-image path,
+/// which has to check what a provider handed it before it is kept.
+pub(crate) fn image_media_type(header: &[u8]) -> Option<&'static str> {
     if header.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) { return Some("image/png"); }
     if header.starts_with(&[0xFF, 0xD8, 0xFF]) { return Some("image/jpeg"); }
     if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") { return Some("image/gif"); }
@@ -4737,6 +4748,12 @@ async fn forward_events_with_timeouts(
                     "file.changed",
                     json!({"sessionId":sid,"turnId":turn,"path":path,"createdAt":Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),"detail":bloblex_storage::file_detail(&path, &raw)}),
                 )
+            }
+            // Phase 2: the row, the sweep and the transcript notice are in
+            // `crate::media`; this arm becomes their entry point.
+            AgentEvent::ImageRequested { tool_call_id, stem, saved_path, inline_base64, failure } => {
+                crate::media::requested(&st, &sid, turn.as_deref(), &provider, &tool_call_id, stem, saved_path, inline_base64, failure).await;
+                continue;
             }
             AgentEvent::PermissionRequested {
                 provider_request_id,
@@ -5354,6 +5371,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(queue::due_loop(queue_state));
     let automation_state = st.clone();
     tokio::spawn(automations::sweep_loop(automation_state));
+    // Phase 2: pending generated images are looked for every two seconds, so a
+    // file that lands after its turn ended still reaches the transcript.
+    let media_state = st.clone();
+    tokio::spawn(async move { media::sweep_loop(media_state).await; });
     let deletion_state = st.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
@@ -5434,6 +5455,9 @@ async fn daemon_main() {
         std::process::exit(1)
     }
 }
+
+#[cfg(test)]
+mod media_tests;
 
 #[cfg(test)]
 mod phase2a_tests {

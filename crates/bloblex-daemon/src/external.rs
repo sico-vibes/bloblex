@@ -392,7 +392,7 @@ fn catalog() -> Vec<(Tier, Value)> {
         entry(Viewer, "list_runtimes", "The coding agents installed on this computer, with the models and efforts each offers: enough to call create_bot.", schema(json!({}), &[])),
         entry(Viewer, "list_projects", "The distinct project folders bots work in, which bots have conversations in each (or default to it), and whether each is a git repository.", schema(json!({}), &[])),
         entry(Viewer, "list_conversations", "Conversations, newest first: id, bot, title, project, state, last update and its separate git copy when it has one.", schema(json!({"botId": id("Only this bot's conversations."), "projectId": id("Only conversations in this project (from list_projects)."), "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "How many to return (default 20)."}}), &[])),
-        entry(Viewer, "read_conversation", "A conversation's messages: id, role, text, time and kind. Tool steps are one line each and images are paths only. Without afterMessageId you get the latest messages; with it, the ones after that message.", schema(json!({"sessionId": id("The conversation."), "afterMessageId": id("Only messages after this one."), "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "How many to return (default 50)."}}), &["sessionId"])),
+        entry(Viewer, "read_conversation", "A conversation's messages: id, role, text, time and kind. Tool steps are one line each and images are paths only; a generated image names its mediaId and status instead. Without afterMessageId you get the latest messages; with it, the ones after that message.", schema(json!({"sessionId": id("The conversation."), "afterMessageId": id("Only messages after this one."), "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "How many to return (default 50)."}}), &["sessionId"])),
         entry(Viewer, "wait_for_turn", "Waits for the conversation's running turn to finish (up to timeoutSecs, 600 at most), then returns the reply and the turn's metrics, or the error when the turn failed. It returns early when an approval or a question is waiting.", schema(json!({"sessionId": id("The conversation."), "timeoutSecs": {"type": "integer", "minimum": 1, "maximum": 600, "description": "How long to wait (default 120)."}}), &["sessionId"])),
         entry(Viewer, "turn_metrics", "Per turn: start and end time, duration, tool calls, tokens when the coding agent reported them, the outcome, and the error (message and detail) of a failed turn. Unknown values are left out, never zero.", schema(json!({"sessionId": id("The conversation."), "last": {"type": "integer", "minimum": 1, "maximum": 50, "description": "How many turns (default 5)."}}), &["sessionId"])),
         entry(Viewer, "worktree_status", "For a conversation working in its own git copy: branch, base, files changed and commits ahead. Null when it has none.", schema(json!({"sessionId": id("The conversation.")}), &["sessionId"])),
@@ -710,6 +710,12 @@ fn conversation_items(detail: &Value) -> Vec<Value> {
             "createdAt": message["createdAt"], "kind": message["meta"]["kind"].as_str().unwrap_or("message"),
         });
         if message["meta"]["origin"].is_object() { item["origin"] = message["meta"]["origin"].clone(); }
+        // A generated image names its record and where it stands; its path and its
+        // bytes stay on the host.
+        if message["meta"]["kind"] == "generated_image" {
+            item["mediaId"] = message["meta"]["mediaId"].clone();
+            item["status"] = message["meta"]["status"].clone();
+        }
         if let Some(images) = message["attachments"].as_array().filter(|images| !images.is_empty()) {
             item["images"] = json!(images.iter().map(|image| json!({"path": image["path"]})).collect::<Vec<_>>());
         }

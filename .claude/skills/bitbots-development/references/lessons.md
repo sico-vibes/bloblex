@@ -440,3 +440,16 @@ Symptom/ask: "Haze should be frosted glass", but the 26 October fix only made th
 - **Never let an import overwrite a live row.** An id from another machine can match a conversation here, for example after copying a database. Only a row whose `movedTo` names the giving machine may be updated.
 - **A dialog opened from inside a dialog needs a portal.** `.blob-dialog` has a transform and a `backdrop-filter`, so a nested fixed backdrop is trapped inside it. `TakeOverDialog` uses `createPortal`.
 - **A long reading surface can't be Haze glass.** `--surface-overlay` is translucent, and text behind a transcript collides with it. `.machine-view` mixes it with `Canvas`.
+
+## 2026-10-31 · Phases 5 to 7 · What they taught
+
+- **A per-bot environment is also a process key.** `options.env` is hashed into the shared-process key by the Codex and ACP adapters, and Claude spawns per session. So a per-bot variable must join `ExecOptions.env` at `main.rs`, not the child's inherited environment, or two bots silently share the first bot's process.
+- **A provider's ACP flag isn't always the `acp` subcommand.** Gemini CLI and Qwen Code take `--acp`. `adapter_for` returns `None` for an unknown provider, so a provider that's listed but runs nothing fails there: check it first.
+- **`codex app-server generate-json-schema` needs `--experimental`** to match what the adapter negotiates. `core.autocrlf` rewrites pinned JSON on checkout, hence `schema/.gitattributes`.
+- **Who is signed in:** `claude auth status` is JSON. `codex login status` only says "Logged in using ChatGPT", so use the app server's `account/read`, skipping lines with no `id`. `opencode auth list` names no person, and its `label` is the credential kind. Never run `opencode auth export`: it prints secrets.
+- **Web Push:** the `aes128gcm` additional data is empty (RFC 8188 section 2.1), not the header. `hkdf`'s `expand` appends the `0x01` counter itself. `serde_json::json!` sorts keys, so build VAPID segments by hand.
+- **`.bitbots.json` already had a field.** `instructions` shipped in beta.43, so new code must keep unknown keys when writing and accept a file with no `version`. Read the release notes for a file's history before writing a format for it.
+- **OpenCode lanes share a process.** When one turn hit the installed app's 30-minute limit, the other OpenCode turns ended seconds later, with no error of their own. Their files were fine. Keep OpenCode turns short on any build before beta.44, and resend to all of them.
+- **The app runs four bot conversations at once** (`concurrency.botsAtOnce`, 1 to 16, the owner's setting). A send over that returns an error saying it will start later, and it does not start. Check a lane really started.
+- **A release script must stop on a failed test.** `release_b44` carried on after UI timeouts under load. They were harmless, but the script couldn't know that.
+- **Tests that make real requests need a limit that survives a busy machine.** The everyday 10-second client limit failed handoff tests while lanes compiled. Use a long limit in tests, and don't count events exactly while a background loop runs.

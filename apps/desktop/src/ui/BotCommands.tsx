@@ -1,25 +1,24 @@
 // Phase 6: what the bot ran in this conversation, read-only, beside the owner's own terminals.
 import { useEffect, useMemo, useRef } from 'react'
 import type { Session } from '../types'
-import { activityTitle } from './ActivityDetails'
-import { buildConversationItems } from './conversation'
+import { detailOf, stateOf } from './ActivityDetails'
+import { activityCategory, activityInput, buildConversationItems } from './conversation'
+import { maskSecrets } from './liveOutput'
 
 type Row = { id: string; command: string; output: string; running: boolean; failed: boolean }
 
 const text = (value: unknown) => typeof value === 'string' ? value : ''
 
-/** The conversation's commands, oldest first. Anything else the bot did stays out. */
+/** The conversation's commands, oldest first, with possible keys and passwords hidden as in the step view. */
 export function botCommands(session: Session | null | undefined): Row[] {
   if (!session) return []
   return buildConversationItems(session).flatMap((item): Row[] => {
-    if (item.kind !== 'activity' || item.activityKind === 'turn') return []
-    const activity = (item.activity ?? {}) as Record<string, unknown>
-    const detail = (activity.detail && typeof activity.detail === 'object' ? activity.detail : {}) as Record<string, unknown>
-    const input = (activity.input && typeof activity.input === 'object' ? activity.input : {}) as Record<string, unknown>
-    const command = text(detail.command) || text(input.command)
+    if (item.kind !== 'activity' || activityCategory(item) !== 'command') return []
+    const detail = detailOf(item)
+    const command = text(detail.command) || text(activityInput(item).command)
     if (!command) return []
-    const state = String(activity.state ?? '').toLowerCase()
-    return [{ id: item.id, command, output: text(detail.output) || text(activity.output), running: ['running', 'working', 'started'].includes(state), failed: ['failed', 'error'].includes(state) }]
+    const state = stateOf(item)
+    return [{ id: item.id, command: maskSecrets(command).text, output: maskSecrets(text(detail.output)).text, running: state === 'running', failed: state === 'failed' }]
   })
 }
 
@@ -39,4 +38,3 @@ export function BotCommands({ session, botName }: { session: Session | null | un
   </div>
 }
 
-export { activityTitle }

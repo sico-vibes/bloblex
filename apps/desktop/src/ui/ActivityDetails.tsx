@@ -25,7 +25,7 @@ export function loadedSkillName(input: unknown): string | null {
   return typeof name === 'string' && name.trim() ? name.trim() : null
 }
 
-function detailOf(item: ConversationItem): JsonRecord {
+export function detailOf(item: ConversationItem): JsonRecord {
   const detail = item.activity?.detail
   return detail && typeof detail === 'object' && !Array.isArray(detail) ? detail as JsonRecord : {}
 }
@@ -80,7 +80,7 @@ export function activityTitle(item: ConversationItem): string {
   return short(text(detail.label) ?? text(activity.title) ?? toolName ?? 'Used a tool')
 }
 
-function stateOf(item: ConversationItem) {
+export function stateOf(item: ConversationItem) {
   const state = String(item.activity?.state ?? item.activity?.status ?? '').toLowerCase()
   const resultStatus = String(detailOf(item).resultStatus ?? '').toLowerCase()
   if (['error', 'failed', 'rejected', 'declined'].includes(state) || ['failed', 'declined'].includes(resultStatus)) return 'failed'

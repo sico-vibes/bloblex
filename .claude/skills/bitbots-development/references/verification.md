@@ -90,3 +90,7 @@ Both supported looks (Bitbots and Blobots), in dark and light; selected, hover, 
 ## Live test of machine links (31 October 2026)
 
 Two daemons on one computer can stand in for two machines: give each its own `BLOBLEX_DB_PATH`, turn on Native on loopback ports, and answer the pairing with `remote.pair.confirm` from the `remote.pairing.requested` event. Use a local bare repository as `origin`. Its path has no identity, so `needsProject` isn't exercised this way; unit tests cover it. A conversation only has a task copy if its `link` holds `{"kind": "main", "worktree": {repo, path, branch, base, baseCommit}}`, and a `fanout.start` row is refused for a move. **Not reachable this way:** a real Tailscale certificate, a real second computer, and the real app's windows.
+
+## The performance gate (31 October 2026)
+
+`npm run perf` runs `scripts/perf-gate.mjs`: cold start and `app.snapshot` bytes, lazy and full, on a database seeded by `perf-seed`. Build both binaries first (`cargo build -p bloblex-daemon --bin bitbotsd -p bloblex-storage --bin perf-seed`). `--self-test` runs the same code with a 1 ms budget and is expected to exit 1. `npm run perf:render` mounts a 1,000-message conversation in happy-dom; it takes about a minute, so it isn't in `npm test`. Budgets live in `perf-budgets.json`, set from measurements. Under load, run `npm test -- --testTimeout=30000`: mounted tests hit the 5-second limit while Rust compiles.

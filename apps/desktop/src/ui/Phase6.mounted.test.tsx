@@ -10,6 +10,7 @@ vi.mock('../tauri', () => ({ inDesktop: true, rpc: vi.fn(), openExternal: vi.fn(
 
 import { VisualFrame, VisualReply, visualDocument, visualFence } from './VisualReply'
 import { terminalLinks } from './terminalLinks'
+import { botCommands } from './BotCommands'
 import { SETTLE_AFTER_MS, groupBotsByProject, hasSettled, settleOrder, sortBots } from './sidebarOrder'
 
 let root: Root | null = null
@@ -48,6 +49,21 @@ describe('visual replies', () => {
     expect(host.textContent).toContain('raw code')
     await act(async () => { [...host.querySelectorAll('button')].find((item) => item.textContent === 'Preview')!.click() })
     expect(host.querySelector('iframe')).not.toBeNull()
+  })
+})
+
+describe("the bot's commands", () => {
+  const session = (tools: unknown[]) => ({ id: 's', state: 'idle', messages: [], turns: [], tools }) as unknown as Session
+  it('lists commands only, and hides what the step view hides', () => {
+    const rows = botCommands(session([
+      { id: 'a', kind: 'command', state: 'completed', detail: { command: 'npm test', output: 'token=ghp_abcdefghijklmnopqrstuvwxyz0123456789' } },
+      { id: 'b', kind: 'read', state: 'completed', detail: { path: 'x.ts' } },
+    ]))
+    expect(rows.map((row) => row.command)).toEqual(['npm test'])
+    expect(rows[0].output).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+  })
+  it('has nothing for no conversation', () => {
+    expect(botCommands(null)).toEqual([])
   })
 })
 

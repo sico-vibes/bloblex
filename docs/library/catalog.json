@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "6241482",
-  "documentCount": 368,
+  "revision": "167c64f",
+  "documentCount": 369,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "3eac4e1b8ede3d1f5c9f01558d88223b56a1e12ff8aba5896349754eb26cd552",
+      "sha256": "6d4ecb784d9e3c036b40d4aba30970c99cc51a192b99c72fd3ee795952c088b1",
       "headings": [
         {
           "id": "update-commands",
@@ -2021,6 +2021,11 @@
         {
           "id": "webhook-triggers-31-october-2026-phase-5-section-8",
           "text": "Webhook triggers (31 October 2026, Phase 5 section 8)",
+          "level": 3
+        },
+        {
+          "id": "sub-bots-31-october-2026-phase-8",
+          "text": "Sub-bots (31 October 2026, Phase 8)",
           "level": 3
         }
       ]
@@ -3518,7 +3523,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "deddf6d473e45fd3e72680af8d1b22af7ee6c17253ce0358225540d0cd32e7c7",
+      "sha256": "4ce059b434f65b3ee2c8646eac6b7b263d996cf8d1a1a3714201d461c7417f21",
       "headings": [
         {
           "id": "release-command",
@@ -4477,6 +4482,66 @@
         {
           "id": "keeping-the-two-lanes-apart-in-round-1",
           "text": "Keeping the two lanes apart in Round 1",
+          "level": 2
+        },
+        {
+          "id": "rules",
+          "text": "Rules",
+          "level": 2
+        },
+        {
+          "id": "gates",
+          "text": "Gates",
+          "level": 2
+        },
+        {
+          "id": "report",
+          "text": "Report",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/history/wave15/phase-8-brief",
+      "source": "docs/history/wave15/phase-8-brief.md",
+      "title": "Brief: Phase 8, sub-bots",
+      "section": "History records",
+      "status": "Historical record",
+      "sha256": "d1d4e74ad43696f088d86e3a32ec8d2dc183552524348bbc5a8569c080035a66",
+      "headings": [
+        {
+          "id": "1-claudes-own-sub-agents-lane-x-cratesbloblex-adapter-claude-daemon-storage",
+          "text": "1. Claude's own sub-agents (Lane X, crates/bloblex-adapter-claude, daemon, storage)",
+          "level": 2
+        },
+        {
+          "id": "2-spawnsubbots-lane-y-new-subbotsrs",
+          "text": "2. spawn_subbots (Lane Y, new subbots.rs)",
+          "level": 2
+        },
+        {
+          "id": "the-bot-row",
+          "text": "The bot row",
+          "level": 3
+        },
+        {
+          "id": "the-tools",
+          "text": "The tools",
+          "level": 3
+        },
+        {
+          "id": "limits",
+          "text": "Limits",
+          "level": 3
+        },
+        {
+          "id": "3-what-the-window-reads-lane-y",
+          "text": "3. What the window reads (Lane Y)",
+          "level": 2
+        },
+        {
+          "id": "keeping-the-lanes-apart",
+          "text": "Keeping the lanes apart",
           "level": 2
         },
         {

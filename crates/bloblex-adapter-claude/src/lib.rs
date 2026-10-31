@@ -493,7 +493,7 @@ fn retry_event_has_connection_failure(value: &Value) -> bool {
 }
 
 fn record_api_retry(conn: &Conn, event: &Value) {
-    let _ = conn.api_retry_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| Some(count.saturating_add(1)));
+    conn.api_retry_count.fetch_add(1, Ordering::Relaxed);
     if retry_event_has_http_status(event) {
         conn.api_retry_http_status_seen.store(true, Ordering::Relaxed);
     }

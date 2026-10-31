@@ -229,7 +229,8 @@ async function main() {
   if (failures.length === 0) {
     console.log('perf-gate: every budget holds')
     if (selfTest) { console.error('perf-gate: --self-test expected the tiny budget to fail, but it passed. The gate is not checking what it claims to.'); process.exit(1) }
-    return
+    // Exit rather than return: a CLI probe that outlives the stopped daemon can hold its output pipe, and Node would wait on it forever.
+    process.exit(0)
   }
   console.error(`perf-gate: ${failures.length} budget${failures.length === 1 ? '' : 's'} exceeded`)
   if (selfTest) { console.error('perf-gate: --self-test, so this failure is the expected result.'); process.exit(1) }

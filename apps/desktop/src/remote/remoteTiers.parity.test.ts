@@ -206,6 +206,8 @@ describe('remote event policy parity with the daemon', () => {
       'session.changed',
       'session.deleted',
       'skills.changed',
+      // Phase 8: only which bot and which conversation changed; the phone then reads the fleet by tier.
+      'subbot.changed',
       'turn.cancelled',
       'turn.completed',
       'turn.error',

@@ -620,6 +620,8 @@ pub fn redact_result(method: &str, result: &Value, options: &RedactOptions) -> V
         // Memory records are the person's own text to review; they are kept.
         "memory.get" | "memory.list" => result.clone(),
         "settings.get" => redact_settings(result),
+        // What a sub-bot is doing is a tool's title, and that can hold a command or a path.
+        "subbot.list" => drop_keys(&redact_node(result, &mut Vec::new(), options), &["doingNow", "error"]),
         // Any other method whose class is `read` still goes through the field
         // watcher, so a read never passes raw.
         _ => match rule_for(method) {
@@ -737,6 +739,13 @@ fn trim_message_field(value: Value, max: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fleet_reaches_a_phone_without_its_tool_titles_or_errors() {
+        let fleet = json!({"subbots":[{"name":"Scout","model":"haiku","status":"running","doingNow":"Bash: type C:\\Users\\me\\notes.txt","error":"C:\\Users\\me failed"}]});
+        let safe = redact_result("subbot.list", &fleet, &RedactOptions::default());
+        assert_eq!(safe, json!({"subbots":[{"name":"Scout","model":"haiku","status":"running"}]}));
+    }
 
     const GOLDENS_JSON: &str =
         include_str!("../../../../apps/desktop/src/remote/fixtures/policy-goldens.json");

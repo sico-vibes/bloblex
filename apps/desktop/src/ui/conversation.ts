@@ -1,11 +1,36 @@
 import type { JsonRecord, Session } from '../types'
 
-export type ConversationItem = { kind: 'message' | 'activity'; id: string; value?: JsonRecord; activity?: JsonRecord; activityKind?: 'tool' | 'file' | 'turn' }
+export type ConversationItem = { kind: 'message' | 'activity'; id: string; value?: JsonRecord; activity?: JsonRecord; activityKind?: 'tool' | 'file' | 'turn'; children?: ConversationItem[] }
 export type ActivityGroup = {
   kind: 'activity-group'; id: string; turnId: string | null; items: ConversationItem[]
-  commands: number; tools: number; searches: number; files: number; failed: number; runningTitle: string | null
+  subagents?: number; commands: number; tools: number; searches: number; files: number; failed: number; runningTitle: string | null
 }
 export type GroupedConversationItem = ConversationItem | ActivityGroup
+
+/** Phase 8: a row where a provider's CLI started its own sub-agent. */
+export function isSubagentItem(item: ConversationItem): boolean {
+  const detail = item.activity?.detail
+  return Boolean(detail && typeof detail === 'object' && (detail as JsonRecord).subagent)
+}
+
+/** Phase 8: the steps a provider's own sub-agent took, under the row that started it. A step whose parent isn't there stays visible at the top. */
+export function nestSubagentSteps(tools: readonly JsonRecord[]): { top: JsonRecord[]; children: Map<string, JsonRecord[]> } {
+  const ids = new Set(tools.map((tool) => String(tool.id ?? '')))
+  const children = new Map<string, JsonRecord[]>()
+  const top: JsonRecord[] = []
+  for (const tool of tools) {
+    const parent = typeof tool.parentToolCallId === 'string' ? tool.parentToolCallId : ''
+    if (parent && ids.has(parent) && parent !== tool.id) children.set(parent, [...(children.get(parent) ?? []), tool])
+    else top.push(tool)
+  }
+  return { top, children }
+}
+
+/** A sub-agent row's output, without the lines the CLI writes for its own use, which aren't the sub-agent's words. */
+export function subagentOutput(output: string): string {
+  const internal = /^(Async agent launched successfully|agentId: |The agent is working in the background|Do not duplicate|output_file: |Do NOT Read|If the user asks)/
+  return output.split(/\r?\n/).filter((line) => !internal.test(line)).join('\n').trim()
+}
 
 /** Provider steps that are not user-facing activity (reasoning carries no visible content). */
 const HIDDEN_TOOL_KINDS = new Set(['reasoning'])
@@ -91,8 +116,13 @@ export function buildConversationItems(session: Session): ConversationItem[] {
   // A model's private reasoning (OpenCode stores it as a 'thinking' message) is not part of the conversation.
   const messages = withoutStaleContextNotices(all.filter((message) => !HIDDEN_MESSAGE_ROLES.has(String(message.role ?? '').toLowerCase())))
   const messageItems: Ordered[] = messages.map((message, index) => ({ kind: 'message', id: `message:${String(message.id ?? `${message.turnId ?? ''}:${message.role ?? ''}:${index}`)}`, value: message, ...orderOf(message), tie: index, turnId: turnOf(message) }))
+  const nested = nestSubagentSteps((session.tools ?? []).filter((tool) => !HIDDEN_TOOL_KINDS.has(String(tool.kind ?? '').toLowerCase())))
+  const childItems = (id: unknown): ConversationItem[] | undefined => {
+    const rows = nested.children.get(String(id ?? ''))
+    return rows?.map((activity, index) => ({ kind: 'activity', id: `tool:${String(activity.id ?? index)}`, activity, activityKind: 'tool', children: childItems(activity.id) }))
+  }
   const activities: Ordered[] = [
-    ...(session.tools ?? []).filter((tool) => !HIDDEN_TOOL_KINDS.has(String(tool.kind ?? '').toLowerCase())).map((activity, index): Ordered => ({ kind: 'activity', id: `tool:${String(activity.id ?? `${activity.turnId ?? ''}:${index}`)}`, activity, activityKind: 'tool', ...orderOf(activity), tie: 10_000 + index, turnId: turnOf(activity) })),
+    ...nested.top.map((activity, index): Ordered => ({ kind: 'activity', id: `tool:${String(activity.id ?? `${activity.turnId ?? ''}:${index}`)}`, activity, activityKind: 'tool', children: childItems(activity.id), ...orderOf(activity), tie: 10_000 + index, turnId: turnOf(activity) })),
     ...(session.files ?? []).map((activity, index): Ordered => ({ kind: 'activity', id: `file:${String(activity.id ?? activity.path ?? index)}`, activity, activityKind: 'file', ...orderOf(activity), tie: 20_000 + index, turnId: turnOf(activity) })),
     ...(session.turns ?? []).filter((turn) => !turn.recoveryHandled && (turn.state === 'error' || turn.state === 'failed')).map((turn, index): Ordered => ({ kind: 'activity', id: `turn-error:${String(turn.id ?? index)}`, activity: turn, activityKind: 'turn', ...orderOf(turn), tie: 30_000 + index, turnId: typeof turn.id === 'string' ? turn.id : null })),
   ]
@@ -122,12 +152,13 @@ export function buildConversationItems(session: Session): ConversationItem[] {
   }
   // A turn with activity but no message yet (it is still running) goes last.
   result.push(...activities.filter((item) => item.turnId && !known.has(item.turnId)))
-  return result.map(({ kind, id, value, activity, activityKind }) => ({ kind, id, value, activity, activityKind }))
+  return result.map(({ kind, id, value, activity, activityKind, children }) => ({ kind, id, value, activity, activityKind, children }))
 }
 
-export function activityCategory(item: ConversationItem): 'command' | 'search' | 'read' | 'file' | 'tool' | 'turn' {
+export function activityCategory(item: ConversationItem): 'subagent' | 'command' | 'search' | 'read' | 'file' | 'tool' | 'turn' {
   if (item.activityKind === 'file') return 'file'
   if (item.activityKind === 'turn') return 'turn'
+  if (isSubagentItem(item)) return 'subagent'
   const kind = String(item.activity?.kind ?? '').toLowerCase()
   const tool = activityToolName(item)
   // The tool or kind decides first; a bare `command` argument only counts when
@@ -166,6 +197,7 @@ export function groupConversationActivity(items: ConversationItem[]): GroupedCon
       id: `activity-group:${activityItems[0].id}:${activityItems.at(-1)?.id}`,
       turnId: typeof activityItems[0].activity?.turnId === 'string' ? activityItems[0].activity.turnId : null,
       items: activityItems,
+      subagents: categories.filter((category) => category === 'subagent').length,
       commands: categories.filter((category) => category === 'command').length,
       tools: categories.filter((category, index) => category === 'tool' || category === 'read' || (category === 'search' && fileSearch(activityItems[index]))).length,
       searches: categories.filter((category, index) => category === 'search' && !fileSearch(activityItems[index])).length,
@@ -181,11 +213,12 @@ export function groupConversationActivity(items: ConversationItem[]): GroupedCon
 /** "Ran 3 commands · used 2 tools · searched the web · edited 1 file" */
 export function activitySummary(group: ActivityGroup) {
   const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`
-  const parts = [
-    group.commands ? `Ran ${plural(group.commands, 'command', 'commands')}` : '',
-    group.tools ? `${group.commands ? 'used' : 'Used'} ${plural(group.tools, 'tool', 'tools')}` : '',
-    group.searches ? `${group.commands || group.tools ? 'searched' : 'Searched'} the web${group.searches > 1 ? ` ${group.searches} times` : ''}` : '',
-    group.files ? `${group.commands || group.tools || group.searches ? 'edited' : 'Edited'} ${plural(group.files, 'file', 'files')}` : '',
-  ].filter(Boolean)
-  return parts.join(' · ') || plural(group.items.length, 'step', 'steps')
+  const line = [
+    group.subagents ? `started ${plural(group.subagents, 'sub-agent', 'sub-agents')}` : '',
+    group.commands ? `ran ${plural(group.commands, 'command', 'commands')}` : '',
+    group.tools ? `used ${plural(group.tools, 'tool', 'tools')}` : '',
+    group.searches ? `searched the web${group.searches > 1 ? ` ${group.searches} times` : ''}` : '',
+    group.files ? `edited ${plural(group.files, 'file', 'files')}` : '',
+  ].filter(Boolean).join(' · ')
+  return line ? `${line[0].toUpperCase()}${line.slice(1)}` : plural(group.items.length, 'step', 'steps')
 }

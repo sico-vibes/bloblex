@@ -157,7 +157,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
     {editing && <NoteEditor
       key={editing === 'new' ? 'new' : editing.id}
       existing={editing === 'new' ? null : editing}
-      agents={agents.filter((agent) => !agent.archived)}
+      agents={agents.filter((agent) => !agent.archived && !agent.parentAgentId)}
       projects={projects}
       onClose={() => setEditing(null)}
       onSave={async (draft) => {

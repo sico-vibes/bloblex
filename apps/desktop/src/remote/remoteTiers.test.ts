@@ -338,6 +338,10 @@ describe('redactSnapshotForRemote', () => {
 })
 
 describe('redactResultForRemote', () => {
+  it("sends a fleet to a phone without its tool titles or errors", () => {
+    const fleet = { subbots: [{ name: 'Scout', model: 'haiku', status: 'running', doingNow: 'Bash: type C:\\Users\\me\\notes.txt', error: 'C:\\Users\\me failed' }] }
+    expect(redactResultForRemote('subbot.list', fleet)).toEqual({ subbots: [{ name: 'Scout', model: 'haiku', status: 'running' }] })
+  })
   it('reduces settings.get to the allowlist', () => {
     const safe = redactResultForRemote('settings.get', { 'appearance.style': 'dark', 'profile.about': 'private', apiSecret: 'x' }) as Record<string, unknown>
     expect(safe).toEqual({ 'appearance.style': 'dark' })

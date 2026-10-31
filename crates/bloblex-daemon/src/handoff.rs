@@ -616,7 +616,7 @@ fn provider_label(provider: &str) -> &str {
 
 /// The local bot for the other machine's: the same id, else the same name and provider.
 fn local_bot(st: &AppState, runtimes: &[Value], bot: &Value) -> Option<Value> {
-    let agents = st.db.agent_list(false, None).unwrap_or_default();
+    let agents = st.db.agent_list(false, None).unwrap_or_default().into_iter().filter(|agent| agent["parentAgentId"].is_null()).collect::<Vec<_>>();
     let provider = bot["provider"].as_str().unwrap_or("");
     let provider_of = |agent: &Value| runtimes.iter().find(|runtime| runtime["id"] == agent["runtimeId"]).and_then(|runtime| runtime["provider"].as_str()).map(str::to_string);
     if let Some(id) = bot["id"].as_str() {

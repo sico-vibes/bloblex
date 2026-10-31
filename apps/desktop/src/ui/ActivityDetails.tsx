@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileText, Globe, ShieldAlert, Terminal, Wrench } from 'lucide-react'
 import type { JsonRecord } from '../types'
-import { activityCategory, activityInput, activitySummary, activityToolName, type ActivityGroup, type ConversationItem } from './conversation'
+import { activityCategory, activityInput, activitySummary, activityToolName, subagentOutput, type ActivityGroup, type ConversationItem } from './conversation'
 import { TAIL_LINES, lastLine, maskSecrets, outputStreaming, tailOf, useActivityProvider } from './liveOutput'
 import './ActivityDetails.css'
 
@@ -50,6 +50,8 @@ export function activityTitle(item: ConversationItem): string {
   const path = text(detail.path) ?? text(activity.path) ?? text(input.file_path) ?? text(input.filePath) ?? text(input.path)
   const tool = text(detail.tool)
   const toolName = tool?.split(' · ').pop() ?? null
+  const subagent = detail.subagent && typeof detail.subagent === 'object' ? detail.subagent as JsonRecord : null
+  if (subagent) return `Sub-agent: ${short(text(subagent.description) ?? text(subagent.type) ?? 'working')}`
   if (toolName === 'load_skill') { const name = loadedSkillName(detail.input ?? detail.arguments); return name ? `Used skill: ${name}` : 'Used a skill' }
   if (toolName && TEAM_TOOLS[toolName]) return TEAM_TOOLS[toolName]
   const label = text(detail.label)
@@ -135,7 +137,7 @@ function StepDetail({ item, onDiff }: { item: ConversationItem; onDiff?: (path: 
   add('URL', detail.url)
   add('Path', detail.path)
   add('Progress', detail.progress, false)
-  const output = text(detail.output)
+  const output = detail.subagent ? text(subagentOutput(String(detail.output ?? ''))) : text(detail.output)
   const safeOutput = output ? maskSecrets(output) : null
   hidden ||= !!safeOutput?.masked
   add('Result', detail.result)
@@ -165,16 +167,20 @@ function StepDetail({ item, onDiff }: { item: ConversationItem; onDiff?: (path: 
 function Step({ item, onDiff }: { item: ConversationItem; onDiff?: (path: string, content: string) => void }) {
   const [open, setOpen] = useState(false)
   const state = stateOf(item)
+  const children = item.children ?? []
+  const liveOutput = typeof detailOf(item).output === 'string' ? (detailOf(item).subagent ? subagentOutput(String(detailOf(item).output)) : String(detailOf(item).output)) : ''
   return <li className={`activity-step state-${state}`}>
     <button type="button" className="activity-step-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
       <span className="activity-step-icon"><StepIcon item={item} /></span>
       <span className="activity-step-title">{activityTitle(item)}</span>
       {state === 'running' && <span className="activity-step-state">Running</span>}
-      {state === 'running' && typeof detailOf(item).output === 'string' && <span className="activity-step-live" aria-hidden="true">{lastLine(maskSecrets(String(detailOf(item).output)).text)}</span>}
+      {children.length > 0 && <span className="activity-step-state">{children.length} step{children.length === 1 ? '' : 's'}</span>}
+      {state === 'running' && liveOutput && <span className="activity-step-live" aria-hidden="true">{lastLine(maskSecrets(liveOutput).text)}</span>}
       {state === 'failed' && <span className="activity-step-state failed">Failed</span>}
       {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
     </button>
     {open && <StepDetail item={item} onDiff={onDiff} />}
+    {open && children.length > 0 && <ol className="activity-steps nested" aria-label="Steps this sub-agent took">{children.map((child) => <Step key={child.id} item={child} onDiff={onDiff} />)}</ol>}
   </li>
 }
 
@@ -193,7 +199,7 @@ export function ActivitySummaryLine({ group, onDiff }: { group: ActivityGroup; o
 }
 
 const STEP_GROUPS = [
-  ['command', 'Commands'], ['read', 'Files'], ['search', 'Searches'], ['file', 'Edits'], ['tool', 'Other'],
+  ['subagent', 'Sub-agents'], ['command', 'Commands'], ['read', 'Files'], ['search', 'Searches'], ['file', 'Edits'], ['tool', 'Other'],
 ] as const
 
 function GroupedSteps({ items, onDiff, flat }: { items: ConversationItem[]; onDiff?: (path: string, content: string) => void; flat?: boolean }) {

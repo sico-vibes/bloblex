@@ -351,7 +351,7 @@ async fn export(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let picked = |id: &Value| only.as_ref().is_none_or(|ids| id.as_str().is_some_and(|id| ids.iter().any(|wanted| wanted == id)));
     let wants = |name: &str| include.and_then(|include| include.get(name)).and_then(Value::as_bool).unwrap_or(true);
     let runtimes = st.runtimes.read().await.clone();
-    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| picked(&agent["id"])).map(|agent| crate::secrets::with_refs(st, agent)).collect::<Vec<_>>();
+    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| agent["parentAgentId"].is_null()).filter(|agent| picked(&agent["id"])).map(|agent| crate::secrets::with_refs(st, agent)).collect::<Vec<_>>();
     if let Some(ids) = &only {
         if agents.len() != ids.len() { return Err(derr("not_found", "One of those bots no longer exists.", StatusCode::NOT_FOUND)); }
     }
@@ -479,7 +479,7 @@ async fn preview(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     let document = p.get("document").cloned().unwrap_or(Value::Null);
     let contents = check_document(&document)?;
     let runtimes = st.runtimes.read().await.clone();
-    let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| agent["parentAgentId"].is_null()).collect::<Vec<_>>();
     let projects = st.db.project_list().map_err(agent_error)?;
     let settings = st.db.settings().map_err(internal_agent_error).unwrap_or(Value::Null);
 
@@ -654,7 +654,7 @@ async fn import(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
     };
 
     let runtimes = st.runtimes.read().await.clone();
-    let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+    let agents = st.db.agent_list(false, None).map_err(agent_error)?.into_iter().filter(|agent| agent["parentAgentId"].is_null()).collect::<Vec<_>>();
     let projects = st.db.project_list().map_err(agent_error)?;
     let empty = Vec::new();
     let bots = contents["bots"].as_array().unwrap_or(&empty);

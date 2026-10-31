@@ -494,7 +494,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
 
   const runtimes = snapshot?.runtimes ?? EMPTY_RUNTIMES
   const agents = (snapshot?.agents ?? []).filter((agent) => !agent.archived)
-  const orphanAgents = agents.filter((agent) => !runtimes.some((runtime) => runtime.id === agent.runtimeId))
+  const orphanAgents = agents.filter((agent) => !agent.parentAgentId && !runtimes.some((runtime) => runtime.id === agent.runtimeId))
   const modeFor = (agent: Agent) => policy?.perAgent.find((row) => row.agentId === agent.id)?.effectiveMode ?? effectiveApprovalMode(agent) ?? defaultMode
   const switchPage = (next: SettingsPageId) => { setPage(next); setFormError(null); setNotice(null) }
   const [settingsQuery, setSettingsQuery] = useState('')
@@ -666,7 +666,7 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
               {runtimes.map((runtime) => {
                 const open = openRuntimes[runtime.id] === true
                 const probe = runtimeProbeDetail(runtime)
-                const owned = agents.filter((agent) => agent.runtimeId === runtime.id)
+                const owned = agents.filter((agent) => !agent.parentAgentId && agent.runtimeId === runtime.id)
                 return <div className={`runtime-entry ${open ? 'open' : ''}`} key={runtime.id}>
                   <button type="button" className="settings-row runtime-entry-head" aria-expanded={open} onClick={() => setOpenRuntimes((current) => ({ ...current, [runtime.id]: !open }))}>
                     <ProviderLogo provider={runtime.provider} />

@@ -13,3 +13,4 @@
 .activity-step-block pre.live { max-height: 220px; overflow: auto; }
 .activity-step-live { min-width: 0; flex: 1; overflow: hidden; color: var(--text-3); font: var(--fs-2xs) var(--font-mono); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .activity-step-note { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }
+.activity-steps.nested { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px solid var(--line); }

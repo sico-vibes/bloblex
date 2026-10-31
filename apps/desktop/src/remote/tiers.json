@@ -1381,6 +1381,13 @@
       "params": null
     },
     {
+      "method": "subbot.list",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "Shows a conversation's or a bot's sub-bots (name, model, status) so a phone can see the fleet; what each is doing and any error are removed before it leaves, so it carries no paths, tool output or message text.",
+      "params": null
+    },
+    {
       "method": "delegation.cancel",
       "class": "chat",
       "minTier": "chat",
@@ -1575,6 +1582,7 @@
     "task.run.changed": "drop",
     "task.run.finished": "drop",
     "delegation.updated": "allow",
+    "subbot.changed": "allow",
     "outside.sessions.changed": "drop",
     "external.changed": "drop",
     "media.generated": "drop",

@@ -18,7 +18,9 @@ vi.mock('../blob/BlobCanvas', () => ({ BlobCanvas: () => <i /> }))
 
 import { CompanionFleetChip, SubbotComposer, SubbotCount, SubbotFleet, SubbotRows } from './SubbotViews'
 import { fleetCount, isActiveSubbot, normalizeSubbots, orderFleet, subbotLine, type Subbot } from './subbots'
-import { rosterAgents } from './teamSelectors'
+import { groupAgentsByProject, rosterAgents } from './teamSelectors'
+import { activitySummary, buildConversationItems, groupConversationActivity, isSubagentItem, nestSubagentSteps, subagentOutput, type ActivityGroup } from './conversation'
+import { activityTitle } from './ActivityDetails'
 
 const parent = { id: 'p', name: 'Rae', color: 'mint' } as unknown as Agent
 const sub = (over: Partial<Subbot> = {}): Subbot => ({ agentId: 'a', parentAgentId: 'p', originSessionId: 's', name: 'Pricing', role: null, provider: 'claude', model: 'claude-haiku-5-5', thinking: null, sessionId: 'side-a', delegationId: 'd-a', status: 'running', doingNow: null, startedAt: null, finishedAt: null, error: null, ...over })
@@ -68,7 +70,40 @@ describe('what the daemon reports', () => {
   })
 })
 
+describe("a provider's own sub-agents", () => {
+  const tools = [
+    { id: 'task', kind: 'Agent', state: 'completed', detail: { subagent: { type: 'general-purpose', description: 'Count lines' }, output: 'Async agent launched successfully. (internal)\nagentId: x (internal)\nThe agent is working in the background.\n4' } },
+    { id: 'read', kind: 'Read', state: 'completed', parentToolCallId: 'task', detail: { path: 'a.txt' } },
+    { id: 'orphan', kind: 'Read', state: 'completed', parentToolCallId: 'gone', detail: { path: 'b.txt' } },
+    { id: 'own', kind: 'Read', state: 'completed', detail: { path: 'c.txt' } },
+  ]
+  it('nests steps under their row, and keeps one whose parent is missing', () => {
+    const { top, children } = nestSubagentSteps(tools)
+    expect(top.map((tool) => tool.id)).toEqual(['task', 'orphan', 'own'])
+    expect(children.get('task')?.map((tool) => tool.id)).toEqual(['read'])
+  })
+  it('reaches the conversation that way, named for what it was asked', () => {
+    const items = buildConversationItems({ id: 's', messages: [], tools } as never).filter((item) => item.kind === 'activity')
+    expect(items.map((item) => item.activity?.id)).toEqual(['task', 'orphan', 'own'])
+    expect(items[0].children?.map((item) => item.activity?.id)).toEqual(['read'])
+    expect(activityTitle(items[0])).toBe('Sub-agent: Count lines')
+  })
+  it('is counted as a sub-agent and not as a tool, so it stays when other steps are hidden', () => {
+    const items = buildConversationItems({ id: 's', messages: [], tools } as never).filter((item) => item.kind === 'activity')
+    expect(items.filter(isSubagentItem).map((item) => item.activity?.id)).toEqual(['task'])
+    expect(activitySummary(groupConversationActivity(items)[0] as ActivityGroup)).toBe('Started 1 sub-agent · used 2 tools')
+  })
+  it("leaves the CLI's own lines out of what the sub-agent said", () => {
+    expect(subagentOutput('Async agent launched successfully. (internal)\nagentId: x\nThe agent is working in the background.\n4')).toBe('4')
+    expect(subagentOutput('A plain answer\nwith two lines')).toBe('A plain answer\nwith two lines')
+  })
+})
+
 describe('in the sidebar', () => {
+  it('never files a sub-bot under a project, even with hidden bots shown', () => {
+    const list = [{ id: 'a', name: 'A' }, { id: 'b', name: 'B', hidden: true, parentAgentId: 'a' }] as unknown as Agent[]
+    expect(groupAgentsByProject(list, [], true).flatMap((group) => group.agents).map((agent) => agent.id)).toEqual(['a'])
+  })
   it('nests each one under its parent, finished ones included, and opens it', async () => {
     fleet([sub({ name: 'Done one', status: 'completed', agentId: 'x', sessionId: 'side-x' }), sub({ doingNow: 'Reading a.ts' })])
     const onOpen = vi.fn()

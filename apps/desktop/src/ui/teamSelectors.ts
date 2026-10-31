@@ -123,7 +123,7 @@ export function managerOf(agents: readonly Agent[]): Agent | null {
 
 export function groupAgentsByProject(agents: readonly Agent[], projects: readonly Project[], showHidden = false): ProjectGroup[] {
   // The Manager is pinned above every project, never inside one.
-  const visible = agents.filter((agent) => !agent.archived && !isManager(agent) && (showHidden || agent.hidden !== true))
+  const visible = agents.filter((agent) => !agent.archived && !isManager(agent) && !agent.parentAgentId && (showHidden || agent.hidden !== true))
   const known = new Set(projects.map((project) => project.id))
   const groups: ProjectGroup[] = [...projects]
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))

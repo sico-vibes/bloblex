@@ -173,7 +173,7 @@ pub async fn add(st: &AppState, p: Value) -> Result<Value, DispatchError> {
 pub(crate) async fn add_marked(st: &AppState, p: Value, mcp_client: Option<&str>) -> Result<Value, DispatchError> {
     let session_id = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     let session = queue_session(st, session_id)?;
-    if session["link"]["kind"] == "side" {
+    if crate::is_read_only_side(&session["link"]) {
         return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN));
     }
     crate::machines::refuse_if_moved(st, &session)?;

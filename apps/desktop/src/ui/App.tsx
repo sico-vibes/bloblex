@@ -11,7 +11,7 @@ import { applyFonts } from './fonts'
 import { disposeCompanionAudio, playCompanionCue, setCompanionSoundsEnabled, setCompanionSoundVolume, unlockCompanionAudioFromGesture } from '../blob/soundCues'
 import { playDictationCue } from './dictationSound'
 import { CompanionFsm, type CompanionMode } from '../blob/companionFsm'
-import { buildConversationItems, groupConversationActivity, withoutStaleContextNotices, type ConversationItem, type GroupedConversationItem } from './conversation'
+import { buildConversationItems, groupConversationActivity, isSubagentItem, withoutStaleContextNotices, type ConversationItem, type GroupedConversationItem } from './conversation'
 import { compactMoodLabel, deriveCompanionStatus } from './companionStatus'
 import { AnalyticsView } from './AnalyticsView'
 import { SchedulesView, type AutomationInput } from './SchedulesView'
@@ -590,6 +590,8 @@ export function App() {
   useLayoutEffect(() => { setRuntimeProviders(snapshot?.runtimes ?? []) }, [snapshot?.runtimes])
   const sessions = snapshot?.sessions ?? []
   const agents = snapshot?.agents ?? []
+  // Every screen that offers bots as a choice uses this; a sub-bot belongs to its parent.
+  const bots = agents.filter((agent) => !agent.parentAgentId)
   const projects = snapshot?.projects ?? []
   // Conversations load in the background: the selected bot's newest first, a
   // few at a time, so its list opens ready while the rest follow. Each finished
@@ -616,7 +618,7 @@ export function App() {
     ? runtimes.find((runtime) => runtime.id === activeSelectedAgent.runtimeId) ?? null
     : runtimes.find((runtime) => runtime.id === selectedRuntimeId) ?? runtimes[0] ?? null
   const sideSession = sideSessionId ? sessions.find((session) => session.id === sideSessionId && isSideSession(session)) ?? null : null
-  const hasActiveBlobs = activeAgents(agents).length > 0
+  const hasActiveBlobs = activeAgents(bots).length > 0
   // A bot with no conversation opens into a local draft: nothing is stored until
   // the first message, so no daemon session and no row exist before then.
   const draftEligible = !!activeSelectedAgent && connection === 'connected' && runtimeUsable(selectedRuntime)
@@ -772,8 +774,8 @@ export function App() {
     ...sessions.filter((session) => unreadNeedsApproval(session, seenSessions)).map((session) => session.id),
     ...(snapshot?.permissions ?? []).filter((permission) => typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!),
   ].filter((id) => !(mainAttention && id === selectedSession?.id)))
-  // Without the experimental activity setting only failed turns stay visible; the working indicator shows progress.
-  const groupedConversationItems = groupConversationActivity(activityDetails || sideSession ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn'))
+  // Without the experimental activity setting only failed turns and sub-agents stay visible; the working indicator shows progress.
+  const groupedConversationItems = groupConversationActivity(activityDetails || sideSession ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn' || isSubagentItem(item)))
   // Messages this conversation's bot sent to teammates read as one assignment card per turn, with the daemon's recorded status.
   const delegationLedger = useDelegations(selectedSession && !isDraftSession(selectedSession) ? selectedSession.id : null, connection === 'connected')
   const { runs: delegationRunMap, folded: delegationFolded } = delegationRuns(groupedConversationItems)
@@ -1609,7 +1611,7 @@ export function App() {
 
   const saveBlob = async () => {
     if (!draft || !baseline) return
-    const others = activeAgents(agents).filter((agent) => agent.id !== (blobPage?.mode === 'edit' ? blobPage.agentId : undefined)).map((agent) => agent.name)
+    const others = activeAgents(bots).filter((agent) => agent.id !== (blobPage?.mode === 'edit' ? blobPage.agentId : undefined)).map((agent) => agent.name)
     if (Object.keys(validateAgentDraft(draft, others)).length > 0) return
     if (blobPage?.mode === 'create' && !draft.model) { setFormError('Choose a concrete model available in this coding agent catalog.'); return }
     const editing = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
@@ -1665,7 +1667,7 @@ export function App() {
   }
 
   const duplicateAgent = async (agent: Agent) => {
-    const name = duplicateAgentName(agent.name, activeAgents(agents).map((item) => item.name))
+    const name = duplicateAgentName(agent.name, activeAgents(bots).map((item) => item.name))
     try {
       const result = await doRpc<{ agent?: Agent }>('agent.create', duplicateParams(agent, name), (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.create'))
       const created = result.agent
@@ -2610,7 +2612,7 @@ ${fileReferenceText(sentFile)}` : typed
   const detailsVisible = inspectorOpen && !blobPage && !analyticsOpen && !tasksOpen && !compareOpen
   const toggleInspector = () => setInspectorOpen((open) => { localStorage.setItem('bloblex.inspector.open', open ? '0' : '1'); return !open })
   const editingAgent = blobPage?.mode === 'edit' ? agents.find((agent) => agent.id === blobPage.agentId) ?? null : null
-  const otherNames = activeAgents(agents).filter((agent) => agent.id !== editingAgent?.id).map((agent) => agent.name)
+  const otherNames = activeAgents(bots).filter((agent) => agent.id !== editingAgent?.id).map((agent) => agent.name)
   const fieldErrors = draft ? validateAgentDraft(draft, otherNames) : {}
   const draftReady = Object.keys(fieldErrors).length === 0
   const draftDirty = !!(draft && baseline && isAgentDirty(draft, baseline))
@@ -2654,7 +2656,7 @@ ${fileReferenceText(sentFile)}` : typed
   const slashCandidates = slash ? slashItems(slash.query, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) : []
   const visibleSessions = sessions.filter((session) => session.archived !== true)
   const quickSwitcherItems: QuickSwitcherItem[] = [
-    ...activeAgents(agents).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: [agent.role?.trim(), agent.description].filter(Boolean).join(' · '), searchText: `${agent.name} ${agent.role ?? ''} ${agent.description}`, color: agentColorHex(agent.color) })),
+    ...activeAgents(bots).map((agent) => ({ id: agent.id, kind: 'blob' as const, title: agent.name, subtitle: [agent.role?.trim(), agent.description].filter(Boolean).join(' · '), searchText: `${agent.name} ${agent.role ?? ''} ${agent.description}`, color: agentColorHex(agent.color) })),
     ...visibleSessions.map((session) => {
       const owner = agents.find((agent) => agent.id === session.agentId)
       const title = sessionDisplayTitle(session)
@@ -2662,7 +2664,7 @@ ${fileReferenceText(sentFile)}` : typed
       const subtitle = [owner?.name ?? labelize(session.provider, Noun), place].filter(Boolean).join(' · ')
       return { id: session.id, kind: 'conversation' as const, title, subtitle, searchText: `${title} ${subtitle} ${session.projectPath ?? ''}`, recentAt: session.updatedAt ?? session.createdAt ?? null }
     }),
-    ...activeAgents(agents).flatMap((agent) => projectGroups(visibleSessions, agent.id).filter((project) => project.key !== null).map((project) => ({ id: `${agent.id}:${project.key}`, kind: 'project' as const, title: project.label, subtitle: agent.name, searchText: `${project.label} ${agent.name} ${project.path}` }))),
+    ...activeAgents(bots).flatMap((agent) => projectGroups(visibleSessions, agent.id).filter((project) => project.key !== null).map((project) => ({ id: `${agent.id}:${project.key}`, kind: 'project' as const, title: project.label, subtitle: agent.name, searchText: `${project.label} ${agent.name} ${project.path}` }))),
     ...(activeSelectedAgent ? [{ id: 'new-session', kind: 'action' as const, category: 'Create' as const, icon: 'new-conversation' as const, title: 'New conversation', subtitle: `With ${activeSelectedAgent.name}`, searchText: `New conversation session chat ${activeSelectedAgent.name}` }] : []),
     { id: 'new-blob', kind: 'action', category: 'Create', icon: 'new-bot', title: `New ${noun}`, subtitle: '', searchText: `New ${noun} create` },
     ...(experiments.search ? [{ id: 'search-messages', kind: 'action' as const, category: 'Go to' as const, icon: 'search' as const, title: 'Search messages', subtitle: 'Across all conversations', searchText: 'Search messages text history' }] : []),
@@ -2771,7 +2773,7 @@ ${fileReferenceText(sentFile)}` : typed
                     <button className="menu-item" role="menuitem" onClick={() => void importProjectWithManager()}><FolderInput size={15} />Import project folder…</button></>
                   : <><button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void openNewProject() }}><FolderPlus size={15} />New project…</button>
                     <button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); void createProject() }}><FolderInput size={15} />Import project folder…</button></>}
-                <button className="menu-item" role="menuitem" disabled={agents.filter((agent) => !agent.archived).length < 2} onClick={() => { setCreateMenuOpen(false); setFanoutOpen(true) }}><Split size={15} />Ask several bots…</button>
+                <button className="menu-item" role="menuitem" disabled={bots.filter((agent) => !agent.archived).length < 2} onClick={() => { setCreateMenuOpen(false); setFanoutOpen(true) }}><Split size={15} />Ask several bots…</button>
                 <button className="menu-item" role="menuitem" onClick={() => { setCreateMenuOpen(false); setCompareId(null); setTasksOpen(false); setCompareOpen(true) }}><ListChecks size={15} />Comparisons</button>
                 <button className="menu-item" role="menuitem" onClick={() => void importBlob()}><Import size={15} />Import {noun}…</button>
               </div>}
@@ -3049,7 +3051,7 @@ ${fileReferenceText(sentFile)}` : typed
       {whatsNewOpen && !companion && <WhatsNewDialog onClose={() => setWhatsNewOpen(false)} onOpenLink={(url) => void openSafeLink(url)} />}
       {shortcutsOpen && experiments.shortcuts && <ShortcutSheet speechEnabled={speechEnabled} bindings={shortcutBindings} sendShortcut={sendShortcut} onClose={() => setShortcutsOpen(false)} />}
       {diagnosticsOpen && !companion && <DiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />}
-      {fanoutOpen && !companion && <FanoutDialog agents={agents} projects={projects} runtimes={runtimes} initialAgent={activeSelectedAgent ?? null} onCancel={() => setFanoutOpen(false)} onStarted={(fanout) => { setFanoutOpen(false); setCompareId(fanout.id); setTasksOpen(false); setCompareOpen(true) }} />}
+      {fanoutOpen && !companion && <FanoutDialog agents={bots} projects={projects} runtimes={runtimes} initialAgent={activeSelectedAgent ?? null} onCancel={() => setFanoutOpen(false)} onStarted={(fanout) => { setFanoutOpen(false); setCompareId(fanout.id); setTasksOpen(false); setCompareOpen(true) }} />}
       {projectSettings && !companion && <ProjectSettingsDialog project={projectSettings} runtimes={runtimes} onClose={() => setProjectSettings(null)} onSaved={() => { setProjectSettings(null); void refresh() }} />}
       {newProjectOpen && !companion && <NewProjectDialog onCancel={() => finishNewProject(null)} onDone={finishNewProject} />}
       <UndoToasts toasts={undoToasts} onRemove={removeUndoToast} onError={setError} />

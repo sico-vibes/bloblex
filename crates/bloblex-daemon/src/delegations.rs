@@ -41,6 +41,10 @@ fn one_line(text: &str) -> String {
 /// `deleted_sessions` filter drops it for a conversation that is gone.
 async fn emit(st: &AppState, dto: &Value) {
     st.emit("delegation.updated", json!({"sessionId": dto["originSessionId"], "delegation": dto})).await;
+    // Phase 8: a sub-bot's assignment also tells the window its fleet changed. The
+    // event names the parent bot and the conversation, and carries nothing else.
+    let parent = dto["targetAgentId"].as_str().and_then(|id| st.db.agent_get(id).ok()).and_then(|agent| agent["parentAgentId"].as_str().map(str::to_owned));
+    if let Some(parent) = parent { st.emit("subbot.changed", json!({"parentAgentId": parent, "sessionId": dto["originSessionId"]})).await; }
 }
 
 /// The reply to the Manager is owed once per outcome: the first caller to find

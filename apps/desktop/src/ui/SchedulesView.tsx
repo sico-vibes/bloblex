@@ -170,7 +170,7 @@ export function SchedulesView(props: SchedulesViewProps) {
       key={editing === 'new' ? `new-${startFrom?.id ?? ''}` : editing.id}
       existing={editing === 'new' ? null : editing}
       template={editing === 'new' ? startFrom : null}
-      agents={agents.filter((agent) => !agent.archived)}
+      agents={agents.filter((agent) => !agent.archived && !agent.parentAgentId)}
       defaultAgentId={agentId ?? null}
       onClose={() => { setEditing(null); setStartFrom(null) }}
       onPreview={props.onPreview}

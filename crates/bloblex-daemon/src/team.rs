@@ -497,6 +497,9 @@ pub fn runtime_instructions_in(st: &AppState, agent: &Value, link: &Value, works
         if let Some(topic) = link["topic"].as_str().filter(|topic| !topic.trim().is_empty()) { lines.push(format!("Topic of this conversation: {topic}.")); }
         lines.push("If you need a decision or information only the user can give, use the ask_user tool, then end your turn. Your Manager is told you are waiting, but only the user can answer; their answer arrives as your next message. Do not ask the Manager to answer for the user.".into());
         lines.push("If you were asked to check something and there is nothing to report, reply exactly `(pass)`.".into());
+        if link["subbot"] == true {
+            lines.push(format!("You are a helper {peer} started. The user can open this conversation and write to you directly: a message that is not {peer}'s brief is from the user, so answer them. You cannot start helpers of your own."));
+        }
     }
     // Wave 13: a scheduled run with nothing to say ends quietly too.
     if link["kind"] == "automation" {
@@ -536,7 +539,7 @@ pub fn attach(st: &AppState, session_id: &str, agent_id: Option<&str>, link: &Va
 /// conversations or schedule anything. Memory tools are only listed while
 /// `experimental.memory` is on; automation runs may keep memory tools but the
 /// write rails restrict them to blob scope.
-fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: bool, noun: &str, _nouns: &str) -> Value {
+fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: bool, subbots: bool, noun: &str, _nouns: &str) -> Value {
     let memory = if memory_enabled { crate::memory::tool_schemas() } else { Vec::new() };
     // The shared skills pool is read-only, so every bot gets it, including
     // automation runs (the index is what tells a bot the pool exists).
@@ -553,6 +556,8 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
         json!({"name":"schedule_task","description":format!("Propose a scheduled task for your {noun}. It is created disabled and will never run until the user approves it in Bitbots. Use this only when the user asks for something recurring or at a set time."),"inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"A short title, 1 to 80 characters."},"prompt":{"type":"string","description":"The instruction to run unattended when the task fires."},"when":{"type":"object","description":"A schedule object: {\"kind\":\"once\",\"at\":\"<RFC3339>\"} or {\"kind\":\"cron\",\"cron\":\"m h dom mon dow\",\"timezone\":\"Area/City\"}."}},"required":["name","prompt","when"],"additionalProperties":false}}),
         json!({"name":"list_my_schedules","description":format!("List this {noun}'s scheduled tasks, whether each is enabled, and when it next runs."),"inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
+    // Phase 8: a sub-bot is never offered the fleet tools.
+    if subbots { list.extend(crate::subbots::tool_schemas(noun)); }
     if is_manager {
         // Same names for existing tools; the Manager's write variants always
         // create approval cards. Ordinary bots keep the original schemas.
@@ -581,7 +586,7 @@ fn tools(is_automation: bool, memory_enabled: bool, ask_user: bool, is_manager: 
 
 #[cfg(test)]
 pub(crate) fn mcp_tools_for_test() -> Vec<Value> {
-    tools(false, false, false, true, &entity_noun(false), &entity_noun(true)).as_array().cloned().unwrap_or_default()
+    tools(false, false, false, true, true, &entity_noun(false), &entity_noun(true)).as_array().cloned().unwrap_or_default()
 }
 
 /// MCP calls from `bitbotsd mcp-bridge`, authorized by a per-session token.
@@ -612,7 +617,7 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
         row["agentId"].as_str().is_some_and(|id| st.db.agent_get(id).is_ok_and(|agent| agent["systemRole"].as_str() == Some("manager") && agent["archived"] != true))
     });
     match method {
-        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_manager, &entity_noun(false), &entity_noun(true))})),
+        "mcp.tools.list" => Ok(json!({"tools":tools(is_automation, memory_enabled, ask_user, is_manager, !crate::subbots::is_subbot_session(st, session_id), &entity_noun(false), &entity_noun(true))})),
         "mcp.tools.call" => {
             let name = params["name"].as_str().unwrap_or("");
             if is_automation && !name.starts_with("memory_") && !matches!(name, "list_skills" | "load_skill" | "read_skill_file") {
@@ -636,6 +641,8 @@ pub async fn mcp_rpc(st: &AppState, session_id: &str, method: &str, params: &Val
                         message_blob(st, session_id, args).await
                     }
                 }
+                "list_models" => crate::subbots::list_models_tool(st, session_id).await,
+                "spawn_subbots" => crate::subbots::spawn_tool(st, session_id, args).await,
                 "list_projects" if is_manager => list_projects(st).await,
                 "update_blob" if is_manager => crate::proposals::propose_update(st, session_id, "bot", args).await,
                 "update_project" if is_manager => crate::proposals::propose_update(st, session_id, "project", args).await,
@@ -851,16 +858,26 @@ async fn message_blob(st: &AppState, session_id: &str, args: &Value) -> Result<S
 
 /// A Manager-initiated hand-off: the global pause (`delegation.paused`) applies.
 pub(crate) async fn delegate(st: &AppState, session_id: &str, args: &Value) -> Result<Delegation, String> {
-    delegate_with(st, session_id, args, true).await
+    delegate_with(st, session_id, args, true, None).await
 }
 
 /// A hand-off the owner approved in the chat. The pause never blocks it: the owner just decided, and a pause must not
 /// make an approval fail.
 pub(crate) async fn delegate_approved(st: &AppState, session_id: &str, args: &Value) -> Result<Delegation, String> {
-    delegate_with(st, session_id, args, false).await
+    delegate_with(st, session_id, args, false, None).await
 }
 
-async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pause: bool) -> Result<Delegation, String> {
+/// Phase 8: what a sub-bot spawn changes about an ordinary hand-off. The target
+/// is a hidden bot that exists already (name lookup would refuse it), its
+/// conversation is marked `subbot`, and it launches with the parent's access.
+pub(crate) struct SubbotSpawn { pub target: Value, pub pin: crate::ModePin }
+
+/// Sends one sub-bot its brief through the very path `message_blob` uses.
+pub(crate) async fn delegate_subbot(st: &AppState, session_id: &str, args: &Value, spawn: &SubbotSpawn) -> Result<Delegation, String> {
+    delegate_with(st, session_id, args, true, Some(spawn)).await
+}
+
+async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pause: bool, spawn: Option<&SubbotSpawn>) -> Result<Delegation, String> {
     let message = args["message"].as_str().map(str::trim).filter(|m| !m.is_empty()).ok_or("message is required.")?.to_owned();
     if message.len() > 200_000 { return Err("The message is too long; keep briefs under 200 KB.".into()); }
     let from_row = st.db.session_detail(session_id).map_err(|_| "This conversation is no longer available.")?;
@@ -871,16 +888,19 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
     let wanted = args["blob"].as_str().unwrap_or("");
     // A teammate nobody can reach is named in the refusal, so the Manager learns
     // why it is not on the list instead of only that the name is unknown.
-    let target = match resolve_blob(&agents, wanted) {
-        Some(target) => target,
-        None => {
-            let all = st.db.agent_list(true, None).unwrap_or_default();
-            return Err(match resolve_blob(&all, wanted) {
-                Some(unreachable) if unreachable["archived"] == true => format!("{} is archived, so it cannot be reached. Ask the user to restore it, or pick another teammate. Teammates: {names}.", agent_name(&unreachable)),
-                Some(unreachable) if unreachable["hidden"] == true => format!("{} is hidden from the team, so work cannot be sent to it. Ask the user to show it in the team, or pick another teammate. Teammates: {names}.", agent_name(&unreachable)),
-                _ => format!("No teammate is called that. Teammates: {names}."),
-            });
-        }
+    let target = match spawn {
+        Some(spawn) => spawn.target.clone(),
+        None => match resolve_blob(&agents, wanted) {
+            Some(target) => target,
+            None => {
+                let all = st.db.agent_list(true, None).unwrap_or_default();
+                return Err(match resolve_blob(&all, wanted) {
+                    Some(unreachable) if unreachable["archived"] == true => format!("{} is archived, so it cannot be reached. Ask the user to restore it, or pick another teammate. Teammates: {names}.", agent_name(&unreachable)),
+                    Some(unreachable) if unreachable["hidden"] == true => format!("{} is hidden from the team, so work cannot be sent to it. Ask the user to show it in the team, or pick another teammate. Teammates: {names}.", agent_name(&unreachable)),
+                    _ => format!("No teammate is called that. Teammates: {names}."),
+                });
+            }
+        },
     };
     let target_id = target["id"].as_str().unwrap_or("").to_owned();
     let target_name = agent_name(&target);
@@ -889,7 +909,7 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
         return Err(format!("{target_name} is already waiting on this work (it asked you, directly or through a teammate), so sending it back would go round in a loop. Reply with your result or your question instead and end your turn; your reply reaches {target_name} automatically."));
     }
     // Why this teammate cannot take work now, before any conversation is made.
-    if target["hidden"] == true {
+    if spawn.is_none() && target["hidden"] == true {
         return Err(format!("{target_name} is hidden from the team, so work cannot be sent to it. Ask the user to show it in the team, or pick another teammate."));
     }
     if bot_is_locked(&target) {
@@ -943,6 +963,7 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
         None => {
             let title = topic.unwrap_or_else(|| topic_from(&message));
             let mut link = json!({"kind":"side","peerAgentId":from_id,"peerName":from_name,"originSessionId":session_id,"spawnedFromSessionId":session_id,"topic":title});
+            if spawn.is_some() { link["subbot"] = json!(true); }
             // FIX39 item 19.4: an approved task that names a project runs the
             // delegated conversation in that project's folder, so the `auto`
             // classifier can touch the files the task is about. Without it the
@@ -967,7 +988,7 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
             }
             let mut params = json!({"agentId":target_id,"projectPath":run_path,"title":title,"link":link.clone()});
             if let Some(project_id) = &project_id { params["projectId"] = json!(project_id); }
-            let created = new_session(st, params).await
+            let created = crate::new_session_with(st, params, spawn.map(|spawn| &spawn.pin)).await
                 .map_err(|error| format!("Could not open a conversation with {target_name}: {}", error.1.message))?;
             let side = created["id"].as_str().unwrap_or("").to_owned();
             if let Some(worktree) = link.get("worktree").filter(|worktree| worktree.is_object()) {
@@ -1024,7 +1045,7 @@ async fn delegate_with(st: &AppState, session_id: &str, args: &Value, honour_pau
 
 /// The folder and project a new side conversation opens in (see the call site
 /// for the order). A named project with no folder is an error the sender can act on.
-fn delegation_project(st: &AppState, args: &Value, from_row: &Value, target: &Value) -> Result<(PathBuf, Option<String>), String> {
+pub(crate) fn delegation_project(st: &AppState, args: &Value, from_row: &Value, target: &Value) -> Result<(PathBuf, Option<String>), String> {
     let folder_of = |project: &Value| project["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir());
     if let Some(wanted) = args["project"].as_str().map(str::trim).filter(|wanted| !wanted.is_empty()) {
         let project = project_named(st, wanted)?;
@@ -1360,7 +1381,10 @@ pub fn after_turn(st: &AppState, session_id: &str, turn: Option<String>, outcome
                 // not finished the assignment: nothing is relayed, and the
                 // assignment keeps running until the answer's next turn ends it.
                 // A silent `(pass)` assignment is finished but owes no reply either.
-                let origin = (!matches!(end, crate::delegations::TurnEnd::Waiting | crate::delegations::TurnEnd::Silent))
+                // Phase 8: the owner may talk to a sub-bot, but only its assignment
+                // reports back to the parent; a turn no assignment owns stays here.
+                let own_chat = link["subbot"] == true && matches!(end, crate::delegations::TurnEnd::Ungoverned);
+                let origin = (!own_chat && !matches!(end, crate::delegations::TurnEnd::Waiting | crate::delegations::TurnEnd::Silent))
                     .then(|| link["originSessionId"].as_str().filter(|origin| st.db.session_exists(origin).unwrap_or(false)))
                     .flatten();
                 if let Some(origin) = origin {

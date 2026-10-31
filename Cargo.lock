@@ -621,6 +621,7 @@ dependencies = [
  "bloblex-adapter-claude",
  "bloblex-adapter-codex",
  "bloblex-agent-core",
+ "bloblex-process",
  "bloblex-protocol",
  "bloblex-runtime",
  "bloblex-security",

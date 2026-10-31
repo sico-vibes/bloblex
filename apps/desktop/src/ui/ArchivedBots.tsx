@@ -13,7 +13,7 @@ export function ArchivedBots({ onClose, onRestore, onDelete }: { onClose: () => 
   const [busy, setBusy] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
-    void rpc<{ agents: Agent[] }>('agent.list', { includeArchived: true }).then((result) => { if (!cancelled) setAgents(result.agents.filter((agent) => agent.archived)) }).catch(() => { if (!cancelled) setError('Archived bots could not be loaded. Close this window and try again.') })
+    void rpc<{ agents: Agent[] }>('agent.list', { includeArchived: true }).then((result) => { if (!cancelled) setAgents(result.agents.filter((agent) => agent.archived && !agent.parentAgentId)) }).catch(() => { if (!cancelled) setError('Archived bots could not be loaded. Close this window and try again.') })
     return () => { cancelled = true }
   }, [])
   const restore = async (agent: Agent) => {

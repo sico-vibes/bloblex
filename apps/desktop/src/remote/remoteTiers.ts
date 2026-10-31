@@ -485,6 +485,9 @@ export function redactResultForRemote(method: string, result: unknown, options: 
       return result
     case 'settings.get':
       return redactSettings(result)
+    case 'subbot.list':
+      // What a sub-bot is doing is a tool's title, and that can hold a command or a path.
+      return dropKeys(redactNode(result, [], options), ['doingNow', 'error'])
     default:
       return ruleFor(method)?.class === 'read' ? redactNode(result, [], options) : result
   }

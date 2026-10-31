@@ -47,6 +47,9 @@ mod scaffold;
 mod mcp_bridge;
 mod model_presentation;
 mod team;
+mod subbots;
+#[cfg(test)]
+mod subbots_tests;
 mod queue;
 mod retry;
 mod experiments;
@@ -976,6 +979,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
         "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
         "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
+        // Phase 8: a conversation's or a bot's sub-bots, status read from the ledger.
+        "subbot.list" => subbots::rpc(st, method, &p).await,
         "automation.webhook.enable" | "automation.webhook.rotate" | "automation.webhook.update" | "automation.webhook.disable" => webhooks::rpc(st, method, &p).await,
         "secret.list" | "secret.set" | "secret.delete" | "secret.request.list" | "secret.request.answer" | "secret.request.decline" => secrets::rpc(st, method, &p).await,
         "project.findByIdentity" => repo_identity::find_by_identity(st, &p),
@@ -1073,6 +1078,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if bot_is_locked(&existing) { return Err(locked_bot_error()); }
             let (agent,events)=st.db.agent_archive(id).map_err(agent_error)?;
             st.broadcast_persisted(events);
+            // Phase 8: a deleted bot's sub-bots are stopped and archived with it.
+            subbots::archive_for_agent(st, id).await;
             automations::pause_for_agent(st, id).await;
             Ok(json!({"agent":agent}))
         }
@@ -1082,6 +1089,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let agent = st.db.agent_get(id).map_err(agent_error)?;
             if bot_is_locked(&agent) { return Err(locked_bot_error()); }
             if agent["systemRole"] == "manager" { return Err(derr("conflict", "The Manager can't be removed; you can rename it or change its model", StatusCode::CONFLICT)); }
+            // Phase 8: a parent's sub-bots go with it (each is purged the same way, so a busy one blocks it).
+            for child in st.db.subbot_agents(Some(id)).map_err(agent_error)? {
+                if let Some(child_id) = child["id"].as_str() { Box::pin(dispatch(st, "agent.purge", json!({"agentId":child_id,"confirm":true}))).await?; }
+            }
             let ids = st.db.agent_purge_sessions(id).map_err(agent_error)?;
             let mut guards = Vec::new();
             for sid in &ids { guards.push(gate_for_session(st, sid).await.lock_owned().await); }
@@ -1169,7 +1180,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let emoji = p["emoji"].as_str().ok_or_else(|| derr("invalid_argument", "emoji is required", StatusCode::BAD_REQUEST))?;
             let session = st.db.session_detail(session_id).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
             if session["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
-            if session["link"]["kind"] == "side" { return Err(derr("read_only", "Side conversations are read-only here. Open the main conversation to react.", StatusCode::FORBIDDEN)); }
+            if is_read_only_side(&session["link"]) { return Err(derr("read_only", "Side conversations are read-only here. Open the main conversation to react.", StatusCode::FORBIDDEN)); }
             let event = st.db.toggle_message_reaction(session_id, message_id, emoji).map_err(|error| match error {
                 bloblex_storage::StorageError::AgentNotFound => derr("not_found", "Message not found in this conversation.", StatusCode::NOT_FOUND),
                 bloblex_storage::StorageError::InvalidAgent => derr("invalid_argument", "Reaction or message role is unsupported.", StatusCode::BAD_REQUEST),
@@ -1276,6 +1287,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             // Archiving a conversation cancels any automatic retry waiting on it.
             if archived {
                 retry::cancel_pending(st, id, retry::DeclineReason::Cancelled, false).await;
+                // Phase 8: the sub-bots this conversation started are stopped and archived with it.
+                subbots::archive_for_session(st, id).await;
             }
             st.emit("session.changed", session.clone()).await;
             Ok(json!({"session":session}))
@@ -1297,6 +1310,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
                 // The conversation's copied images go with it; read the list
                 // before the messages are removed.
                 let attachment_files = st.db.session_attachment_files(id).unwrap_or_default();
+                // Phase 8: the sub-bots this conversation started are stopped and archived with it.
+                subbots::archive_for_session(st, id).await;
                 st.db.session_delete(id).map_err(|error| match error {
                     bloblex_storage::StorageError::AgentNotFound => derr("not_found", "session not found", StatusCode::NOT_FOUND),
                     bloblex_storage::StorageError::SessionActive => derr("conflict", "cannot delete a session while it is starting, working, cancelling, or waiting for approval", StatusCode::CONFLICT),
@@ -1819,6 +1834,9 @@ fn claude_workflows_enabled(settings: &Value) -> bool { settings["claude.enableW
 /// There is no per-bot cap any more: one bot may run many conversations.
 /// A session whose run starts without the owner present: an automation, or a task that a schedule started.
 /// It keeps the unattended rails (never bypass, unclassified permissions denied, questions dismissed).
+/// A teammate's side conversation is read-only for the owner, except a sub-bot's
+/// (Phase 8): the owner can read it, message it and stop it.
+pub(crate) fn is_read_only_side(link: &Value) -> bool { link["kind"] == "side" && link["subbot"] != true }
 pub(crate) fn is_unattended(link: &Value) -> bool { link["kind"] == "automation" || (link["kind"] == "task" && link["unattended"] == true) }
 pub(crate) fn global_concurrency_limit(st: &AppState) -> i64 {
     st.db.settings().ok().and_then(|settings| settings["concurrency.botsAtOnce"].as_i64()).unwrap_or(4).clamp(1, 16)
@@ -2465,7 +2483,14 @@ fn environment_host()->String{
         .unwrap_or_else(||"This computer".to_owned())
 }
 
-pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> {
+pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, DispatchError> { new_session_with(st, p, None).await }
+
+/// Phase 8: the access a sub-bot's conversation is pinned to at launch, the
+/// parent conversation's own. It is passed in code and never read from a request,
+/// so no client can ask for more than the parent has.
+pub(crate) struct ModePin { pub mode: String, pub plan: bool }
+
+pub(crate) async fn new_session_with(st: &AppState, p: Value, pin: Option<&ModePin>) -> Result<Value, DispatchError> {
     let agent_supplied=p.get("agentId").is_some(); let runtime_supplied=p.get("runtimeId").is_some();
     if agent_supplied==runtime_supplied{return Err(derr("invalid_argument","exactly one of agentId or runtimeId is required",StatusCode::BAD_REQUEST));}
     let agent_id=if agent_supplied{Some(p["agentId"].as_str().ok_or_else(||derr("invalid_argument","agentId must be a string",StatusCode::BAD_REQUEST))?.to_owned())}else{None};
@@ -2554,6 +2579,14 @@ pub(crate) async fn new_session(st: &AppState, p: Value) -> Result<Value, Dispat
         exec_options.approval_mode = ApprovalMode::Auto;
         exec_options.plan_mode = plan;
         exec_options.enable_workflows = false;
+    }
+    if let Some(pin) = pin {
+        if let Some(map) = model_lock.as_object_mut() {
+            map.insert("approvalMode".to_owned(), json!(pin.mode));
+            if pin.plan { map.insert("planMode".to_owned(), json!(true)); }
+        }
+        exec_options.approval_mode = parse_mode(&pin.mode);
+        exec_options.plan_mode = pin.plan;
     }
     let id = Uuid::new_v4().to_string();
     // The conversation's project: the one it picked, else the project whose
@@ -3894,7 +3927,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     machines::refuse_if_moved(st, &session_before)?;
     // A question answer is daemon-written, and it is the only way a delegated
     // bot's pending question can continue its own assignment.
-    if session_before["link"]["kind"] == "side" && !matches!(origin, PromptOrigin::Team | PromptOrigin::Queue | PromptOrigin::QuestionAnswer) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    if is_read_only_side(&session_before["link"]) && !matches!(origin, PromptOrigin::Team | PromptOrigin::Queue | PromptOrigin::QuestionAnswer) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     // A chosen skill or Manager command adds a hidden per-turn directive to the
     // provider prompt; the stored message keeps the text exactly as typed.
     let command_directive = commands::directive(st, &sid, &p["command"])?;
@@ -4337,7 +4370,7 @@ pub(crate) async fn session_steer_marked(st: &AppState, p: Value, mcp_client: Op
     }
     let session = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     if session["archived"] == true { return Err(derr("not_found", "Conversation is archived.", StatusCode::NOT_FOUND)); }
-    if session["link"]["kind"] == "side" { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
+    if is_read_only_side(&session["link"]) { return Err(derr("read_only", "Side conversations are read-only. Send a new message in the main conversation.", StatusCode::FORBIDDEN)); }
     machines::refuse_if_moved(st, &session)?;
     let provider = session["provider"].as_str().unwrap_or("");
     if !provider_can_steer(provider) {

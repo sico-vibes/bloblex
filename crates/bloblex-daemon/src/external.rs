@@ -584,7 +584,7 @@ fn require_session(st: &AppState, args: &Value) -> Result<(String, Value), Strin
 // Viewer tools
 
 async fn get_status(st: &AppState) -> ToolResult {
-    let bots = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?.len();
+    let bots = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?.into_iter().filter(|agent| agent["parentAgentId"].is_null()).collect::<Vec<_>>().len();
     let turns: Vec<(String, String)> = st.active_turns.lock().await.iter().map(|(session, turn)| (session.clone(), turn.clone())).collect();
     let running: Vec<Value> = turns.iter().map(|(session, turn)| json!({
         "sessionId": session,
@@ -601,7 +601,7 @@ async fn get_status(st: &AppState) -> ToolResult {
 }
 
 async fn list_bots(st: &AppState) -> ToolResult {
-    let agents = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?;
+    let agents = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?.into_iter().filter(|agent| agent["parentAgentId"].is_null()).collect::<Vec<_>>();
     let runtimes = st.runtimes.read().await.clone();
     let busy = busy_agents(st).await;
     Ok(json!(agents.iter().map(|agent| bot_view(st, agent, &runtimes, &busy)).collect::<Vec<_>>()))
@@ -626,7 +626,7 @@ async fn list_runtimes(st: &AppState) -> ToolResult {
 
 async fn list_projects(st: &AppState) -> ToolResult {
     let projects = st.db.project_list().map_err(|error| fail(agent_error(error)))?;
-    let agents = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?;
+    let agents = st.db.agent_list(false, None).map_err(|error| fail(agent_error(error)))?.into_iter().filter(|agent| agent["parentAgentId"].is_null()).collect::<Vec<_>>();
     let sessions = st.db.session_list(false).map_err(|error| fail(agent_error(error)))?;
     let mut rows: Vec<(String, Value)> = Vec::new();
     for project in &projects {

@@ -315,5 +315,5 @@ export function MentionPicker({ agents, query, activeIndex, onPick, onHover, fil
 
 export function mentionMatches(agents: Agent[], query: string) {
   const needle = query.trim().toLowerCase()
-  return agents.filter((agent) => !agent.archived && (!needle || agent.name.toLowerCase().includes(needle) || (agent.role ?? '').toLowerCase().includes(needle))).slice(0, 6)
+  return agents.filter((agent) => !agent.archived && !agent.parentAgentId && (!needle || agent.name.toLowerCase().includes(needle) || (agent.role ?? '').toLowerCase().includes(needle))).slice(0, 6)
 }

@@ -246,6 +246,20 @@ pub(crate) fn resolve_probe(st: &AppState, runtime: &Value, workflow_override: O
     Probe { provider, workflows, hint, key }
 }
 
+/// What is already cached for a runtime, fresh or stale. It never probes and never
+/// starts a refresh, so `list_models` can be asked as often as a bot likes.
+pub(crate) fn cached(st: &AppState, runtime: &Value) -> Option<Served> {
+    let probe = resolve_probe(st, runtime, None, None);
+    st.catalog.usable_value(&probe.key).or_else(|| st.catalog.load_persisted(st, &probe.key))
+}
+
+/// Puts a catalog in the cache under the key `cached` reads, for tests.
+#[cfg(test)]
+pub(crate) fn seed(st: &AppState, runtime: &Value, value: Value) {
+    let probe = resolve_probe(st, runtime, None, None);
+    st.catalog.insert(&probe.key, value, false);
+}
+
 /// Fetch a catalog. `Fresh` and `Refresh` always yield a value or an error;
 /// `CachedOnly` yields `None` on a miss without waiting.
 pub async fn get(

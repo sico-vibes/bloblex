@@ -2,6 +2,18 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-10-31 · Phase 8: sub-bots, what to remember
+
+- **`hidden` isn't enough to keep a sub-bot off a screen.** The sidebar, phone and companion respect `hidden`, but automations, memory, "Ask several bots", settings, search and the archived list didn't. Any new screen that offers bots as a choice must leave out `parentAgentId`.
+- **Don't show a tool's title to a phone.** `doingNow` is a running tool's title, which can hold a command or a path. The `read` field watcher doesn't catch that, so `subbot.list` drops it by name. Check what a "why" in `tiers.json` claims against the real result.
+- **The activity setting hid the thing the owner asked to see.** Experimental Agent activity is off by default, so nested steps alone would have stayed invisible. `isSubagentItem` rows always show. Check a feature with default settings, not only with the flag that shows it.
+- **`buildConversationItems` copies named fields at the end.** A new field on `ConversationItem` is silently lost unless it's added to that last `map`.
+- **Claude's `Agent` output starts with lines for the model, not the reader** ("Async agent launched successfully…", `agentId:`). `subagentOutput` removes them for display only.
+- **"haiku" prefers the parent's provider,** so an OpenCode Go bot gets `opencode-go/claude-haiku-5-5`. Use the full id, `claude-haiku-5-5`, to reach Claude Code. This is the rule, not a bug.
+- **`taskkill /T` isn't atomic.** It killed `ping` first, and the parent `cmd` ran the script's next step before its own turn, so Stop could let one more setup step through (`stopping_a_turn_stops_its_setup_script` under load, which had looked flaky). Setup scripts and submodule updates now run in `bloblex_process::ProcessTree`, a job from the first instruction. Anything a setup script leaves running also stops when the script ends. `project_clone.rs` and `worktree_attach.rs` still use `taskkill`, which is fine for a single git command but not for a chained script.
+- **`target\debug\incremental` reached 100.8 GB** and left D with 5 GB. It's only a compile cache: `rmdir` it when D runs low, and keep `deps`.
+- **Fix a CI failure on the tool's real path.** The runner's temp folder is `RUNNER~1`, git reports the long name, and text comparison called live copies abandoned. `worktree_cleanup::key` now resolves the real name, and CI sets `TEMP` to `RUNNER_TEMP`.
+
 ## 2026-10-30 · Daemon · Phase 1B (compare, limit-reset sends, stash, notes, new projects, problem reports): what to remember
 
 - **A queued send to a limited conversation is only blocked for the `Queue` origin.** `session_prompt_impl` refuses `state == "limited"` unless the origin is User or Mcp, and a plain `send_later` item goes out as `User`. So "send when the limit resets" needs no special origin; what it needs is `due_tick` not claiming it early. `queue_claim_next(.., include_waiters)` and `limit_waiters_may_send` (`queue.rs`) hold it while `limitedUntil` is ahead (and move its `due_at` when the window was extended), and while the watchdog's own continuation is still to be queued (setting on, `watchdog_due_sessions` lists the session). The continuation is kind `retry` and the waiter sorts after it by `whenLimitResets` in the claim's ORDER BY.

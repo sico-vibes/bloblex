@@ -228,17 +228,13 @@ fn copy_files_into(main: &Path, worktree: &Path, files: &[String]) -> Copied {
     out
 }
 
-/// Stops `pid` and everything it started. Killing only `cmd.exe` would leave npm and friends running.
-fn kill_tree(pid: Option<u32>) {
-    let Some(pid) = pid else { return };
+/// Starts with no window and, until `ProcessTree::attach`, paused, so nothing the command starts escapes its tree.
+/// Stopping a tree is all at once: `taskkill /T` stops one process at a time, and a `cmd` whose `ping` had just
+/// died could run the script's next step before its own turn came.
+fn prepare(command: &mut tokio::process::Command) {
+    bloblex_process::prepare_command(command);
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).creation_flags(0x0800_0000)
-            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-    }
-    #[cfg(not(windows))]
-    { let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status(); }
+    { command.creation_flags(0x0800_0004); }
 }
 
 /// Whether the owner pressed Stop for this turn: the stop is recorded for a turn that has no provider yet,
@@ -258,7 +254,7 @@ fn last_line(bytes: &[u8]) -> Option<String> {
 async fn run(st: &AppState, sid: &str, turn: &str, script: &str, dir: &Path) -> (&'static str, Option<String>) {
     let mut command = if cfg!(windows) { tokio::process::Command::new("cmd") } else { tokio::process::Command::new("sh") };
     #[cfg(windows)]
-    { command.raw_arg(format!("/d /s /c \"{script}\"")); command.creation_flags(0x0800_0000); }
+    { command.raw_arg(format!("/d /s /c \"{script}\"")); }
     #[cfg(not(windows))]
     { command.arg("-c").arg(script); }
     command.current_dir(dir).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true).env("NO_COLOR", "1");
@@ -267,8 +263,9 @@ async fn run(st: &AppState, sid: &str, turn: &str, script: &str, dir: &Path) -> 
         let upper = name.to_string_lossy().to_ascii_uppercase();
         if upper.starts_with("BITBOTS_") || upper.starts_with("BLOBLEX_") { command.env_remove(&name); }
     }
+    prepare(&mut command);
     let Ok(mut child) = command.spawn() else { return ("failed", Some("The script could not be started.".to_owned())) };
-    let pid = child.id();
+    let Ok(tree) = bloblex_process::ProcessTree::attach(&mut child) else { return ("failed", Some("The script could not be started.".to_owned())) };
     // Read the output on the side, so the child stays ours: it must be alive when its tree is killed.
     async fn read_all(pipe: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
         use tokio::io::AsyncReadExt;
@@ -289,8 +286,8 @@ async fn run(st: &AppState, sid: &str, turn: &str, script: &str, dir: &Path) -> 
             }
             Err(_) => ("failed", Some("The script could not be run.".to_owned())),
         },
-        () = watch => { kill_tree(pid); let _ = child.kill().await; ("cancelled", None) }
-        () = tokio::time::sleep(limit()) => { kill_tree(pid); let _ = child.kill().await; ("timeout", Some("It was stopped after 5 minutes.".to_owned())) }
+        () = watch => { let _ = tree.terminate(); let _ = child.kill().await; ("cancelled", None) }
+        () = tokio::time::sleep(limit()) => { let _ = tree.terminate(); let _ = child.kill().await; ("timeout", Some("It was stopped after 5 minutes.".to_owned())) }
     }
 }
 
@@ -307,11 +304,10 @@ async fn submodules_update(st: &AppState, sid: &str, turn: &str, dir: &Path) -> 
         let upper = name.to_string_lossy().to_ascii_uppercase();
         if upper.starts_with("BITBOTS_") || upper.starts_with("BLOBLEX_") { command.env_remove(&name); }
     }
-    #[cfg(windows)]
-    { command.creation_flags(0x0800_0000); }
+    prepare(&mut command);
     if stop_requested(st, sid, turn).await { return ("cancelled", None); }
     let Ok(mut child) = command.spawn() else { return ("failed", Some("git could not be started.".to_owned())) };
-    let pid = child.id();
+    let Ok(tree) = bloblex_process::ProcessTree::attach(&mut child) else { return ("failed", Some("git could not be started.".to_owned())) };
     async fn read_all(pipe: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
         use tokio::io::AsyncReadExt;
         let mut out = Vec::new();
@@ -331,7 +327,7 @@ async fn submodules_update(st: &AppState, sid: &str, turn: &str, dir: &Path) -> 
             }
             Err(_) => ("failed", Some("git could not be run.".to_owned())),
         },
-        () = watch => { kill_tree(pid); let _ = child.kill().await; ("cancelled", None) }
-        () = tokio::time::sleep(limit()) => { kill_tree(pid); let _ = child.kill().await; ("timeout", Some("It was stopped after 5 minutes.".to_owned())) }
+        () = watch => { let _ = tree.terminate(); let _ = child.kill().await; ("cancelled", None) }
+        () = tokio::time::sleep(limit()) => { let _ = tree.terminate(); let _ = child.kill().await; ("timeout", Some("It was stopped after 5 minutes.".to_owned())) }
     }
 }

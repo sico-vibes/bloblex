@@ -149,7 +149,15 @@ let sessions: Session[] = [
         ? 'Here are the projects I found:\n\n| Project | Stars | Licence | What it gives you |\n| --- | ---: | --- | --- |\n| [dicebear/dicebear](https://github.com/dicebear/dicebear) | 9.9k | MIT | 61 styles for avatars and characters |\n| [Alain00/blobatar](https://github.com/Alain00/blobatar) | 1.5k | MIT | Parametric blob illustrations |\n\nMore details: https://github.com/hardbeat920/monocode.'
         : 'Patched `parseInvoice` and the fixture loader. Running the suite now.', createdAt: minutesAgo(3) },
     ],
-    tools: [{ id: 't1', title: 'npm test', kind: 'command', state: 'running', command: 'npm test -- invoice', sequence: 4 }],
+    tools: [
+      { id: 't1', title: 'npm test', kind: 'command', state: 'running', command: 'npm test -- invoice', sequence: 4 },
+      // `?subbots=1` also shows a provider's own sub-agent, with its steps under it.
+      ...(flags().get('subbots') ? [
+        { id: 'agent-1', title: 'Agent', kind: 'Agent', state: 'completed', sequence: 4, detail: { tool: 'Agent', subagent: { type: 'general-purpose', model: 'haiku', description: 'Count the invoice fixtures' }, output: 'Async agent launched successfully. (This tool result is internal metadata)\nagentId: a1 (internal ID)\nThe agent is working in the background.\nThere are 12 invoice fixtures.' } },
+        { id: 'agent-1-read', title: 'Read', kind: 'read', state: 'completed', parentToolCallId: 'agent-1', sequence: 4, detail: { path: 'tests/fixtures/invoices.json' } },
+        { id: 'agent-1-grep', title: 'Search', kind: 'search', state: 'completed', parentToolCallId: 'agent-1', sequence: 4, detail: { query: 'invoice', output: '12 matches' } },
+      ] : []),
+    ],
   },
   {
     id: composerPreviewSessionId, runtimeId: 'runtime-codex', agentId: 'agent-codex',

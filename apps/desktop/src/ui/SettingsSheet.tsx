@@ -3,7 +3,7 @@ import { KeybindingEditor } from './KeybindingEditor'
 import { normalizeBindings, normalizeSendShortcut, oppositeKeys, SEND_SHORTCUTS, type SendShortcut, type ShortcutBindings } from './shortcuts'
 import type { ApprovalMode } from '../types'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArchiveRestore, Bot, Cable, Brain, Check, ChevronDown, ChevronRight, Download, Laptop, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Stethoscope, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
+import { ArchiveRestore, Bot, Cable, Brain, Check, ChevronDown, ChevronRight, Download, KeyRound, Laptop, Mic, Plus, Puzzle, RefreshCw, ShieldAlert, ShieldCheck, SlidersHorizontal, Stethoscope, UserRound, X, Palette, Search, Smartphone, BriefcaseBusiness, FlaskConical } from 'lucide-react'
 import { emitNative, invokeNative, listenNative } from '../transport/nativeBridge'
 import { SettingsSkeleton } from './SettingsSkeleton'
 import { usePlatform } from '../transport/platform'
@@ -34,6 +34,8 @@ import { RowCopy, SettingsGroup, SettingsRow } from './SettingsParts'
 import { OutsideWatchSetting } from './OutsideSessions'
 import { RemoteSettings } from './RemoteSettings'
 import { MachinesPage } from './MachinesPage'
+import { AccountsPage } from './AccountsPage'
+import { SecretsPage } from './SecretsPage'
 import { ConnectionsPage } from './ConnectionsPage'
 import { DiagnosticsDialog } from './DiagnosticsDialog'
 import { HarnessUpdatesNotice } from './HarnessUpdatesNotice'
@@ -47,7 +49,7 @@ import { clearCompanionPosition } from './companionPositions'
 import { useEntityNoun } from './vocabulary'
 import './bitbotsUi.css'
 
-export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Machines' | 'Connections' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
+export type SettingsPageId = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Machines' | 'Connections' | 'Agents' | 'Accounts' | 'Secrets' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
 
 const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHorizontal }> = [
   { id: 'General', label: 'General', icon: SlidersHorizontal },
@@ -57,6 +59,8 @@ const PAGES: Array<{ id: SettingsPageId; label: string; icon: typeof SlidersHori
   { id: 'Machines', label: 'Machines', icon: Laptop },
   { id: 'Connections', label: 'Connections', icon: Cable },
   { id: 'Agents', label: 'Agents', icon: Bot },
+  { id: 'Accounts', label: 'Accounts', icon: UserRound },
+  { id: 'Secrets', label: 'Secrets', icon: KeyRound },
   { id: 'Approvals', label: 'Approvals', icon: ShieldCheck },
   { id: 'Manager', label: 'Manager', icon: BriefcaseBusiness },
   { id: 'Memory', label: 'Memory', icon: Brain },
@@ -640,6 +644,8 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
           {!loading && page === 'General' && <KeybindingEditor bindings={bindings} disabled={saving} onSave={async (next) => { const failure = await saveSetting('shortcuts.bindings', next); if (!failure) { setBindings(next); onShortcutBindingsChange?.(next) } return failure ? 'That shortcut could not be saved.' : null }} />}
           {!loading && page === 'Remote' && <RemoteSettings onOpenPower={() => switchPage('General')} />}
           {!loading && page === 'Machines' && <MachinesPage />}
+          {!loading && page === 'Accounts' && <AccountsPage runtimes={snapshot?.runtimes ?? EMPTY_RUNTIMES} />}
+          {!loading && page === 'Secrets' && <SecretsPage />}
           {!loading && page === 'Connections' && <ConnectionsPage connected={inDesktop && !!snapshot} />}
 
           {!loading && page === 'Agents' && <>

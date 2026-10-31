@@ -67,8 +67,13 @@ fn runtime_checks(runtimes: &[Value]) -> Vec<Value> {
             Some(version) => check(&format!("runtime.{id}.version"), "runtime", &format!("{name} reports its version"), "ok", format!("Version {version}."), None),
             None => check(&format!("runtime.{id}.version"), "runtime", &format!("{name} reports its version"), "warn", format!("{name} did not report a version."), Some(rescan_fix())),
         });
-        let auth = runtime["authState"].as_str().unwrap_or("unknown");
-        let (status, detail, fix) = match auth {
+        // The protocol pin (Phase 5, section 4): a Codex that is not the version
+        // Bitbots' adapter was checked against runs anyway. This row is the
+        // honest note that the protocol may have moved under us.
+        if let Some(schema) = protocol_note(&name, runtime["protocol"].as_object()) {
+            checks.push(check(&format!("runtime.{id}.protocolSchema"), "runtime", &format!("{name} matches the protocol Bitbots was checked against"), "warn", schema, None));
+        }
+        let auth = runtime["authState"].as_str().unwrap_or("unknown");        let (status, detail, fix) = match auth {
             "authenticated" => ("ok", format!("{name} is signed in."), None),
             "sign_in_failed" => ("fail", format!("{name} could not sign in last time it ran. Sign in again in the coding agent itself."), None),
             "unauthenticated" => ("warn", format!("{name} is not signed in."), None),
@@ -88,6 +93,39 @@ fn runtime_checks(runtimes: &[Value]) -> Vec<Value> {
         });
     }
     checks
+}
+
+/// The protocol pin a runtime row carries (`protocol: {pinned, installed, match}`,
+/// only Codex has one). `None` when the row is not pinned or already matches, so
+/// the Doctor only speaks up when there is something to say.
+fn protocol_note(name: &str, protocol: Option<&serde_json::Map<String, Value>>) -> Option<String> {
+    let protocol = protocol?;
+    if protocol.get("match").and_then(Value::as_bool) == Some(true) { return None; }
+    let pinned = protocol.get("pinned").and_then(Value::as_str)?.trim();
+    let installed = protocol.get("installed").and_then(Value::as_str)?.trim();
+    if pinned.is_empty() || installed.is_empty() { return None; }
+    Some(if version_is_newer(installed, pinned) {
+        format!("{name} {installed} is newer than the version Bitbots was checked against ({pinned}).")
+    } else {
+        format!("{name} {installed} is not the version Bitbots was checked against ({pinned}).")
+    })
+}
+
+/// A dotted version comparison, numeric per part, so `0.170.2` is newer than
+/// `0.165.0` and `0.9.9` is older than `0.165.0`.
+fn version_is_newer(left: &str, right: &str) -> bool {
+    fn parts(version: &str) -> Vec<u64> {
+        version.split(|c: char| !c.is_ascii_digit()).filter(|part| !part.is_empty()).map(|part| part.parse().unwrap_or(0)).collect()
+    }
+    let (left, right) = (parts(left), parts(right));
+    for index in 0..left.len().max(right.len()) {
+        match left.get(index).copied().unwrap_or(0).cmp(&right.get(index).copied().unwrap_or(0)) {
+            std::cmp::Ordering::Greater => return true,
+            std::cmp::Ordering::Less => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
 }
 
 /// The database: SQLite's quick check, the schema version, and the file's size.
@@ -233,8 +271,45 @@ mod tests {
     }
 
     #[test]
-    fn database_and_hook_rows_are_one_line_and_actionable() {
-        assert_eq!(human_size(900), "900 bytes");
+    fn a_newer_codex_is_a_warning_not_a_refusal() {
+        // A CLI ahead of the pin (Phase 5, section 4) still runs: the Doctor
+        // says so in one warning sentence and nothing refuses the agent.
+        let exe = std::env::current_exe().unwrap().to_string_lossy().to_string();
+        let row = json!({
+            "id": "rt_codex", "provider": "codex", "displayName": "Codex",
+            "protocolFamily": "codex_app_server", "executablePath": exe,
+            "version": "0.170.2", "authState": "authenticated", "status": "online",
+            "protocol": {"pinned": "0.165.0", "installed": "0.170.2", "match": false}
+        });
+        let checks = runtime_checks(&[row]);
+        let schema = checks.iter().find(|row| row["id"] == "runtime.rt_codex.protocolSchema").expect("a schema row");
+        assert_eq!(schema["status"], "warn");
+        assert_eq!(schema["detail"], "Codex 0.170.2 is newer than the version Bitbots was checked against (0.165.0).");
+        // Not a refusal: no row fails, and the protocol check itself still passes.
+        assert!(checks.iter().all(|row| row["status"] != "fail"), "{checks:?}");
+        assert_eq!(checks.iter().find(|row| row["id"] == "runtime.rt_codex.protocol").unwrap()["status"], "ok");
+        assert!(schema["fix"].is_null(), "nothing needs fixing; the agent runs");
+
+        // A matching pin adds no row at all.
+        let matching = json!({
+            "id": "rt_codex", "provider": "codex", "displayName": "Codex",
+            "protocolFamily": "codex_app_server", "executablePath": std::env::current_exe().unwrap().to_string_lossy(),
+            "version": "0.165.0", "authState": "authenticated", "status": "online",
+            "protocol": {"pinned": "0.165.0", "installed": "0.165.0", "match": true}
+        });
+        assert!(runtime_checks(&[matching]).iter().all(|row| row["id"] != "runtime.rt_codex.protocolSchema"));
+        // An older CLI says so without the "newer" wording, and a row with no
+        // version to compare stays quiet.
+        let older = json!({"id":"x","provider":"codex","displayName":"Codex","protocolFamily":"codex_app_server","executablePath":"","version":"0.9.9","authState":"unknown","status":"offline","protocol":{"pinned":"0.165.0","installed":"0.9.9","match":false}});
+        let older_checks = runtime_checks(&[older]);
+        assert_eq!(older_checks.iter().find(|row| row["id"] == "runtime.x.protocolSchema").unwrap()["detail"], "Codex 0.9.9 is not the version Bitbots was checked against (0.165.0).");
+        assert!(version_is_newer("0.170.2", "0.165.0"));
+        assert!(!version_is_newer("0.9.9", "0.165.0"));
+        assert!(!version_is_newer("0.165.0", "0.165.0"));
+    }
+
+    #[test]
+    fn database_and_hook_rows_are_one_line_and_actionable() {        assert_eq!(human_size(900), "900 bytes");
         assert_eq!(human_size(2048), "2 KB");
         assert_eq!(human_size(5 * 1024 * 1024), "5 MB");
         assert_eq!(one_line("a\n b  c", 20), "a b c");

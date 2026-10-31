@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, Globe, Laptop, Monitor, Pencil, RefreshCw, Smartphone, Tablet, Wifi, X } from 'lucide-react'
 import { useRemote } from '../remote/useRemote'
 import { REMOTE_TIERS, type DeviceKind, type RemoteActivityEntry, type RemoteDevice, type RemoteTailscaleState, type RemoteTier } from '../remote/remoteContract'
-import { previewMode } from '../tauri'
+import { previewMode, rpc } from '../tauri'
 import { Select } from './Select'
 import { ConfirmDialog } from './BlobPage'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
@@ -58,6 +58,30 @@ function CopyAddress({ url }: { url: string }) {
   return <button type="button" className="remote-address" title="Copy the address" onClick={() => { void navigator.clipboard?.writeText(url).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500) }).catch(() => undefined) }}>
     <span>{url}</span>{copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
   </button>
+}
+
+/** Phase 6: off until the owner chooses it, because a notice goes through the phone maker's service. */
+export function PushSetting() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [consent, setConsent] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    void rpc<{ enabled?: boolean }>('remote.push.get', {}).then((reply) => { if (live) setEnabled(reply?.enabled === true) }).catch(() => undefined)
+    return () => { live = false }
+  }, [])
+  const change = async (next: boolean) => {
+    setProblem(null)
+    try { await rpc('remote.push.set', { enabled: next, ...(next ? { confirm: true } : {}) }); setEnabled(next) } catch (reason) { setProblem(reason instanceof Error && reason.message ? reason.message : 'That could not be saved.') }
+  }
+  if (enabled === null) return null
+  return <SettingsGroup title="Phone notifications">
+    <SettingsRow label="Tell my phone when a bot needs me" hint="A notice says only the bot's name, never what it's doing. It goes through Google's, Apple's, Microsoft's or Mozilla's push service, whichever your phone or browser uses. Each device then turns it on for itself.">
+      <button type="button" role="switch" aria-checked={enabled} aria-label="Tell my phone when a bot needs me" className={`toggle ${enabled ? 'on' : ''}`} onClick={() => { if (enabled) void change(false); else setConsent(true) }}><i /></button>
+    </SettingsRow>
+    {problem && <p className="settings-banner error" role="alert">{problem}</p>}
+    {consent && <ConfirmDialog title="Send notices through a push service?" body="Your phone's push service carries each notice. It sees that one arrived for your device, and the text is encrypted so that only your device can read it. No message text, tool names or project names are ever in one." confirmLabel="Turn on" cancelLabel="Not now" onConfirm={() => { setConsent(false); void change(true) }} onCancel={() => setConsent(false)} />}
+  </SettingsGroup>
 }
 
 function DeviceRow({ device, now, busy, tierOptions, approvalsOn, onTier, onRename, onRemove }: {
@@ -229,6 +253,8 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
         onRemove={() => setRevoking(device)} />)}
       {state.devices.length > 0 && <p className="remote-tier-hint">{TIER_HINT.chat} {approvalsOn ? TIER_HINT.operator : 'Approving from a device is off; turn it on below to allow it.'}</p>}
     </SettingsGroup>}
+
+    {on && <PushSetting />}
 
     {on && <SettingsGroup title="Safety">
       <SettingsRow label="Approve requests from remote devices" hint={`A message sent from a phone can make a ${noun} run commands on this computer. Leave this off to approve on this computer only.`}>

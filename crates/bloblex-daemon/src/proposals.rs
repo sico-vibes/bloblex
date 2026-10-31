@@ -155,8 +155,9 @@ async fn validate_bot(st: &AppState, args: &Value) -> Result<Value, String> {
     let description = optional_str(map, "description", 255)?;
     let instructions = optional_str(map, "instructions", 4000)?;
     let provider = required_str(map, "provider", 20)?;
-    if !["claude", "codex", "opencode"].contains(&provider.as_str()) {
-        return Err(format!("provider must be claude, codex or opencode; got \"{provider}\"."));
+    if !bloblex_runtime::is_acp_provider(&provider) && !matches!(provider.as_str(), "claude" | "codex") {
+        let known = ["claude", "codex", "opencode"].iter().copied().chain(bloblex_runtime::ACP_PROVIDERS.iter().map(|row| row.provider)).collect::<Vec<_>>().join(", ");
+        return Err(format!("provider must be one of {known}; got \"{provider}\"."));
     }
     let model = optional_str(map, "model", 200)?;
     let project = optional_str(map, "project", 200)?;

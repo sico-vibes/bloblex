@@ -4,6 +4,7 @@ import type { Project, Runtime, Session } from '../types'
 import { labelize } from '../types'
 import { openProjectFolder, rpc } from '../tauri'
 import type { AgentDraft, BotSection, FieldErrors, StoredExecution } from './agentForm'
+import { BotAccess } from './BotAccess'
 import { runtimeOptionLabel, scalarLength } from './rosterSelectors'
 import { approvalDescription } from '../approvalContract'
 import type { ApprovalMode, AutoResolvedAction } from '../approvalContract'
@@ -377,6 +378,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
       </div>
     </EditGroup>}
 
+    {show('details') && agentId && !manager && <BotAccess agentId={agentId} locked={locked} provider={runtimes.find((item) => item.id === draft.runtimeId)?.provider ?? ''} />}
     {show('details') && <section id="bot-section-details" className="settings-group blob-group" aria-label="Technical details">
       <div className="settings-group-head">
         <h3><button type="button" className="details-toggle" aria-expanded={detailsOpen} aria-controls="bot-details-content" onClick={() => setDetailsOpen(!detailsOpen)}>

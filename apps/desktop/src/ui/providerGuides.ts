@@ -15,7 +15,7 @@ export type ProviderGuide = {
   docsUrl: string
 }
 
-export const PROVIDER_GUIDES: Record<'claude' | 'codex' | 'opencode', ProviderGuide> = {
+export const PROVIDER_GUIDES: Record<'claude' | 'codex' | 'opencode' | 'gemini' | 'qwen', ProviderGuide> = {
   claude: {
     name: 'Claude Code',
     installSummary: 'Native install supports Windows 10 1809+ or Server 2019+ and needs no Node.js; npm install requires Node.js 22+.',
@@ -61,5 +61,28 @@ export const PROVIDER_GUIDES: Record<'claude' | 'codex' | 'opencode', ProviderGu
     versionCheckCommand: 'opencode --version',
     versionDocsUrl: 'https://opencode.ai/docs/cli/',
     docsUrl: 'https://opencode.ai/docs/',
+  },
+  // Phase 5: both run through ACP, which each vendor still marks experimental.
+  gemini: {
+    name: 'Gemini CLI',
+    installSummary: 'Install it with npm. Bitbots talks to it through its experimental ACP mode.',
+    installCommands: [{ label: 'npm', command: 'npm install -g @google/gemini-cli', docsUrl: 'https://github.com/google-gemini/gemini-cli' }],
+    installDocsUrl: 'https://github.com/google-gemini/gemini-cli',
+    signInSummary: 'Run it once in a terminal and complete its sign-in.',
+    signInCommand: 'gemini',
+    signInDocsUrl: 'https://github.com/google-gemini/gemini-cli',
+    versionCheckCommand: 'gemini --version',
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+  },
+  qwen: {
+    name: 'Qwen Code',
+    installSummary: 'Install it with npm. Bitbots talks to it through its experimental ACP mode.',
+    installCommands: [{ label: 'npm', command: 'npm install -g @qwen-code/qwen-code', docsUrl: 'https://github.com/QwenLM/qwen-code' }],
+    installDocsUrl: 'https://github.com/QwenLM/qwen-code',
+    signInSummary: 'Run it once in a terminal and complete its sign-in.',
+    signInCommand: 'qwen',
+    signInDocsUrl: 'https://github.com/QwenLM/qwen-code',
+    versionCheckCommand: 'qwen --version',
+    docsUrl: 'https://github.com/QwenLM/qwen-code',
   },
 }

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "71c857f",
+  "revision": "e7ebb62",
   "documentCount": 367,
   "assets": [
     {
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "190a314cea529b53fb65c1e6bc5f2e6ab26f3d228cbbeef5ac78837d542bb1d8",
+      "sha256": "762a8a85835d931742e4585c4628f780f820dfb76bd53ef0da3e150979e6b1fd",
       "headings": [
         {
           "id": "update-commands",
@@ -1977,6 +1977,16 @@
           "id": "phase-4-handoff-31-october-2026-round-2",
           "text": "Phase 4: handoff (31 October 2026, Round 2)",
           "level": 3
+        },
+        {
+          "id": "phase-5-section-4-the-codex-protocol-pin",
+          "text": "Phase 5, section 4: the Codex protocol pin",
+          "level": 2
+        },
+        {
+          "id": "phase-5-section-3-gemini-cli-and-qwen-code-over-acp",
+          "text": "Phase 5, section 3: Gemini CLI and Qwen Code over ACP",
+          "level": 2
         }
       ]
     },
@@ -3473,7 +3483,7 @@
       "title": "Release checklist",
       "section": "Operations",
       "status": "Operations",
-      "sha256": "f1ad5b8ad3282208705ceb93e0435df7097a69ebdfbe588ddba9089d9457673c",
+      "sha256": "deddf6d473e45fd3e72680af8d1b22af7ee6c17253ce0358225540d0cd32e7c7",
       "headings": [
         {
           "id": "release-command",
@@ -18324,7 +18334,7 @@
       "title": "Remote mode: threat model",
       "section": "Remote specifications",
       "status": "Remote specification",
-      "sha256": "734f33107f7983645820d15b7ecc22ccbe644e56ec51cac09d36e8813928697b",
+      "sha256": "0d8bda81443d65447f43801925269e7dd4ffbc35045ef0538ada6adc52de58c7",
       "headings": [
         {
           "id": "1-the-core-fact",
@@ -18419,6 +18429,11 @@
         {
           "id": "16-machine-links-and-handoff-31-october-2026",
           "text": "16. Machine links and handoff (31 October 2026)",
+          "level": 2
+        },
+        {
+          "id": "17-phone-push-31-october-2026",
+          "text": "17. Phone push (31 October 2026)",
           "level": 2
         }
       ]

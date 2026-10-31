@@ -172,6 +172,9 @@ impl AppState {
                 if self.deleted_sessions.lock().await.contains(id) { return; }
             }
         }
+        // Phase 5, section 7: a permission card or a failed turn may reach the
+        // owner's phone. Content-free, and only when the owner turned it on.
+        crate::remote::push::on_event(self, kind, &payload).await;
         if let Ok((sequence, event_id, timestamp)) = self.db.push_event(kind, &payload) {
             let _ = self.events.send(EventEnvelope {
                 v: 1,
@@ -242,23 +245,30 @@ fn failure_detail_and_sign_in(provider: &str, failure_class: &str, raw: &str) ->
     }
     let mut detail = safe_provider_error_detail(raw);
     let sign_in = detail.as_deref().and_then(|text| sign_in_hint(provider, text));
+    let is_sign_in = sign_in.is_some();
     if let Some(hint) = sign_in {
         detail = Some(format!("{hint} ({})", detail.unwrap_or_default()));
     }
-    (detail, sign_in.is_some())
+    (detail, is_sign_in)
 }
 
 /// Provider CLIs keep their own login; when a turn fails because it expired,
 /// tell the user which CLI to sign in to instead of a generic provider error.
-fn sign_in_hint(provider: &str, detail: &str) -> Option<&'static str> {
+fn sign_in_hint(provider: &str, detail: &str) -> Option<String> {
     let lower = detail.to_ascii_lowercase();
     let auth = ["failed to authenticate", "oauth", "not logged in", "please log in", "login required", "unauthorized", "invalid api key", "credential problem", "401"].iter().any(|needle| lower.contains(needle));
     if !auth { return None; }
     Some(match provider {
-        "claude" => "Claude Code needs you to sign in again: run claude in a terminal and use /login, then retry.",
-        "codex" => "Codex needs you to sign in again: run codex login in a terminal, then retry.",
-        "opencode" => "OpenCode needs you to sign in again: run opencode auth login in a terminal, then retry.",
-        _ => "The coding agent needs you to sign in again in its CLI, then retry.",
+        "claude" => "Claude Code needs you to sign in again: run claude in a terminal and use /login, then retry.".to_owned(),
+        "codex" => "Codex needs you to sign in again: run codex login in a terminal, then retry.".to_owned(),
+        "opencode" => "OpenCode needs you to sign in again: run opencode auth login in a terminal, then retry.".to_owned(),
+        // A table provider names its own command, so the sentence never has to
+        // guess what the CLI calls signing in.
+        p if bloblex_runtime::acp_provider(p).is_some() => {
+            let row = bloblex_runtime::acp_provider(p).expect("checked above");
+            format!("{} needs you to sign in again: run {} in a terminal and sign in there, then retry.", row.display_name, row.sign_in_command)
+        }
+        _ => "The coding agent needs you to sign in again in its CLI, then retry.".to_owned(),
     })
 }
 
@@ -528,6 +538,15 @@ fn persist_runtime_discovery(
     let mut values = Vec::with_capacity(discovered.len());
     for runtime in discovered {
         let mut value = serde_json::to_value(runtime).unwrap_or(Value::Null);
+        // Phase 5, section 4: Codex's protocol pin beside its version. A newer
+        // CLI is a warning in the Doctor, never a refusal, so the row carries
+        // what was checked against and what is installed.
+        if value["provider"] == "codex" {
+            let installed = value["version"].as_str().map(str::to_owned);
+            if let Some(fields) = value.as_object_mut() {
+                fields.insert("protocol".into(), bloblex_adapter_codex::protocol::protocol_compatibility(installed.as_deref()));
+            }
+        }
         if let Some(previous) = saved.iter().find(|previous| previous["id"] == value["id"]) {
             if previous["authState"] == SIGN_IN_FAILED {
                 inherit_sign_in_failure(&mut value, previous);
@@ -1592,6 +1611,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         | "remote.security.get"
         | "remote.security.set"
         | "remote.activity.list" => remote::rpc(st, method, &p).await,
+        // Phase 5, section 7: a paired device's own Web Push subscription.
+        "push.key" | "push.subscribe" | "push.unsubscribe" => remote::push::device_rpc(st, method, &p).await,
         "machine.self"
         | "machine.self.rename"
         | "machine.info"
@@ -1752,9 +1773,10 @@ fn validate_spawn_target(runtime: &RuntimeSpec) -> Result<(), DispatchError> {
 }
 fn adapter_for(a: &Adapters, provider: &str) -> Option<Arc<dyn AgentAdapter>> {
     match provider {
-        "opencode" => Some(a.acp.clone()),
         "codex" => Some(a.codex.clone()),
         "claude" => Some(a.claude.clone()),
+        // OpenCode and every table provider run the same ACP adapter.
+        p if bloblex_runtime::is_acp_provider(p) => Some(a.acp.clone()),
         _ => None,
     }
 }
@@ -1969,7 +1991,7 @@ fn normalized_catalog_model_hint(provider: &str, hint: Option<String>) -> Option
         Some("sonnet".into())
     } else { Some(value) }
 }
-fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
+fn provider_display_name(provider: &str) -> &'static str { bloblex_runtime::provider_display_name(provider) }
 
 fn preferred_catalog_model<'a>(provider: &str, models: &'a [Value]) -> Option<&'a Value> {
     let normalized = models.iter().filter_map(|model| serde_json::from_value::<bloblex_agent_core::ModelInfo>(model.clone()).ok()).collect::<Vec<_>>();
@@ -2208,7 +2230,9 @@ fn exec_option_rejection(st: &AppState, provider: &str, options: &ExecOptions) -
     let capabilities: &[(&str, bool)] = match provider {
         "claude" => &[("model",true),("thinking",true),("serviceTier",true),("instructions",true)],
         "codex" => &[("model",true),("thinking",true),("serviceTier",true),("instructions",true)],
-        "opencode" => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
+        // OpenCode and every table provider: the same ACP adapter, so the same
+        // row. `session/new` reports the models; there is no service tier.
+        p if bloblex_runtime::is_acp_provider(p) => &[("model",true),("thinking",true),("serviceTier",false),("instructions",true)],
         _ => &[],
     };
     let settings = st.db.settings().map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -2264,6 +2288,9 @@ async fn runtime_capabilities(st:&AppState,p:&Value)->Result<Value,DispatchError
         "claude"=>[("model",true,"spawn","provider_echo"),("thinking",true,"spawn","usage_effect"),("serviceTier",true,"spawn","request_shape"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer("claude"),"turn","none")],
         "codex"=>[("model",true,"spawn","provider_echo"),("thinking",true,"turn","usage_effect"),("serviceTier",true,"turn","provider_echo"),("instructions",true,"spawn","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer("codex"),"turn","none")],
         "opencode"=>[("model",true,"session","provider_echo"),("thinking",true,"session","provider_echo"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer("opencode"),"turn","none")],
+        // A table provider is the same ACP adapter as OpenCode, so it earns the
+        // same row by that code, not by a guess about the CLI.
+        p if bloblex_runtime::is_acp_provider(p)=>[("model",true,"session","provider_echo"),("thinking",true,"session","provider_echo"),("serviceTier",false,"session","none"),("instructions",true,"session","successful_turn"),("customEnv",true,"process","request_shape"),("steer",provider_can_steer(p),"turn","none")],
         _=>[("model",false,"turn","none"),("thinking",false,"turn","none"),("serviceTier",false,"turn","none"),("instructions",false,"turn","none"),("customEnv",false,"process","none"),("steer",provider_can_steer(""),"turn","none")],
     };
     let settings=st.db.settings().map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
@@ -2335,6 +2362,10 @@ fn recognized_cli_version(provider: &str, version: &str) -> bool {
         "claude" => major >= 2,
         "codex" => major <= 1,
         "opencode" => major >= 1,
+        // Gemini CLI and Qwen Code are versioned independently and are still
+        // 0.x, so there is no bound to claim: any dotted version is recognised
+        // as a version, and no more than that.
+        p if bloblex_runtime::acp_provider(p).is_some() => true,
         _ => false,
     }
 }
@@ -3828,7 +3859,7 @@ async fn session_prompt_impl(st: &AppState, p: Value, origin: PromptOrigin) -> R
     // stored message keeps the text exactly as typed.
     let references = team::reference_context(st, &sid, &p["conversationRefs"]);
     let provider = session_before["provider"].as_str().unwrap_or("").to_owned();
-    if !attachments.is_empty() && !matches!(provider.as_str(), "claude" | "codex" | "opencode") {
+    if !attachments.is_empty() && !bloblex_runtime::is_acp_provider(&provider) && !matches!(provider.as_str(), "claude" | "codex") {
         return Err(derr("unsupported", "This coding agent does not accept image attachments.", StatusCode::BAD_REQUEST));
     }
     let gate = gate_for_session(st, &sid).await;
@@ -8225,8 +8256,55 @@ mod phase2a_tests {
         })).unwrap()
     }
 
+    /// Phase 5, section 4: `runtime.list` carries the Codex protocol pin, and
+    /// nothing else gets the field.
+    #[tokio::test]
+    async fn runtime_list_carries_the_codex_protocol_pin() {
+        let (st, _) = crate::phase2a_tests::state();
+        let mut codex = discovered_runtime("rt_codex_pin", "codex", "authenticated");
+        codex.version = Some("0.170.2".into());
+        let claude = discovered_runtime("rt_claude_plain", "claude", "authenticated");
+        let values = persist_runtime_discovery(&st.db, vec![codex, claude]).unwrap();
+        *st.runtimes.write().await = values;
+        let listed = dispatch(&st, "runtime.list", json!({})).await.unwrap();
+        let rows = listed["runtimes"].as_array().unwrap();
+        let codex_row = rows.iter().find(|row| row["id"] == "rt_codex_pin").unwrap();
+        assert_eq!(codex_row["protocol"]["pinned"], bloblex_adapter_codex::protocol::pinned_version());
+        assert_eq!(codex_row["protocol"]["installed"], "0.170.2");
+        assert_eq!(codex_row["protocol"]["match"], false);
+        assert!(rows.iter().find(|row| row["id"] == "rt_claude_plain").unwrap()["protocol"].is_null(), "only Codex is pinned");
+    }
+
+    /// Phase 5, section 3: a provider that is only a row in the table gets the
+    /// ACP adapter's real capabilities, and a provider nobody knows gets the
+    /// honest "not supported" rather than a guess.
+    #[tokio::test]
+    async fn an_unknown_provider_gets_honest_capabilities() {
+        let (st, _) = crate::phase2a_tests::state();
+        *st.runtimes.write().await = vec![
+            json!({"id":"rt-gem","provider":"gemini","status":"online"}),
+            json!({"id":"rt-qwen","provider":"qwen","status":"online"}),
+            json!({"id":"rt-mystery","provider":"mystery","status":"online"}),
+        ];
+        for runtime_id in ["rt-gem", "rt-qwen"] {
+            let caps = dispatch(&st, "runtime.capabilities", json!({"runtimeId":runtime_id})).await.unwrap();
+            assert_eq!(caps["settings"]["model"]["supported"], true, "{runtime_id}");
+            assert_eq!(caps["settings"]["model"]["evidence"], "provider_echo", "{runtime_id}");
+            assert_eq!(caps["settings"]["instructions"]["supported"], true, "{runtime_id}");
+            assert_eq!(caps["settings"]["serviceTier"]["supported"], false, "{runtime_id} has no service tier");
+            assert_eq!(caps["settings"]["steer"]["supported"], false, "{runtime_id} cannot steer mid-turn");
+            // Effort exists in the ACP protocol but no real Gemini or Qwen CLI
+            // verified it here, so it stays behind its gate.
+            assert_eq!(caps["settings"]["thinking"]["supported"], true, "{runtime_id}");
+            assert_eq!(caps["settings"]["thinking"]["enabled"], false, "{runtime_id}");
+        }
+        let unknown = dispatch(&st, "runtime.capabilities", json!({"runtimeId":"rt-mystery"})).await.unwrap();
+        for key in ["model", "thinking", "serviceTier", "instructions"] {
+            assert_eq!(unknown["settings"][key]["supported"], false, "{key} is not supported for an unknown provider");
+        }
+    }
+
     /// End-to-end: a turn fails on an expired CLI sign-in, then a later turn on
-    /// that runtime completes and clears the flag.
     #[tokio::test]
     async fn expired_sign_in_is_classified_and_a_completed_turn_clears_it() {
         let (st, mut events) = state();

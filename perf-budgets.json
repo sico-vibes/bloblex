@@ -1,0 +1,10 @@
+{
+  "$comment": "Phase 5, section 9. Budgets are the measurements below plus a margin, not rounded down to look tight. `scripts/perf-gate.mjs` checks cold start and the two snapshot sizes on a seeded database (200 conversations, 2,000 messages); apps/desktop/src/ui/perf.mounted.test.tsx checks renderMs. Every check is the median of 3 runs, because CI machines vary. Raising a number here is a decision that needs a reason in the commit message.",
+  "$measured": "2026-10-31, Lane D worktree at 71c857f, Windows 10, debug build (cargo build, as CI builds it), seeded with 200 conversations and 2,000 messages: cold start median 567 ms (first run on a cold file cache 1,933 ms), app.snapshot 1,060,106 bytes, lazy 452,586 bytes (42.7% of full). renderMs is provisional: the mounted test has not run yet (this lane has no node_modules); replace it with the measured median when it first runs.",
+  "runs": 3,
+  "coldStartMs": 4000,
+  "snapshotBytes": 1500000,
+  "snapshotLazyBytes": 700000,
+  "snapshotLazyRatio": 0.55,
+  "renderMs": 2000
+}

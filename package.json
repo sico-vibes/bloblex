@@ -17,7 +17,9 @@
     "desktop:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bundle-windows.ps1",
     "docs:build": "node scripts/docs-library.mjs build",
     "docs:check": "node scripts/docs-library.mjs check",
-    "docs:serve": "node scripts/docs-library.mjs serve"
+    "docs:serve": "node scripts/docs-library.mjs serve",
+    "perf": "node scripts/perf-gate.mjs",
+    "perf:render": "node scripts/perf-render.mjs"
   },
   "devDependencies": {
     "marked": "^18.1.1"

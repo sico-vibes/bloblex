@@ -2,10 +2,10 @@
 // group heading on that page, which the sheet scrolls to and flashes. Keep the
 // `group` strings equal to the `SettingsGroup title` values in SettingsSheet.
 
-export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Machines' | 'Connections' | 'Agents' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
+export type SettingsPageName = 'General' | 'Appearance' | 'Experimental' | 'Remote' | 'Machines' | 'Connections' | 'Agents' | 'Accounts' | 'Secrets' | 'Approvals' | 'Manager' | 'Memory' | 'Skills' | 'Speech' | 'Backup' | 'Health' | 'Updates'
 
 /** The page list, for anything that has to validate an incoming page name. */
-export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Machines', 'Connections', 'Agents', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health', 'Updates']
+export const SETTINGS_PAGE_NAMES: readonly SettingsPageName[] = ['General', 'Appearance', 'Experimental', 'Remote', 'Machines', 'Connections', 'Agents', 'Accounts', 'Secrets', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health', 'Updates']
 
 /**
  * The page out of an open-settings event payload (C13): a known page name, or
@@ -51,6 +51,9 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
   { page: 'Remote', group: 'Devices', label: 'Devices', keywords: 'paired phones tablets browsers list remove revoke tier' },
   { page: 'Remote', group: 'Safety', label: 'Approve requests from remote devices', keywords: 'permission approval remote security' },
   { page: 'Remote', group: 'Recent activity', label: 'Recent activity', keywords: 'log connections pairings approvals denied history' },
+  { page: 'Accounts', group: 'Accounts', label: 'Add an account', keywords: 'sign in login several second work personal claude codex opencode' },
+  { page: 'Accounts', group: 'Custom models', label: 'Custom models', keywords: 'model id effort catalog not listed' },
+  { page: 'Secrets', group: 'Secrets', label: 'Secrets', keywords: 'environment token key credential manager password' },
   { page: 'Machines', group: 'This machine', label: 'This machine\'s name', keywords: 'computer laptop rename' },
   { page: 'Machines', group: 'Other machines', label: 'Link a machine', keywords: 'computer laptop second pair take over handoff move' },
   { page: 'Connections', group: 'Bitbots MCP', label: 'Let outside sessions use Bitbots', keywords: 'mcp claude code connect terminal outside session external tools delegate' },

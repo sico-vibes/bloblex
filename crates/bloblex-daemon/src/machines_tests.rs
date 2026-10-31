@@ -1074,7 +1074,8 @@ async fn a_change_emits_machine_changed() {
     // Going away is a change too.
     crate::remote::disable(&other.st).await.unwrap();
     machines::refresh_one(&me, &other_id).await.unwrap();
-    assert_eq!(count(&me), after_first + 2);
+    // The background loop can notice the same change, so at least one more event, not exactly one.
+    assert!(count(&me) >= after_first + 2);
     assert_eq!(crate::remote::events_last(&me, "machine.changed").await["payload"]["state"], "offline");
     let _ = std::fs::remove_dir_all(my_dir);
 }

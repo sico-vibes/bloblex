@@ -19,6 +19,11 @@ pub mod connectivity;
 pub mod native;
 pub mod pairing;
 pub mod policy;
+/// Phase 5, section 7: Web Push encryption and signing.
+/// Nothing calls it yet: sending is the next chunk, so the dead-code lint is
+/// held off here until then.
+#[allow(dead_code)]
+pub mod push;
 pub mod tailscale;
 pub mod web;
 #[cfg(test)]
@@ -267,6 +272,8 @@ pub struct RemoteState {
     security_cache: StdMutex<Option<Security>>,
     /// The active method, read from `remote.method` once and refreshed on a write.
     method_cache: StdMutex<Option<String>>,
+    /// Phase 5, section 7: Web Push, its transport seam and its rate limit.
+    pub push: push::PushState,
     /// Test seam: the permission commands run for the native key file.
     #[cfg(test)]
     pub key_commands: StdMutex<Vec<Vec<String>>>,
@@ -308,6 +315,7 @@ impl RemoteState {
             abuse: StdMutex::new(AbuseState::default()),
             security_cache: StdMutex::new(None),
             method_cache: StdMutex::new(None),
+            push: push::PushState::default(),
             #[cfg(test)]
             key_commands: StdMutex::new(Vec::new()),
             #[cfg(test)]
@@ -1027,6 +1035,8 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
         "remote.security.get" => Ok(st.remote.security(st).to_value()),
         "remote.security.set" => security_set(st, p),
         "remote.activity.list" => activity_list(st, p),
+        "remote.push.get" => push::get_block(st),
+        "remote.push.set" => push::set(st, p),
         _ => Err(derr("unsupported", "method is not supported", StatusCode::NOT_FOUND)),
     }
 }
@@ -1172,6 +1182,8 @@ async fn devices_revoke(st: &AppState, p: &Value) -> Result<Value, DispatchError
         .remote_device_revoke(device_id, &now_rfc3339())
         .map_err(|error| derr("internal", &error.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
     st.remote.close_socket(device_id);
+    // A revoked device keeps no way to be reached.
+    let _ = st.db.remote_push_delete(device_id);
     audit(st, Some(device_id), "revoked", &format!("{} was removed.", existing["name"].as_str().unwrap_or("A device"))).await;
     st.emit("remote.device.changed", json!({"action": "revoked", "device": existing})).await;
     Ok(json!({"revoked": true}))

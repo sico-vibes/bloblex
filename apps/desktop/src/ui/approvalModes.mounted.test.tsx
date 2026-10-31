@@ -146,7 +146,7 @@ describe('settings modal', () => {
     await view.settle()
     const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === name)?.click() }) }
     const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
-    expect(nav).toEqual(['General', 'Appearance', 'Experimental', 'Remote', 'Machines', 'Connections', 'Agents', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health check', 'Updates'])
+    expect(nav).toEqual(['General', 'Appearance', 'Experimental', 'Remote', 'Machines', 'Connections', 'Agents', 'Accounts', 'Secrets', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health check', 'Updates'])
     expect(view.host.textContent).not.toMatch(/Add budget|pricing|subscription/i)
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(false)
@@ -194,7 +194,9 @@ describe('settings modal', () => {
     await act(async () => { runtimeHead.click() })
     expect(view.host.querySelector('.settings-facts')?.textContent).toContain('C:\\Tools\\codex.exe')
     expect(view.host.textContent).toContain('Bypass approvals')
-    expect(view.host.textContent).not.toMatch(/token|credential|secret/i)
+    // The page itself; the navigation now has a Secrets page.
+    const pageText = (view.host.textContent ?? '').replace(view.host.querySelector('.settings-nav')?.textContent ?? '', '')
+    expect(pageText).not.toMatch(/token|credential|secret/i)
     await act(async () => { view.host.querySelector<HTMLButtonElement>('[aria-label="Open Risky"]')?.click() })
     expect(opened).toEqual(['agent-2'])
     await act(async () => { view.host.querySelector<HTMLButtonElement>('[aria-label="Open Claude"]')?.click() })

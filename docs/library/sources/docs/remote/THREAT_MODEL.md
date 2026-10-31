@@ -261,3 +261,21 @@ A machine link is one Bitbots daemon acting as a paired device of another, throu
 **`.bitbots.json`.** A repository is someone else's input, and a setup script is code. The file does nothing until the owner trusts its exact bytes, a change stops it counting, it can never turn on Full access, and it's read from the project's own folder, never a conversation's copy. Only `project.sharedSettings.trust` and `.write` can record that trust, and it never travels in a backup or to a device.
 
 **What this doesn't cover.** A link at `operator` can pull any eligible conversation's text from that machine, and push its task branch to that machine's `origin`. That's what the owner approves when choosing that tier. Reading another machine's conversations is the same trust as reading them from a phone: paired machines are the owner's own. The review owed before a non-beta release (sections 8, 11 and 13) now covers this section too.
+
+## 17. Phone push (31 October 2026)
+
+Push goes through the phone maker's push service (FCM, Mozilla, WNS, Apple), so a third party carries the notification envelope. It is off by default, and turning it on is the owner's confirmed choice at the computer (`remote.push.set` with `confirm: true`).
+
+| Risk | What stops it |
+|---|---|
+| Message text, a tool name, a path or a project name reaching the push service | The payload is exactly `{title, sessionId}`. The title is "<bot> needs you" or "<bot>'s turn failed". Only that JSON is encrypted and sent; a test asserts that a permission card full of private text yields a body containing none of it. |
+| The push service reading the notification | The body is RFC 8291 `aes128gcm`, encrypted to the device's own `p256dh` key with its `auth` secret, so only that browser can read it. |
+| A forged sender to the push service | Every request carries an RFC 8292 VAPID token signed with the install's P-256 key, scoped to the push service's own origin. |
+| A device stealing or redirecting pushes | A device can only change its own subscription: the gateway puts the calling device's id in the call, and the phone cannot supply it. One row per device; revoking the device deletes it. |
+| A malicious endpoint (SSRF, exfiltration, redirects) | The endpoint must be `https`, with no user or password, on FCM, `*.push.services.mozilla.com`, `*.notify.windows.com` or `web.push.apple.com`. Anything else is `invalid_argument`. Sends use no proxy, follow no redirect and stop at ten seconds and 512 bytes of answer. |
+| Spamming the owner's phone | At most one push per conversation per minute, no sends in quiet hours, and a send only for a permission card or a failed turn. |
+| A dead subscription kept forever | A 404 or 410 from the push service deletes the row; any other failure is counted, recorded as the first `failed_at`, and logged only as fixed text. |
+| The VAPID private key leaking | It is generated once into `<data>/remote-push-key.pem` with `apply_key_permissions`, never returned by any method, never in a backup (every `remote.*` key is refused) and never logged. `Default`/`Debug` print the public point only. |
+| A phone subscribing while signed out | `push.*` are gateway-only calls with `tiers.json` rows, so a request without a paired device cookie is refused before it reaches the daemon. |
+
+**What this doesn't cover.** The push service learns that this install sends a notification, when, and to which subscription, and it can drop or delay it. Bitbots cannot know a notification was read. A bot's own name appears in the title, because the owner chose it.

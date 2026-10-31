@@ -41,7 +41,7 @@ const MODE_OPTIONS = [
   { value: 'auto', label: 'Auto-approve' },
   { value: 'bypass', label: 'Full access' },
 ]
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', gemini: 'Gemini CLI', qwen: 'Qwen Code' }
 
 function ModelRow({ runtime, value, onChange }: { runtime: Runtime; value: string; onChange: (value: string) => void }) {
   const query = useCachedRpc('runtime.models', { runtimeId: runtime.id })

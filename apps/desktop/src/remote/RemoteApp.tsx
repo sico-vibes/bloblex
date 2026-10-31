@@ -18,6 +18,7 @@ import type { RemoteMethodId, RemoteTier } from './remoteContract'
 import type { RemoteConnectionStatus, RemoteMe } from './remoteTransport'
 import { codeFromHash, createPreviewDeviceApi, describeThisDevice, errorCode, type RemoteDeviceApi } from './deviceApi'
 import { applyUpdate, onUpdateReady } from './serviceWorker'
+import { PushCard } from './PushCard'
 
 type Screen = 'checking' | 'connect' | 'waiting' | 'bots' | 'chat' | 'device'
 const TIER_WORD: Record<RemoteTier, string> = { viewer: 'View only', chat: 'Chat', operator: 'Chat and approve' }
@@ -548,6 +549,7 @@ function DeviceScreen({ me, noun, onLogout, layoutOverride, onLayoutChange }: { 
       <span className="rm-card-icon"><Download size={18} aria-hidden="true" /></span>
       <div><strong>Install Bitbots on this device</strong><small>On iPhone choose Share, then “Add to Home Screen”. On Android choose “Install app” in the browser menu. It opens full screen like an app.</small></div>
     </div>
+    <PushCard />
     <p className="rm-hint rm-device-hint">What this device may do is set on the computer, in Settings › Remote. A {noun} that needs approval waits there unless this device may approve.</p>
     <button type="button" className="rm-danger" onClick={onLogout}><LogOut size={16} aria-hidden="true" />Sign out of {me.host.name}</button>
   </section>

@@ -375,6 +375,12 @@ export const previewMode = true
 const repositoryDiff = (name: string, added: string[], removed: string[]) => [`diff --git a/${name} b/${name}`, `--- a/${name}`, `+++ b/${name}`, `@@ -1,${removed.length + 2} +1,${added.length + 2} @@`, ' import { render } from "./render"', ...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`), ' export {}'].join('\n')
 const fixtureStaged = new Map<string, string>()
 const withStaged = <T extends { files: Array<Record<string, unknown>> }>(answer: T): T => ({ ...answer, files: answer.files.map((file) => ({ ...file, staged: fixtureStaged.get(String(file.repositoryPath)) ?? 'none' })) })
+// Phase 5: accounts, custom models and secrets. `?secretrequest=1` shows a bot asking for one.
+let fixtureAccounts: Array<{ id: string; provider: string; name: string; signedIn: boolean; label: string | null; plan: string | null; bots: number }> = [{ id: 'preview-account-1', provider: 'claude', name: 'Work', signedIn: true, label: 'work@example.com', plan: 'max', bots: 2 }]
+let fixtureCustomModels: Array<{ id: string; provider: string; modelId: string; label: string; efforts: string[] }> = []
+let fixtureSecrets: Array<{ name: string; updatedAt: string | null; usedBy: string[] }> = [{ name: 'GITHUB_TOKEN', updatedAt: null, usedBy: ['Codex'] }]
+let fixtureSecretAnswered = false
+let fixturePushOn = false
 // Phase 4: another machine. `?machines=1` shows one, `?machines=offline` one that can't be reached.
 let fixtureSelfName = 'Home desktop'
 let fixtureMachineList: Array<Record<string, unknown>> | null = null
@@ -494,6 +500,22 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     await new Promise((resolve) => window.setTimeout(resolve, 700))
     return { steps: [{ id: 'commit', status: params.commitMessage ? 'done' : 'skipped', detail: null }, { id: 'push', status: 'done', detail: null }, { id: 'pr', status: 'done', detail: null }], url: 'https://github.com/preview/site/pull/13' } as T
   }
+  if (method === 'remote.push.get') return { enabled: fixturePushOn, publicKey: 'preview', devices: 0 } as T
+  if (method === 'remote.push.set') { fixturePushOn = params.enabled === true; return { enabled: fixturePushOn } as T }
+  if (method === 'account.list') return { accounts: fixtureAccounts } as T
+  if (method === 'account.create') { const account = { id: `preview-account-${fixtureAccounts.length + 1}`, provider: String(params.provider), name: String(params.name), signedIn: false, label: null, plan: null, bots: 0 }; fixtureAccounts = [...fixtureAccounts, account]; return { account } as T }
+  if (method === 'account.rename') { fixtureAccounts = fixtureAccounts.map((item) => item.id === params.id ? { ...item, name: String(params.name) } : item); return { ok: true } as T }
+  if (method === 'account.delete') { fixtureAccounts = fixtureAccounts.filter((item) => item.id !== params.id); return { ok: true } as T }
+  if (method === 'account.check') { fixtureAccounts = fixtureAccounts.map((item) => item.id === params.id ? { ...item, signedIn: true, label: 'work@example.com', plan: 'pro' } : item); return { ok: true } as T }
+  if (method === 'account.signIn') return { command: `$env:CLAUDE_CONFIG_DIR='C:\\Users\\you\\AppData\\Local\\Bitbots\\accounts\\${params.id}'; claude auth login` } as T
+  if (method === 'model.custom.list') return { models: fixtureCustomModels.filter((item) => item.provider === params.provider) } as T
+  if (method === 'model.custom.save') { const model = { id: `preview-model-${fixtureCustomModels.length + 1}`, provider: String(params.provider), modelId: String(params.modelId), label: String(params.label), efforts: params.efforts as string[] }; fixtureCustomModels = [...fixtureCustomModels, model]; return { model } as T }
+  if (method === 'model.custom.delete') { fixtureCustomModels = fixtureCustomModels.filter((item) => item.id !== params.id); return { ok: true } as T }
+  if (method === 'secret.list') return { secrets: fixtureSecrets } as T
+  if (method === 'secret.set') { fixtureSecrets = [...fixtureSecrets.filter((item) => item.name !== params.name), { name: String(params.name), updatedAt: new Date().toISOString(), usedBy: [] }]; return { ok: true } as T }
+  if (method === 'secret.delete') { fixtureSecrets = fixtureSecrets.filter((item) => item.name !== params.name); return { ok: true } as T }
+  if (method === 'secret.request.list') return { requests: flags().get('secretrequest') && !fixtureSecretAnswered ? [{ id: 'preview-request', sessionId: 'session-codex', name: 'DEPLOY_TOKEN', reason: 'I need it to check the staging deploy finished.', botName: 'Codex', expiresAt: null }] : [] } as T
+  if (method === 'secret.request.answer' || method === 'secret.request.decline') { fixtureSecretAnswered = true; return { ok: true } as T }
   if (method === 'machine.self') return { id: 'preview-self', name: fixtureSelfName, version: '0.1.0-beta.44' } as T
   if (method === 'machine.self.rename') { fixtureSelfName = String(params.name); return { id: 'preview-self', name: fixtureSelfName, version: '0.1.0-beta.44' } as T }
   if (method === 'machine.list') return { machines: fixtureMachines() } as T

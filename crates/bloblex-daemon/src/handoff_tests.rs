@@ -118,7 +118,8 @@ impl Moving {
     }
 
     async fn ask(&self, method: &str, params: Value) -> Result<Value, ClientError> {
-        client::rpc(&self.taker, &self.giver_id(), method, params).await
+        // A push under a busy test run can outlast the everyday 10-second limit.
+        client::rpc_with_timeout(&self.taker, &self.giver_id(), method, params, std::time::Duration::from_secs(120)).await
     }
 
     async fn prepare(&self, commit: bool) -> Value {

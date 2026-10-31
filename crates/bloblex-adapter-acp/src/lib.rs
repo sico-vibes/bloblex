@@ -328,7 +328,7 @@ impl AcpAdapter {
         // cwd and from `session/new`; `acp --cwd` only exists on 1.x and makes a
         // 2.x CLI print help instead of answering JSON-RPC.
         cmd.args(&runtime.args)
-            .arg("acp")
+            .args(bloblex_runtime::acp_launch_args(&runtime.provider))
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1341,7 +1341,7 @@ impl AgentAdapter for AcpAdapter {
         let mut cmd = Command::new(&runtime.executable);
         prepare_command(&mut cmd);
         cmd.args(&runtime.args)
-            .arg("acp")
+            .args(bloblex_runtime::acp_launch_args(&runtime.provider))
             .arg("--help")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1357,7 +1357,7 @@ impl AgentAdapter for AcpAdapter {
             return Err(AdapterError::Unsupported("OpenCode ACP is unavailable".into()));
         }
         Ok(ProbeResult {
-            provider: "opencode".into(),
+            provider: runtime.provider.clone(),
             version: None,
             protocol: "acp-v1".into(),
             authenticated: None,

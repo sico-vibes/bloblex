@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { ChevronDown, Plus, RotateCcw, SquareTerminal, X } from 'lucide-react'
+import { Bot, ChevronDown, Plus, RotateCcw, SquareTerminal, X } from 'lucide-react'
 import { terminalClose, terminalList, terminalOpen, terminalResize, terminalWrite, type TerminalExit, type TerminalShell } from '../tauri'
 import { attachTerminal, forgetTerminal, startTerminalHub } from './terminalHub'
+import type { Session } from '../types'
+import { BotCommands, botCommands } from './BotCommands'
+import { openSafeLink } from './openSafeLink'
+import { terminalLinks } from './terminalLinks'
 import './terminal.css'
 
 type Tab = { id: string; shell: string; cwd: string; exited: boolean; exitCode: number | null }
@@ -71,6 +75,13 @@ function TerminalView({ tab, active, onExit, onFocusLost }: { tab: Tab; active: 
     const fitAddon = new FitAddon()
     instance.loadAddon(fitAddon)
     instance.open(node)
+    const links = instance.registerLinkProvider({
+      provideLinks: (lineNumber, callback) => {
+        const line = instance.buffer.active.getLine(lineNumber - 1)?.translateToString(true) ?? ''
+        const found = terminalLinks(line)
+        callback(found.length ? found.map((link) => ({ text: link.url, range: { start: { x: link.start, y: lineNumber }, end: { x: link.end, y: lineNumber } }, activate: () => openSafeLink(link.url) })) : undefined)
+      },
+    })
     term.current = instance
     fit.current = fitAddon
     // Keys the app keeps: Ctrl+` hides the dock; copy and paste behave like the rest of Windows.
@@ -103,6 +114,7 @@ function TerminalView({ tab, active, onExit, onFocusLost }: { tab: Tab; active: 
       cancelAnimationFrame(frame)
       observer.disconnect()
       retheme.disconnect()
+      links.dispose()
       detach()
       input.dispose()
       resized.dispose()
@@ -125,8 +137,10 @@ function TerminalView({ tab, active, onExit, onFocusLost }: { tab: Tab; active: 
  * Real shells in the selected project's folder (Windows ConPTY through the desktop shell). The dock stays mounted
  * while hidden, so closing it does not end a running command; closing a tab does.
  */
-export function TerminalDock({ open, projectPath, onHide, onError }: { open: boolean; projectPath: string | null; onHide: () => void; onError: (message: string) => void }) {
+export function TerminalDock({ open, projectPath, onHide, onError, session, botName = 'The bot' }: { open: boolean; projectPath: string | null; onHide: () => void; onError: (message: string) => void; session?: Session | null; botName?: string }) {
   const [tabs, setTabs] = useState<Tab[]>([])
+  const [botView, setBotView] = useState(false)
+  const commandCount = botCommands(session).length
   const [activeId, setActiveId] = useState<string | null>(null)
   const [height, setHeight] = useState(storedHeight)
   const [menu, setMenu] = useState(false)
@@ -222,9 +236,12 @@ export function TerminalDock({ open, projectPath, onHide, onError }: { open: boo
     <header className="terminal-head">
       <div className="terminal-tabs" role="tablist" aria-label="Terminals">
         {tabs.map((tab) => <div key={tab.id} className={`terminal-tab${tab.id === activeId ? ' active' : ''}${tab.exited ? ' exited' : ''}`}>
-          <button type="button" role="tab" aria-selected={tab.id === activeId} className="terminal-tab-button" onClick={() => setActiveId(tab.id)} title={tab.cwd}><SquareTerminal size={13} aria-hidden="true" /><span>{shellLabel(tab.shell)}</span><small>{folderOf(tab.cwd)}</small></button>
+          <button type="button" role="tab" aria-selected={tab.id === activeId} className="terminal-tab-button" onClick={() => { setBotView(false); setActiveId(tab.id) }} title={tab.cwd}><SquareTerminal size={13} aria-hidden="true" /><span>{shellLabel(tab.shell)}</span><small>{folderOf(tab.cwd)}</small></button>
           <button type="button" className="terminal-tab-close" aria-label={`Close ${shellLabel(tab.shell)} in ${folderOf(tab.cwd)}`} title="Close terminal" onClick={() => closeTab(tab.id)}><X size={12} aria-hidden="true" /></button>
         </div>)}
+        {session && <div className={`terminal-tab${botView ? ' active' : ''}`}>
+          <button type="button" role="tab" aria-selected={botView} className="terminal-tab-button" title={`Commands ${botName} ran, read only`} onClick={() => setBotView(true)}><Bot size={13} aria-hidden="true" /><span>{botName}</span><small>{commandCount}</small></button>
+        </div>}
       </div>
       <div className="terminal-actions">
         <div className="terminal-new" ref={menuRef}>
@@ -236,9 +253,10 @@ export function TerminalDock({ open, projectPath, onHide, onError }: { open: boo
       </div>
     </header>
     <div className="terminal-body">
-      {tabs.map((tab) => <TerminalView key={tab.id} tab={tab} active={tab.id === activeId && open} onFocusLost={onHide} onExit={(exit) => setTabs((current) => current.map((item) => (item.id === tab.id ? { ...item, exited: true, exitCode: exit.exitCode } : item)))} />)}
-      {!tabs.length && <div className="terminal-empty">{projectPath ? (busy ? 'Starting a terminal…' : 'No terminal is open.') : 'Open a conversation in a project to start a terminal in its folder.'}</div>}
-      {active?.exited && <div className="terminal-exited" role="status"><span>The shell ended{active.exitCode === null ? '' : ` with code ${active.exitCode}`}.</span><button type="button" className="secondary-button small" onClick={() => void restart(active)}><RotateCcw size={12} aria-hidden="true" />Restart</button></div>}
+      {tabs.map((tab) => <TerminalView key={tab.id} tab={tab} active={tab.id === activeId && open && !botView} onFocusLost={onHide} onExit={(exit) => setTabs((current) => current.map((item) => (item.id === tab.id ? { ...item, exited: true, exitCode: exit.exitCode } : item)))} />)}
+      {botView && session && <BotCommands session={session} botName={botName} />}
+      {!botView && !tabs.length && <div className="terminal-empty">{projectPath ? (busy ? 'Starting a terminal…' : 'No terminal is open.') : 'Open a conversation in a project to start a terminal in its folder.'}</div>}
+      {!botView && active?.exited && <div className="terminal-exited" role="status"><span>The shell ended{active.exitCode === null ? '' : ` with code ${active.exitCode}`}.</span><button type="button" className="secondary-button small" onClick={() => void restart(active)}><RotateCcw size={12} aria-hidden="true" />Restart</button></div>}
     </div>
   </section>
 }

@@ -8,6 +8,7 @@ chrono.workspace = true
 async-trait.workspace = true
 bloblex-agent-core = { path = "../bloblex-agent-core" }
 bloblex-process = { path = "../bloblex-process" }
+bloblex-runtime = { path = "../bloblex-runtime" }
 futures-util.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 tokio.workspace = true

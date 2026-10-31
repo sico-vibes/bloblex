@@ -8,6 +8,7 @@ name = "bitbotsd"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm.workspace = true
 argon2.workspace = true
 async-trait.workspace = true
 axum.workspace = true
@@ -23,7 +24,9 @@ bloblex-adapter-codex = { path = "../bloblex-adapter-codex" }
 bloblex-adapter-claude = { path = "../bloblex-adapter-claude" }
 chrono.workspace = true
 futures-util.workspace = true
+hkdf.workspace = true
 if-addrs.workspace = true
+p256.workspace = true
 igd-next.workspace = true
 rcgen.workspace = true
 rustls.workspace = true

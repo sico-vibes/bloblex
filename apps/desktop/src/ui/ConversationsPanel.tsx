@@ -4,6 +4,7 @@
 // under the conversation that started them.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { MachineBadge } from './MachineBots'
+import { hasSettled, settleOrder } from './sidebarOrder'
 import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Tag, Trash2 } from 'lucide-react'
 import type { Agent, Project, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
@@ -100,7 +101,8 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
     if (above.length) setExpanded((current) => { const next = new Set(current); for (const id of above) next.add(id); return next })
   }, [tree, activeId])
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
-  const groups = useMemo(() => conversationsByProject(shown, projects), [shown, projects])
+  // Phase 6: a finished conversation settles below the live ones in its project.
+  const groups = useMemo(() => conversationsByProject(shown, projects).map((group) => ({ ...group, nodes: settleOrder(group.nodes, (node) => hasSettled(node.session, now, false)) })), [shown, projects, now])
   const fallback = defaultProjectFor(agent, projects)
   const [menu, setMenu] = useState<{ items: MenuItem[]; label: string; x: number; y: number; trigger: HTMLElement } | null>(null)
   const lastTrigger = useRef<HTMLElement | null>(null)

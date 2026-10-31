@@ -611,12 +611,7 @@ async fn call(st: &AppState, machine_id: &str, method: &str, params: Value, limi
 }
 
 fn provider_label(provider: &str) -> &str {
-    match provider {
-        "claude" => "Claude Code",
-        "codex" => "Codex",
-        "opencode" => "OpenCode",
-        other => other,
-    }
+    bloblex_runtime::provider_display_name(provider)
 }
 
 /// The local bot for the other machine's: the same id, else the same name and provider.

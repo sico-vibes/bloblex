@@ -754,6 +754,18 @@ async fn rpc_post(State(state): State<WebState>, headers: HeaderMap, body: Bytes
             RemoteFailure::new(StatusCode::BAD_REQUEST, "invalid_params", reason),
         );
     }
+    // A push call may only change the calling device's own subscription, so the
+    // gateway puts the device's own id in the request; a phone cannot choose it,
+    // and anything it sends under `deviceId` is replaced here.
+    let mut params = params;
+    if method.starts_with("push.") {
+        match params.as_object_mut() {
+            Some(object) => {
+                object.insert("deviceId".to_string(), Value::String(device.id.clone()));
+            }
+            None => params = json!({"deviceId": device.id}),
+        }
+    }
     match dispatch(&state.daemon, &method, params).await {
         Ok(result) => {
             if let Some(kind) = audit_kind(&method) {

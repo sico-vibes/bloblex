@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import { VisualReply, visualFence } from './VisualReply'
 import { Copy, Github, Paperclip } from 'lucide-react'
 import { RichChart } from './RichChart'
 import { RichTable } from './RichTable'
@@ -146,7 +147,10 @@ function FencedBlock({ language, code }: { language: string; code: string }) {
     if (tag === 'json') return /^\s*\[/.test(code) ? { kind: 'dual', result: tableFromJson(code), initial: 'code' } : null
     return null
   }, [tag, code])
-  if (!parsed) return <CodeBlock language={language} code={code} />
+  if (!parsed) {
+    const visual = visualFence(language, code)
+    return visual ? <VisualReply code={code} start={visual.start} renderCode={() => <CodeBlock language={language} code={code} />} /> : <CodeBlock language={language} code={code} />
+  }
   if (!parsed.result.ok) {
     return parsed.kind === 'dual' ? <CodeBlock language={language} code={code} /> : <><RawNote>{`This ${parsed.kind} block can't be drawn: ${parsed.result.reason} The raw block follows.`}</RawNote><CodeBlock language={language} code={code} /></>
   }

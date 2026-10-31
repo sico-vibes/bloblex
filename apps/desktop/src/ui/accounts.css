@@ -1,0 +1,28 @@
+/* Phase 5: accounts, custom models and secrets. */
+.account-default { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-xs); }
+.account-row { display: grid; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.account-row-main { display: flex; align-items: center; gap: 6px; }
+.account-row-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.account-row-copy strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; }
+.account-row-copy small { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.account-sign-in { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 6px; }
+.account-sign-in small { grid-column: 1 / -1; color: var(--text-3); font-size: var(--fs-2xs); }
+.account-command { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 4px 4px 8px; border-radius: var(--radius-sm); background: var(--surface-hover); }
+.account-command code { flex: 1; min-width: 0; overflow-x: auto; color: var(--text-1); font: var(--fs-2xs) var(--font-mono); white-space: nowrap; }
+.account-add { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.account-add .text-input { flex: 1; min-width: 0; }
+.custom-models { display: grid; gap: 6px; padding: 0 12px 10px; }
+.custom-model { display: flex; align-items: center; gap: 8px; }
+.custom-model > span { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.custom-model strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; }
+.custom-model small { overflow: hidden; color: var(--text-3); font-size: var(--fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.custom-model code { font: var(--fs-2xs) var(--font-mono); }
+.custom-model-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; }
+.secret-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; color: var(--text-3); border-top: 1px solid var(--line); }
+.secret-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.blob-dialog.secret-request { width: min(460px, calc(100% - 32px)); background: color-mix(in srgb, var(--surface-overlay) 30%, Canvas); }
+.secret-reason { margin: 0; color: var(--text-2); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bot-secret { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: var(--text-2); font-size: var(--fs-xs); }
+.bot-secret code { color: var(--text-1); font: var(--fs-2xs) var(--font-mono); }
+.bot-secret > span { flex: 1; min-width: 0; color: var(--text-3); }
+.bot-secret-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; padding: 8px 12px; }

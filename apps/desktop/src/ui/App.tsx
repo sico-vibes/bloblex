@@ -60,6 +60,7 @@ import { openChangesInMainWindow, useOpenChangesRequests } from './changesChanne
 import { CompanionMachineBots, MovedBar, MachineConversation } from './MachineConversation'
 import { MachineBadge, MachineGroups, useOpenMachineBotRequests } from './MachineBots'
 import { useMachines } from './machines'
+import { SecretRequests } from './SecretsPage'
 import { DiffBody, DiffModeSwitch, useDiffMode } from './DiffBody'
 import { pullRequestPrompt, repositoryRefreshKey, useSessionRepository, type RepositoryState } from './sessionRepository'
 import { WorkingBotsPanel } from './WorkingBotsPanel'
@@ -2982,7 +2983,7 @@ ${fileReferenceText(sentFile)}` : typed
           </div>}
         </>}
         </>}
-        {!tasksOpen && !compareOpen && <TerminalDock open={terminalDockOpen} projectPath={selectedSession && !isDraftSession(selectedSession) ? selectedSession.projectPath ?? null : null} onHide={() => setTerminalDockOpen(false)} onError={(message) => setError(message)} />}
+        {!tasksOpen && !compareOpen && <TerminalDock session={selectedSession && !isDraftSession(selectedSession) ? selectedSession : null} botName={activeSelectedAgent?.name ?? 'The bot'} open={terminalDockOpen} projectPath={selectedSession && !isDraftSession(selectedSession) ? selectedSession.projectPath ?? null : null} onHide={() => setTerminalDockOpen(false)} onError={(message) => setError(message)} />}
       </section>
 
       <aside className="context-pane" aria-label="Conversation details" aria-hidden={!detailsVisible} inert={!detailsVisible}>
@@ -3062,6 +3063,7 @@ ${fileReferenceText(sentFile)}` : typed
       }} onCancel={() => setRevertTarget(null)} />}
       {diffViewer && <DiffViewer path={diffViewer.path} content={diffViewer.content} onClose={() => setDiffViewer(null)} />}
       {projectSearchOpen && !companion && <ProjectSearchDialog target={fileSearchTarget} canPreview={!!selectedSession && !isDraftSession(selectedSession)} onClose={() => setProjectSearchOpen(false)} onMention={insertReference} />}
+      <SecretRequests active={connection === 'connected'} />
       {viewedMachine && viewedMachineBot && !companion && <MachineConversation machine={viewedMachine} bot={viewedMachineBot} selfId={machineSelfId} onClose={() => setMachineView(null)} onMoved={(sessionId) => { setMachineView(null); setMovedHere(sessionId); void refresh(); void reloadMachines() }} />}
       {changesFor && selectedSession?.id === changesFor.sessionId && !companion && <ChangesView sessionId={changesFor.sessionId} initialPath={changesFor.path} botName={activeSelectedAgent?.name ?? 'The bot'} onClose={() => setChangesFor(null)} onSendComments={(text) => sendReviewComments(changesFor.sessionId, text)} onCreatePr={(repository) => { setChangesFor(null); setPullRequestFor({ sessionId: changesFor.sessionId, repository }) }} />}
       {pullRequestFor && selectedSession?.id === pullRequestFor.sessionId && <PullRequestDialog sessionId={pullRequestFor.sessionId} onCreated={() => void refresh()} repository={pullRequestFor.repository} botName={activeSelectedAgent?.name ?? 'The bot'} busy={['working', 'starting', 'waiting_permission', 'cancelling'].includes(selectedSession.state ?? '')} onSend={() => requestPullRequest(pullRequestFor.sessionId, pullRequestFor.repository)} onClose={() => setPullRequestFor(null)} />}

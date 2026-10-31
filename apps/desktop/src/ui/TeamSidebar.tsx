@@ -2,7 +2,7 @@
 // bots, the Manager pinned on top. Bots work in every project; a bot's
 // conversations are grouped by project in its conversations panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, Check, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
+import { Archive, ArrowDownUp, Check, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { rpc } from '../tauri'
 import { agentLook } from '../blob/look'
@@ -18,6 +18,7 @@ import { conversationPreview, isManager, mainSessionFor, managerOf, rosterAgents
 import { friendlyErrorText } from './errorCopy'
 import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
+import { SIDEBAR_SORTS, groupBotsByProject, sortBots, storeSidebarGrouping, storeSidebarSort, storedSidebarGrouping, storedSidebarSort } from './sidebarOrder'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
 
@@ -224,8 +225,12 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const manager = managerOf(agents)
   const pinned = pinnedIds.map((id) => agents.find((agent) => agent.id === id && !agent.archived && (showHidden || !agent.hidden))).filter((agent): agent is Agent => !!agent)
   const hiddenCount = agents.filter((agent) => !agent.archived && agent.hidden).length
-  const rows = roster.filter((agent) => !pinnedIds.includes(agent.id))
-  const rowOrder = [...pinned, ...rows]
+  const [sort, setSort] = useState(storedSidebarSort)
+  const [grouped, setGrouped] = useState(storedSidebarGrouping)
+  const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null)
+  const rows = sortBots(roster.filter((agent) => !pinnedIds.includes(agent.id)), sessions, sort)
+  const groups = grouped ? groupBotsByProject(rows, projects) : null
+  const rowOrder = [...pinned, ...(groups ? groups.flatMap((group) => group.agents) : rows)]
   const closeMenu = () => { setMenu(null); requestAnimationFrame(() => menuTrigger.current?.focus()) }
 
   const openBlobMenu = (agent: Agent, x: number, y: number, trigger: HTMLElement | null) => { menuTrigger.current = trigger; setMenu({ kind: 'blob', agent, x, y }) }
@@ -403,15 +408,22 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <section className="team-group" aria-label={Nouns}>
         <div className="team-group-head static">
           <span className="team-group-title"><span>{Nouns}</span></span>
-          <span className="team-group-actions"><button type="button" className="icon-button tiny" aria-label={`New ${noun}`} title={`New ${noun}`} onClick={() => actions.onCreate(null)}><Plus size={14} /></button></span>
+          <span className="team-group-actions"><button type="button" className="icon-button tiny" aria-label={`Sort ${nouns}`} title={`Sort ${nouns}`} aria-haspopup="menu" onClick={(event) => { menuTrigger.current = event.currentTarget; const rect = event.currentTarget.getBoundingClientRect(); setSortMenu({ x: rect.left, y: rect.bottom + 4 }) }}><ArrowDownUp size={13} /></button><button type="button" className="icon-button tiny" aria-label={`New ${noun}`} title={`New ${noun}`} onClick={() => actions.onCreate(null)}><Plus size={14} /></button></span>
         </div>
-        <div className="team-group-rows" role="group">{rows.map(renderRow)}</div>
+        {groups
+          ? groups.map((group) => <div key={group.id} role="group" aria-label={group.name}><div className="team-subgroup-head">{group.name}</div><div className="team-group-rows">{group.agents.map(renderRow)}</div></div>)
+          : <div className="team-group-rows" role="group">{rows.map(renderRow)}</div>}
       </section>
       {agents.filter((agent) => !agent.archived).length === 0 && <p className="team-group-empty">No {nouns} yet. Create one to start chatting.</p>}
       </div>
       {machines}
       {hiddenCount > 0 && <button type="button" className="team-hidden-toggle" onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={13} /> : <Eye size={13} />}{showHidden ? `Hide hidden ${nouns}` : `Show ${hiddenCount} hidden ${noun}${hiddenCount === 1 ? '' : 's'}`}</button>}
     </nav>
+    {sortMenu && <TeamMenu label={`Sort ${nouns}`} position={sortMenu} onClose={() => { setSortMenu(null); requestAnimationFrame(() => menuTrigger.current?.focus()) }} items={[
+      ...SIDEBAR_SORTS.map((item): MenuItem => ({ label: item.label, checked: sort === item.id, onSelect: () => { setSort(item.id); storeSidebarSort(item.id) } })),
+      'separator',
+      { label: 'Group by project', checked: grouped, onSelect: () => { setGrouped(!grouped); storeSidebarGrouping(!grouped) } },
+    ]} />}
     {menu?.kind === 'blob' && <TeamMenu label={`${menu.agent.name} actions`} position={menu} items={blobMenu(menu.agent)} onClose={closeMenu} />}
     {menu?.kind === 'move' && <TeamMenu label={`${menu.agent.name}'s default project`} position={menu} items={moveMenu(menu.agent)} onClose={closeMenu} />}
     {tagTarget && <TagEditor target={tagTarget} onClose={() => { setTagTarget(null); requestAnimationFrame(() => menuTrigger.current?.focus()) }} />}

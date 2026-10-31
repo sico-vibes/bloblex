@@ -1108,6 +1108,27 @@
       "params": null
     },
     {
+      "method": "push.key",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "A paired device needs the VAPID public key to subscribe to pushes. It is public and holds no secret.",
+      "params": null
+    },
+    {
+      "method": "push.subscribe",
+      "class": "chat",
+      "minTier": "viewer",
+      "why": "Subscribing stores this device's own push endpoint, so it needs a device that may talk to the host.",
+      "params": null
+    },
+    {
+      "method": "push.unsubscribe",
+      "class": "chat",
+      "minTier": "viewer",
+      "why": "Removing a subscription changes this device's own row, so it needs the same tier as subscribing.",
+      "params": null
+    },
+    {
       "method": "remote.method.set",
       "class": "never",
       "minTier": null,

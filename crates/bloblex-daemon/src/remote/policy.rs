@@ -769,7 +769,17 @@ mod tests {
             assert!(!rule.why.trim().is_empty(), "empty why for {}", rule.method);
             match rule.class {
                 MethodClass::Read => assert_eq!(rule.min_tier, Some(Tier::Viewer), "{}", rule.method),
-                MethodClass::Chat => assert_eq!(rule.min_tier, Some(Tier::Chat), "{}", rule.method),
+                // The one exception to "chat class needs the chat tier": a push subscription is the
+                // calling device's own row (the gateway supplies its id, a phone cannot choose it),
+                // and a viewer device is exactly the one whose phone needs the notification.
+                MethodClass::Chat => {
+                    let expected = if matches!(rule.method.as_str(), "push.subscribe" | "push.unsubscribe") {
+                        Tier::Viewer
+                    } else {
+                        Tier::Chat
+                    };
+                    assert_eq!(rule.min_tier, Some(expected), "{}", rule.method)
+                }
                 MethodClass::Approve | MethodClass::Handoff => assert_eq!(rule.min_tier, Some(Tier::Operator), "{}", rule.method),
                 MethodClass::Never => assert_eq!(rule.min_tier, None, "{}", rule.method),
             }

@@ -1,0 +1,4 @@
+# The pin is a copy of what `codex app-server generate-json-schema` wrote, and
+# `pwsh scripts/codex-schema.ps1 -Check` compares it. Git must not rewrite the
+# line endings on checkout, or every Windows clone would look out of date.
+* -text

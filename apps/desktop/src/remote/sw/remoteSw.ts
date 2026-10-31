@@ -103,6 +103,26 @@ sw.addEventListener('activate', (raw) => {
   })())
 })
 
+// Phase 6: a notice from the computer. It holds a title and a conversation id, nothing else.
+sw.addEventListener('push', (raw) => {
+  const event = raw as SwEvent & { data?: { json(): { title?: unknown; sessionId?: unknown } } | null }
+  let body: { title?: unknown; sessionId?: unknown } = {}
+  try { body = event.data?.json() ?? {} } catch { /* a notice we can't read still says something */ }
+  const title = typeof body.title === 'string' && body.title ? body.title : 'Bitbots'
+  const sessionId = typeof body.sessionId === 'string' ? body.sessionId : null
+  const worker = self as unknown as { registration: { showNotification(title: string, options: unknown): Promise<void> } }
+  event.waitUntil(worker.registration.showNotification(title, { tag: sessionId ?? 'bitbots', icon: '/icons/icon-192.png', data: { sessionId } }))
+})
+
+sw.addEventListener('notificationclick', (raw) => {
+  const event = raw as SwEvent & { notification: { close(): void; data?: { sessionId?: string | null } } }
+  event.notification.close()
+  const sessionId = event.notification.data?.sessionId
+  const clients = (self as unknown as { clients: { matchAll(options: unknown): Promise<Array<{ focus(): Promise<unknown>; navigate(url: string): Promise<unknown> }>>; openWindow(url: string): Promise<unknown> } }).clients
+  const target = sessionId ? `/?session=${encodeURIComponent(sessionId)}` : '/'
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((open) => open[0] ? open[0].navigate(target).then(() => open[0].focus()) : clients.openWindow(target)))
+})
+
 sw.addEventListener('message', (raw) => {
   const data = (raw as SwMessageEvent).data as { type?: unknown } | null
   if (data && data.type === 'skip-waiting') void sw.skipWaiting()

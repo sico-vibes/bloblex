@@ -2,6 +2,8 @@ use bloblex_protocol::{AuthState, ProtocolFamily};
 use bloblex_process::{prepare_command, ProcessTree};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+pub mod providers;
+pub use providers::{acp_launch_args, acp_provider, discovery_ids, is_acp_provider, AcpProvider, ACP_PROVIDERS};
 use std::{
     collections::BTreeMap,
     env,
@@ -210,14 +212,22 @@ async fn read_probe_stream(mut stream: impl tokio::io::AsyncRead + Unpin) -> std
 
 pub async fn discover() -> Vec<DiscoveredRuntime> {
     // Resolve away from the async executor; PATH may include slow network drives.
-    let specs = tokio::task::spawn_blocking(|| ["claude", "codex", "opencode"].map(|id| (id, resolve_command(id)))).await;
-    let Ok([claude, codex, opencode]) = specs else { return Vec::new(); };
+    let specs = tokio::task::spawn_blocking(|| discovery_ids().map(|id| (id, resolve_command(id)))).await;
+    let Ok([claude, codex, opencode, gemini, qwen]) = specs else { return Vec::new(); };
     // The OpenCode stored-credential check is CLI-free and only ever reads
     // these four variables; tests pass a synthetic set instead.
     let environment = opencode_environment();
-    collect_discovery(discover_one(claude.0, claude.1, &environment), discover_one(codex.0, codex.1, &environment), discover_one(opencode.0, opencode.1, &environment)).await
+    let (a, b, c, d, e) = tokio::join!(
+        discover_one(claude.0, claude.1, &environment),
+        discover_one(codex.0, codex.1, &environment),
+        discover_one(opencode.0, opencode.1, &environment),
+        discover_one(gemini.0, gemini.1, &environment),
+        discover_one(qwen.0, qwen.1, &environment)
+    );
+    [a, b, c, d, e].into_iter().flatten().collect()
 }
 
+#[cfg(test)]
 async fn collect_discovery(a: impl std::future::Future<Output = Option<DiscoveredRuntime>>, b: impl std::future::Future<Output = Option<DiscoveredRuntime>>, c: impl std::future::Future<Output = Option<DiscoveredRuntime>>) -> Vec<DiscoveredRuntime> {
     let (a, b, c) = tokio::join!(a, b, c);
     [a, b, c].into_iter().flatten().collect()
@@ -238,7 +248,7 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: 
     let mut runtime = DiscoveredRuntime {
         id: format!("rt_{id}_{}", short_hash(&resolved.executable.to_string_lossy())),
         host_id: "host_windows_local".into(), provider: id.into(), display_name: provider_display_name(id).into(),
-        protocol_family: match id { "opencode" => ProtocolFamily::Acp, "codex" => ProtocolFamily::CodexAppServer, _ => ProtocolFamily::ClaudeStream },
+        protocol_family: match id { "codex" => ProtocolFamily::CodexAppServer, p if is_acp_provider(p) => ProtocolFamily::Acp, _ => ProtocolFamily::ClaudeStream },
         executable_path: resolved.executable.to_string_lossy().into_owned(), launch_args: resolved.args.clone(),
         version: None, auth_state: AuthState::Unknown, gateway_auth_states: BTreeMap::new(),
         status: "error".into(), capabilities: BTreeMap::new(), probe_error: None, probe_step: None,
@@ -255,6 +265,9 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: 
     let supported = help.as_ref().is_ok_and(|help| match id {
         "opencode" => help.contains("ACP") || help.contains("acp"),
         "codex" => help.contains("app-server"),
+        // A table provider proves itself by advertising the flag it is launched
+        // with (`--acp`); that is the check the installed CLI can answer.
+        p if is_acp_provider(p) => help.contains("acp") || help.contains("ACP"),
         _ => help.contains("--input-format") && help.contains("stream-json"),
     });
     if !supported {
@@ -272,11 +285,23 @@ async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environment: 
         runtime.probe_error = Some(error.into());
     }
     for key in ["newSession", "resume", "cancel", "permissions", "usage", "files"] {
-        runtime.capabilities.insert(key.into(), matches!((id, key), (_, "newSession" | "cancel") | ("claude" | "codex", "resume" | "usage") | ("codex" | "opencode", "permissions")));
+        // A table provider runs the same ACP adapter as OpenCode, so it has the
+        // same honest capabilities: sessions, turns, tools, approvals and the
+        // models `session/new` reports. No resume, no usage.
+        let supported = match key {
+            "newSession" | "cancel" => true,
+            "resume" | "usage" => matches!(id, "claude" | "codex"),
+            "permissions" => id == "codex" || is_acp_provider(id),
+            _ => false,
+        };
+        runtime.capabilities.insert(key.into(), supported);
     }
     Some(runtime)
 }
-fn provider_display_name(provider: &str) -> &'static str { match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" } }
+pub fn provider_display_name(provider: &str) -> &'static str {
+    if let Some(row) = acp_provider(provider) { return row.display_name; }
+    match provider { "claude" => "Claude Code", "codex" => "Codex", "opencode" => "OpenCode", _ => "Coding agent" }
+}
 async fn auth_status(provider: &str, exe: &Path, args: &[String], environment: &[(String, String)]) -> (AuthState, BTreeMap<String, AuthState>, Option<&'static str>) {
     if provider == "opencode" {
         return opencode_auth_status(exe, args, environment).await;
@@ -1050,5 +1075,51 @@ mod tests {
         std::fs::create_dir_all(&data_dir).unwrap();
         assert!(opencode_stored_gateways(&[("USERPROFILE".to_string(), dir.to_string_lossy().into_owned())]).is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A CLI that answers the two probes a table provider gets: `--version`,
+    /// then `--help` naming the ACP flag it is launched with.
+    fn acp_fixture() -> ResolvedCommand {
+        #[cfg(windows)]
+        { ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec!["/d".into(), "/c".into(), "echo 4.5.6 & echo --acp".into()] } }
+        #[cfg(not(windows))]
+        { ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec!["-c".into(), "printf '4.5.6\\n--acp\\n'".into()] } }
+    }
+
+    #[tokio::test]
+    async fn a_table_provider_is_discovered() {
+        for (id, display, command) in [("gemini", "Gemini CLI", "gemini"), ("qwen", "Qwen Code", "qwen")] {
+            let row = discover_one(id, Some(acp_fixture()), &[]).await.expect("the fixture answers both probes");
+            assert_eq!(row.provider, id);
+            assert_eq!(row.display_name, display);
+            assert!(matches!(row.protocol_family, ProtocolFamily::Acp));
+            assert_eq!(row.status, "online", "{:?}", row.probe_error);
+            assert_eq!(row.version.as_deref(), Some("4.5.6"));
+            // The ACP adapter's honest capabilities: sessions, turns, tools and
+            // approvals; no resume, no usage, and nothing about files.
+            assert_eq!(row.capabilities.get("permissions"), Some(&true), "{id}");
+            assert_eq!(row.capabilities.get("newSession"), Some(&true));
+            assert_eq!(row.capabilities.get("cancel"), Some(&true));
+            assert_eq!(row.capabilities.get("resume"), Some(&false), "{id}");
+            assert_eq!(row.capabilities.get("usage"), Some(&false), "{id}");
+            // The table names the command discovery looked for.
+            assert_eq!(acp_provider(id).map(|row| row.command), Some(command));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_provider_is_not_listed() {
+        // Nothing on PATH: no row at all, exactly as for the three before it.
+        assert!(discover_one("gemini", None, &[]).await.is_none());
+        assert!(discover_one("qwen", None, &[]).await.is_none());
+        // A CLI that does not advertise ACP is kept as an error row, never as
+        // an online one, and is retried rather than negatively cached.
+        #[cfg(windows)]
+        let useless = ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec!["/d".into(), "/c".into(), "echo 4.5.6".into()] };
+        #[cfg(not(windows))]
+        let useless = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec!["-c".into(), "printf '4.5.6\\n'".into()] };
+        let row = discover_one("gemini", Some(useless), &[]).await.expect("a failed probe keeps its row");
+        assert_eq!(row.status, "error");
+        assert_eq!(row.probe_step.as_deref(), Some("Protocol check"));
     }
 }

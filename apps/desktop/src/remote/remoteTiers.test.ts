@@ -17,7 +17,8 @@ describe('remote method rules', () => {
   it('keeps every rule consistent with its class', () => {
     for (const rule of METHOD_RULES) {
       if (rule.class === 'read') expect(rule.minTier, rule.method).toBe('viewer')
-      else if (rule.class === 'chat') expect(rule.minTier, rule.method).toBe('chat')
+      // A push subscription is the calling device's own row, and a view-only phone needs one too.
+      else if (rule.class === 'chat') expect(rule.minTier, rule.method).toBe(rule.method === 'push.subscribe' || rule.method === 'push.unsubscribe' ? 'viewer' : 'chat')
       else if (rule.class === 'approve' || rule.class === 'handoff') expect(rule.minTier, rule.method).toBe('operator')
       else expect(rule.minTier, rule.method).toBeNull()
       expect(rule.why.trim().length, rule.method).toBeGreaterThan(0)

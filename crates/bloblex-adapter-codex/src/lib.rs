@@ -1,4 +1,5 @@
 //! Codex app-server adapter over JSON-RPC stdio; never reads terminal UI output.
+pub mod protocol;
 use async_trait::async_trait;
 use bloblex_agent_core::*;
 use bloblex_process::{prepare_command, ProcessTree, StdinWriter};

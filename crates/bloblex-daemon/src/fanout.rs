@@ -178,7 +178,7 @@ fn provider_of(st: &AppState, agent: &Value) -> String {
 #[allow(clippy::too_many_arguments)]
 async fn start_one(st: &AppState, agent: &Value, scope: &Scope, text: &str, attachments: &Value, has_images: bool, worktrees: Option<bool>, title: &str, fanout_id: &str, mcp_client: Option<&str>) -> Result<String, (Option<String>, String)> {
     let name = agent["name"].as_str().unwrap_or("This bot").to_owned();
-    if has_images && !matches!(provider_of(st, agent).as_str(), "claude" | "codex" | "opencode") {
+    if has_images && !bloblex_runtime::is_acp_provider(&provider_of(st, agent)) && !matches!(provider_of(st, agent).as_str(), "claude" | "codex") {
         return Err((None, format!("{name} uses a coding agent that doesn't take images.")));
     }
     let (folder, project_id): (Option<PathBuf>, Option<String>) = match scope {

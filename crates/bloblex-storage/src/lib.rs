@@ -1806,6 +1806,7 @@ fn validate_setting_value(k:&str,v:&Value)->Result<(),StorageError>{
     if k=="usage.readCliSignIns" && !v.is_boolean(){return Err(StorageError::InvalidAgent)}
     if k=="composer.sendShortcut" && !valid_send_shortcut(v){return Err(StorageError::InvalidAgent)}
     if k=="shortcuts.bindings" && !valid_shortcut_bindings(v){return Err(StorageError::InvalidAgent)}
+    if k=="projects.folder" && !v.as_str().is_some_and(|path| path.is_empty() || (path.len()<=1_024 && !path.contains('\0') && std::path::Path::new(path).is_absolute())){return Err(StorageError::InvalidAgent)}
     Ok(())
 }
 
@@ -7834,14 +7835,17 @@ fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
     for row in &mut rows { row["overrides"] = validate_project_overrides(&row["overrides"]).unwrap_or_else(|_| empty_project_overrides()); }
     Ok(rows)
 }
-fn empty_project_overrides() -> Value { json!({"models": {}, "approvalMode": null, "setupScript": null}) }
-/// The per-project overrides, validated and normalised. Anything but `models`, `approvalMode` and
-/// `setupScript` is refused. `models` maps a provider name to a model id (1 to 200 characters);
-/// `approvalMode` is a mode or null; `setupScript` is up to 4,000 characters, and a blank one is null.
+fn empty_project_overrides() -> Value { json!({"models": {}, "approvalMode": null, "setupScript": null, "copyFiles": [], "initSubmodules": false}) }
+/// The per-project overrides, validated and normalised. Anything but `models`, `approvalMode`,
+/// `setupScript`, `copyFiles` and `initSubmodules` is refused. `models` maps a provider name to a
+/// model id (1 to 200 characters); `approvalMode` is a mode or null; `setupScript` is up to 4,000
+/// characters, and a blank one is null; `copyFiles` is up to 50 relative paths of at most 260
+/// characters, each with no `..`, drive, wildcard or leading slash (they are copied into a
+/// conversation's worktree, so the main folder is always the source); `initSubmodules` is a boolean.
 /// The Full access confirmation for `bypass` is the caller's (it belongs to the request, not the data).
 pub fn validate_project_overrides(v: &Value) -> Result<Value, StorageError> {
     let map = v.as_object().ok_or(StorageError::InvalidAgent)?;
-    if map.keys().any(|key| !["models", "approvalMode", "setupScript"].contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
+    if map.keys().any(|key| !["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules"].contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
     let mut out = empty_project_overrides();
     match map.get("models") {
         None | Some(Value::Null) => {}
@@ -7871,7 +7875,39 @@ pub fn validate_project_overrides(v: &Value) -> Result<Value, StorageError> {
         }
         Some(_) => return Err(StorageError::InvalidAgent),
     }
+    match map.get("copyFiles") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(files)) => {
+            if files.len() > MAX_COPY_FILES { return Err(StorageError::InvalidAgent); }
+            let mut clean = Vec::with_capacity(files.len());
+            for file in files {
+                let path = file.as_str().ok_or(StorageError::InvalidAgent)?;
+                if !valid_copy_file(path) { return Err(StorageError::InvalidAgent); }
+                clean.push(json!(path));
+            }
+            out["copyFiles"] = json!(clean);
+        }
+        Some(_) => return Err(StorageError::InvalidAgent),
+    }
+    match map.get("initSubmodules") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(init)) => out["initSubmodules"] = json!(init),
+        Some(_) => return Err(StorageError::InvalidAgent),
+    }
     Ok(out)
+}
+/// The most files a project may copy into a conversation's worktree.
+pub const MAX_COPY_FILES: usize = 50;
+/// The longest one copied path may be.
+pub const MAX_COPY_FILE_CHARS: usize = 260;
+/// A copied path: relative, no `..` segment, no drive, no wildcard, no leading slash, no NUL.
+fn valid_copy_file(path: &str) -> bool {
+    if path.is_empty() || path.trim().is_empty() || path.chars().count() > MAX_COPY_FILE_CHARS || path.contains('\0') { return false; }
+    if path.contains('*') || path.contains('?') || path.chars().any(char::is_control) { return false; }
+    if path.starts_with('/') || path.starts_with('\\') { return false; }
+    if path.len() >= 2 && path.as_bytes()[1] == b':' { return false; }
+    if std::path::Path::new(path).is_absolute() { return false; }
+    !path.split(['/', '\\']).any(|part| part == "..")
 }
 fn profile_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
     query_jsons(c, "SELECT json_object('id',id,'category',category,'key',key,'value',value,'source',source,'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at) FROM manager_profile WHERE ?1=?1 ORDER BY locked DESC, category, key", "")
@@ -8674,10 +8710,33 @@ mod tests {
         let id;
         {let db=Storage::open(&path).unwrap();let (project,_)=db.project_create("Old",Some("C:/old")).unwrap();id=project["id"].as_str().unwrap().to_owned();}
         {let c=Connection::open(&path).unwrap();c.execute_batch("ALTER TABLE projects DROP COLUMN overrides_json;").unwrap();}
-        {let db=Storage::open(&path).unwrap();let project=db.project_get(&id).unwrap();assert_eq!(project["name"],"Old");assert_eq!(project["overrides"],json!({"models":{},"approvalMode":null,"setupScript":null}));
+        {let db=Storage::open(&path).unwrap();let project=db.project_get(&id).unwrap();assert_eq!(project["name"],"Old");assert_eq!(project["overrides"],json!({"models":{},"approvalMode":null,"setupScript":null,"copyFiles":[],"initSubmodules":false}));
             let (updated,_)=db.project_update_with_overrides(&id,&json!({}),Some(&json!({"setupScript":"echo hi","models":{"codex":"m"}}))).unwrap();assert_eq!(updated["overrides"]["setupScript"],"echo hi");
             // A damaged cell reads back as the defaults rather than failing the project list.
-            db.conn.lock().unwrap().execute("UPDATE projects SET overrides_json='not json'",[]).unwrap();assert_eq!(db.project_get(&id).unwrap()["overrides"],json!({"models":{},"approvalMode":null,"setupScript":null}));}
+            db.conn.lock().unwrap().execute("UPDATE projects SET overrides_json='not json'",[]).unwrap();assert_eq!(db.project_get(&id).unwrap()["overrides"],json!({"models":{},"approvalMode":null,"setupScript":null,"copyFiles":[],"initSubmodules":false}));}
+        let _=fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn old_projects_read_as_no_copy_and_no_submodules(){
+        let dir=std::env::temp_dir().join(format!("bloblex-overrides-old-{}",Uuid::new_v4()));fs::create_dir_all(&dir).unwrap();let path=dir.join("db.sqlite");
+        let id;
+        {let db=Storage::open(&path).unwrap();
+            id=db.project_create("Older",Some("C:/older")).unwrap().0["id"].as_str().unwrap().to_owned();
+            // Exactly what a Phase 1 row holds: the three keys it knew about.
+            db.conn.lock().unwrap().execute("UPDATE projects SET overrides_json=?2 WHERE id=?1",rusqlite::params![id,"{\"models\":{},\"approvalMode\":null,\"setupScript\":null}"]).unwrap();
+            let project=db.project_get(&id).unwrap();
+            assert_eq!(project["overrides"]["copyFiles"],json!([]),"a project with no copy files reads as an empty list");
+            assert_eq!(project["overrides"]["initSubmodules"],json!(false),"and no submodule setup");
+            assert_eq!(db.project_list().unwrap()[0]["overrides"]["copyFiles"],json!([]),"the list carries the same defaults");}
+        {let db=Storage::open(&path).unwrap();
+            // A new value round-trips; the whole set is validated every time.
+            let (updated,_)=db.project_update_with_overrides(&id,&json!({}),Some(&json!({"copyFiles":["note.txt","docs/readme.md"],"initSubmodules":true}))).unwrap();
+            assert_eq!(updated["overrides"]["copyFiles"],json!(["note.txt","docs/readme.md"]));
+            assert_eq!(updated["overrides"]["initSubmodules"],json!(true));
+            for bad in [json!({"copyFiles":"note.txt"}), json!({"copyFiles":[1]}), json!({"copyFiles":["../note.txt"]}), json!({"copyFiles":["C:/note.txt"]}), json!({"copyFiles":["/note.txt"]}), json!({"copyFiles":["note*"]}), json!({"copyFiles":[""]}), json!({"copyFiles":[&"a".repeat(261)]}), json!({"copyFiles":vec!["a.txt";51]}), json!({"initSubmodules":"yes"}), json!({"initSubmodules":1})] {
+                assert!(db.project_update_with_overrides(&id,&json!({}),Some(&bad)).is_err(),"{bad}");
+            }
+            assert_eq!(db.project_get(&id).unwrap()["overrides"]["copyFiles"],json!(["note.txt","docs/readme.md"]),"a refused write changes nothing");}
         let _=fs::remove_dir_all(dir);
     }
     #[test]

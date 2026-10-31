@@ -19,7 +19,7 @@ use std::time::Duration;
 /// The longest one git call may take; a stuck git must never hang the RPC.
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A session state that means the conversation is working right now.
-const WORKING: [&str; 3] = ["starting", "working", "waiting_permission"];
+pub(crate) const WORKING: [&str; 3] = ["starting", "working", "waiting_permission"];
 
 /// `session.workspace`: the folder, its repository, and who else is working in it.
 pub(crate) async fn rpc(st: &AppState, p: &Value) -> Result<Value, DispatchError> {
@@ -81,7 +81,7 @@ async fn report(st: &AppState, session_id: &str, detail: &Value) -> Value {
 
 /// The other conversations working in the same folder right now. Evidence only:
 /// two tasks in one folder are how two bots end up changing the same files.
-fn shared_with(st: &AppState, session_id: &str, project_path: &str) -> Vec<Value> {
+pub(crate) fn shared_with(st: &AppState, session_id: &str, project_path: &str) -> Vec<Value> {
     if project_path.is_empty() { return Vec::new(); }
     let key = folder_key(Path::new(project_path));
     let Ok(rows) = st.db.session_list(false) else { return Vec::new() };

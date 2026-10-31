@@ -269,7 +269,7 @@ fn tail_of(root: &Path, target: &Path) -> PathBuf {
 }
 
 /// Any component that routinely holds credentials, and the file names that do.
-fn names_a_secret(tail: &Path) -> bool {
+pub(crate) fn names_a_secret(tail: &Path) -> bool {
     for component in tail.components() {
         let Component::Normal(part) = component else { continue };
         let part = part.to_string_lossy().to_lowercase();

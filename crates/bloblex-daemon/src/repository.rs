@@ -130,9 +130,33 @@ pub(crate) async fn working_tree(project_path: &str) -> Value {
             "diff": diff,
             "binary": binary,
             "truncated": file_truncated,
+            "staged": change.staged,
         }));
     }
     repo_answer(project_path, &root, branch, detached, files, (total_added, total_removed), answer_truncated, None)
+}
+
+/// The repository a folder belongs to and its current status list, for the actions that change it.
+pub(crate) struct Located {
+    pub(crate) root: PathBuf,
+    pub(crate) unborn: bool,
+    pub(crate) changes: Vec<Change>,
+}
+
+/// The repository root, whether it has any commit, and every changed path (the same list
+/// `session.repository` shows, before its cap). An error is a plain sentence.
+pub(crate) async fn locate(project_path: &str) -> Result<Located, &'static str> {
+    let folder = PathBuf::from(project_path);
+    if !folder.is_dir() { return Err("The project folder is missing."); }
+    let top = run_git(&folder, &["rev-parse", "--show-toplevel"], TOPLEVEL_MAX_BYTES).await;
+    if !top.started { return Err("Git is not available on this computer."); }
+    let root_text = text(&top.stdout);
+    let root = PathBuf::from(root_text.trim());
+    if !top.ok || root_text.trim().is_empty() || !root.is_dir() { return Err("This project is not a git repository."); }
+    let unborn = !run_git(&root, &["rev-parse", "--verify", "-q", "HEAD"], TOPLEVEL_MAX_BYTES).await.ok;
+    let status = run_git(&root, &["status", "--porcelain=v2", "-z", "--untracked-files=all", "--renames"], STATUS_MAX_BYTES).await;
+    if !status.started || status.truncated || (!status.ok && status.stdout.is_empty()) { return Err("The repository's changes could not be read."); }
+    Ok(Located { root, unborn, changes: parse_status(&status.stdout) })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -166,18 +190,18 @@ fn empty_answer(project_path: Option<String>, error: &str) -> Value {
     })
 }
 
-struct GitRun {
-    stdout: Vec<u8>,
-    truncated: bool,
-    ok: bool,
-    started: bool,
+pub(crate) struct GitRun {
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) truncated: bool,
+    pub(crate) ok: bool,
+    pub(crate) started: bool,
 }
 
 /// One `git --no-optional-locks -C <dir> <args...>` run without a shell, with a
 /// hard time limit and a stdout cap, reading no stderr at all. Environment
 /// overrides are removed so an inherited one cannot point git elsewhere, and
 /// `GIT_TERMINAL_PROMPT=0` makes a missing credential answer instead of waiting.
-async fn run_git(dir: &Path, args: &[&str], max_bytes: usize) -> GitRun {
+pub(crate) async fn run_git(dir: &Path, args: &[&str], max_bytes: usize) -> GitRun {
     let mut command = tokio::process::Command::new("git");
     command
         .arg("--no-optional-locks").arg("-C").arg(dir).args(args)
@@ -291,7 +315,7 @@ fn added_file_diff(repository_path: &str, content: &str, lines: u64, pool: &mut 
 /// repository. Parent components, absolute or drive-qualified parts, symlinks
 /// and anything outside the repository root are refused so no ignored secret or
 /// linked file outside the project is ever read.
-fn safe_file(root: &Path, repository_path: &str) -> Option<PathBuf> {
+pub(crate) fn safe_file(root: &Path, repository_path: &str) -> Option<PathBuf> {
     let mut path = root.to_path_buf();
     for part in repository_path.split('/') {
         if part.is_empty() || part == "." { continue; }
@@ -309,7 +333,7 @@ fn absolute(root: &Path, repository_path: &str) -> String {
     absolute_path(root, repository_path).map(|path| display_path(&path)).unwrap_or_else(|| display_path(root))
 }
 
-fn absolute_path(root: &Path, repository_path: &str) -> Option<PathBuf> {
+pub(crate) fn absolute_path(root: &Path, repository_path: &str) -> Option<PathBuf> {
     let mut path = root.to_path_buf();
     for part in repository_path.split('/') {
         if part.is_empty() || part == "." { continue; }
@@ -319,29 +343,33 @@ fn absolute_path(root: &Path, repository_path: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     #[cfg(windows)]
     { path.to_string_lossy().replace('/', "\\") }
     #[cfg(not(windows))]
     { path.to_string_lossy().into_owned() }
 }
 
-fn text(bytes: &[u8]) -> String {
+pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-struct Change {
-    repository_path: String,
+pub(crate) struct Change {
+    pub(crate) repository_path: String,
     /// The original path of a rename, for folding its old-side counts in.
-    previous_path: Option<String>,
-    change: &'static str,
-    untracked: bool,
+    pub(crate) previous_path: Option<String>,
+    pub(crate) change: &'static str,
+    pub(crate) untracked: bool,
+    /// `none`, `partial` or `all`, from the porcelain `XY` field.
+    pub(crate) staged: &'static str,
+    /// A submodule entry, or a link in the index or working tree.
+    pub(crate) special: bool,
 }
 
 /// `git status --porcelain=v2 -z` records. With `-z` every record is NUL
 /// terminated and a rename is followed by its original path as its own field,
 /// so spaces and unicode in names need no unquoting.
-fn parse_status(stdout: &[u8]) -> Vec<Change> {
+pub(crate) fn parse_status(stdout: &[u8]) -> Vec<Change> {
     let raw = text(stdout);
     let mut fields = raw.split('\0');
     let mut changes = Vec::new();
@@ -351,7 +379,7 @@ fn parse_status(stdout: &[u8]) -> Vec<Change> {
             Some('1') => {
                 let parts: Vec<&str> = record.splitn(9, ' ').collect();
                 if parts.len() == 9 {
-                    changes.push(Change { repository_path: parts[8].to_owned(), previous_path: None, change: change_kind(parts[1]), untracked: false });
+                    changes.push(Change { repository_path: parts[8].to_owned(), previous_path: None, change: change_kind(parts[1]), untracked: false, staged: staged_state(parts[1]), special: is_special(parts[2], &parts[3..6]) });
                 }
             }
             Some('2') => {
@@ -363,24 +391,40 @@ fn parse_status(stdout: &[u8]) -> Vec<Change> {
                         previous_path: (!previous.is_empty()).then(|| previous.to_owned()),
                         change: "renamed",
                         untracked: false,
+                        staged: staged_state(parts[1]),
+                        special: is_special(parts[2], &parts[3..6]),
                     });
                 }
             }
             Some('u') => {
                 let parts: Vec<&str> = record.splitn(11, ' ').collect();
                 if parts.len() == 11 {
-                    changes.push(Change { repository_path: parts[10].to_owned(), previous_path: None, change: "modified", untracked: false });
+                    changes.push(Change { repository_path: parts[10].to_owned(), previous_path: None, change: "modified", untracked: false, staged: staged_state(parts[1]), special: is_special(parts[2], &parts[3..7]) });
                 }
             }
             Some('?') => {
                 if let Some(path) = record.strip_prefix("? ") {
-                    changes.push(Change { repository_path: path.to_owned(), previous_path: None, change: "added", untracked: true });
+                    changes.push(Change { repository_path: path.to_owned(), previous_path: None, change: "added", untracked: true, staged: "none", special: false });
                 }
             }
             _ => {}
         }
     }
     changes
+}
+
+/// `all` when the index holds the change and the working tree adds none, `partial` when both
+/// differ, otherwise `none`.
+fn staged_state(xy: &str) -> &'static str {
+    let mut chars = xy.chars();
+    let x = chars.next().unwrap_or('.');
+    let y = chars.next().unwrap_or('.');
+    match (x != '.', y != '.') { (true, false) => "all", (true, true) => "partial", _ => "none" }
+}
+
+/// A submodule (`S...`) or a link (mode 120000 in `HEAD`, the index or the working tree).
+fn is_special(submodule: &str, modes: &[&str]) -> bool {
+    submodule.starts_with('S') || modes.contains(&"120000")
 }
 
 fn change_kind(xy: &str) -> &'static str {
@@ -394,15 +438,15 @@ fn change_kind(xy: &str) -> &'static str {
 }
 
 #[derive(Default, Clone, Copy)]
-struct Stat {
-    added: Option<u64>,
-    removed: Option<u64>,
-    binary: bool,
+pub(crate) struct Stat {
+    pub(crate) added: Option<u64>,
+    pub(crate) removed: Option<u64>,
+    pub(crate) binary: bool,
 }
 
 /// `git diff HEAD -M --numstat -z`: one record per tracked path, with a rename
 /// as `added\tremoved\t` followed by the old and new paths as NUL fields.
-fn parse_numstat(stdout: &[u8]) -> HashMap<String, Stat> {
+pub(crate) fn parse_numstat(stdout: &[u8]) -> HashMap<String, Stat> {
     let raw = text(stdout);
     let mut fields = raw.split('\0');
     let mut stats = HashMap::new();

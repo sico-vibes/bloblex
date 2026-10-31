@@ -891,6 +891,62 @@
       "params": null
     },
     {
+      "method": "worktree.abandoned",
+      "class": "never",
+      "minTier": null,
+      "why": "It lists the host's folders and branches, which belong to the owner at the desktop.",
+      "params": null
+    },
+    {
+      "method": "worktree.removeAbandoned",
+      "class": "never",
+      "minTier": null,
+      "why": "Removing a worktree deletes folders and can delete a branch, so it is never a remote action.",
+      "params": null
+    },
+    {
+      "method": "project.clone",
+      "class": "never",
+      "minTier": null,
+      "why": "Cloning writes a folder on the host and may use the host's git sign-in.",
+      "params": null
+    },
+    {
+      "method": "project.clone.cancel",
+      "class": "never",
+      "minTier": null,
+      "why": "It stops a clone that is writing to the host's disk.",
+      "params": null
+    },
+    {
+      "method": "project.clone.list",
+      "class": "never",
+      "minTier": null,
+      "why": "A clone job names folders on the host.",
+      "params": null
+    },
+    {
+      "method": "project.discover",
+      "class": "never",
+      "minTier": null,
+      "why": "It lists the folders of the host's disk.",
+      "params": null
+    },
+    {
+      "method": "project.files.search",
+      "class": "never",
+      "minTier": null,
+      "why": "It names the files of the host's project folders, which stay on the host.",
+      "params": null
+    },
+    {
+      "method": "project.content.search",
+      "class": "never",
+      "minTier": null,
+      "why": "File lines can hold environment values and credentials, so they never leave the host.",
+      "params": null
+    },
+    {
       "method": "diagnostics.issueDraft",
       "class": "never",
       "minTier": null,
@@ -1213,6 +1269,48 @@
       "params": null
     },
     {
+      "method": "session.git.diff",
+      "class": "never",
+      "minTier": null,
+      "why": "It returns a file's whole diff from the host's repository, which can hold environment values and credentials from files on the host, so it stays on the host.",
+      "params": null
+    },
+    {
+      "method": "session.git.stage",
+      "class": "never",
+      "minTier": null,
+      "why": "It changes what is staged in the host's repository, which only the owner at the computer may do.",
+      "params": null
+    },
+    {
+      "method": "session.git.revert",
+      "class": "never",
+      "minTier": null,
+      "why": "It discards a file's changes in the host's repository, which destroys work; only the owner at the computer may do that.",
+      "params": null
+    },
+    {
+      "method": "session.git.revertUndo",
+      "class": "never",
+      "minTier": null,
+      "why": "It writes a kept copy of a file back into the host's project folder, which only the owner at the computer may do.",
+      "params": null
+    },
+    {
+      "method": "session.pr.draft",
+      "class": "never",
+      "minTier": null,
+      "why": "It reads the host's repository and the GitHub CLI's sign-in to propose a pull request, which names branches and commits from the host.",
+      "params": null
+    },
+    {
+      "method": "session.pr.create",
+      "class": "never",
+      "minTier": null,
+      "why": "It commits, pushes and opens a pull request with the owner's own git and GitHub sign-in, which only the owner at the computer may do.",
+      "params": null
+    },
+    {
       "method": "permission.rules.list",
       "class": "never",
       "minTier": null,
@@ -1278,6 +1376,7 @@
     "permission.auto_resolved": "drop",
     "permission.rules.changed": "drop",
     "permission.bypass_active": "drop",
+    "project.clone.changed": "drop",
     "runtime.changed": "drop",
     "session.context.reset": "drop",
     "session.context.updated": "drop",

@@ -72,10 +72,15 @@ mod commands;
 mod doctor;
 // FIX39 P10: linked git worktrees so parallel code tasks in one repo cannot clash.
 mod worktree;
+mod worktree_cleanup;
+mod project_clone;
+mod project_search;
 mod project_setup;
 mod workspace;
 // FIX45: the actual repository changes of a conversation's project folder.
 mod repository;
+mod git_ops;
+mod pull_request;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
 
@@ -934,6 +939,9 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
         "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
         "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
+        "worktree.abandoned" | "worktree.removeAbandoned" => worktree_cleanup::rpc(st, method, &p).await,
+        "project.clone" | "project.clone.cancel" | "project.clone.list" | "project.discover" => project_clone::rpc(st, method, &p).await,
+        "project.files.search" | "project.content.search" => project_search::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -1271,6 +1279,13 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         // FIX45: the actual working tree against HEAD, read-only. The folder
         // comes from the conversation, never from the caller.
         "session.repository" => repository::session_repository(st,&p).await,
+        // Phase 3: review and act on the conversation's changes, and open a pull request.
+        "session.git.diff" => git_ops::diff(st,&p).await,
+        "session.git.stage" => git_ops::stage(st,&p).await,
+        "session.git.revert" => git_ops::revert(st,&p).await,
+        "session.git.revertUndo" => git_ops::revert_undo(st,&p).await,
+        "session.pr.draft" => pull_request::draft(st,&p).await,
+        "session.pr.create" => pull_request::create(st,&p).await,
         // DELEGATION item 4: where this conversation is working, read-only.
         "session.workspace" => workspace::rpc(st, &p).await,
         "session.new" => new_session(st, p).await,
@@ -1518,7 +1533,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             }
             let value = validate_setting(k, &p["value"])?;
             if k == "permissions.default_mode" && value == "bypass" && p["confirm"] != true { return Err(derr("invalid_argument", "Confirm making Full access the default first.", StatusCode::BAD_REQUEST)); }
-            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="task.concurrency.max"||k=="task.globalPaused"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce"||k=="usage.readCliSignIns"||k=="composer.sendShortcut"||k=="shortcuts.bindings";
+            let validation_key = k.starts_with("exec_gate.")||k=="permissions.default_mode"||k=="notifications.enabled"||k=="experimental.autoRetry"||k=="experimental.memory"||k=="memory.sharedAgentWrites"||k=="skills.enabled"||k=="profile.about"||k=="retry.maxWaitSecs"||k=="automations.paused"||k=="automations.maxConcurrent"||k=="task.concurrency.max"||k=="task.globalPaused"||k=="questions.expirySecs"||k=="appearance.style"||k=="appearance.accent"||k=="appearance.density"||k=="appearance.wallpaper"||k=="appearance.glass"||k=="appearance.font"||k=="appearance.monoFont"||k=="hints.seen"||k=="onboarding.tour"||k=="companion.focusMode"||k=="companion.positions"||k=="concurrency.botsAtOnce"||k=="usage.readCliSignIns"||k=="projects.folder"||k=="composer.sendShortcut"||k=="shortcuts.bindings";
             let events=st.db.set_setting(k, &value).map_err(|e| {
                 derr(
                     if validation_key{"invalid_argument"}else{"internal"},
@@ -1592,6 +1607,10 @@ fn validate_setting(k: &str, value: &Value) -> Result<Value, DispatchError> {
         }
     }
     if k == "retry.maxWaitSecs" && value.as_u64().is_none_or(|secs| secs > 86_400) { return Err(derr("invalid_argument", "retry.maxWaitSecs requires an integer between 0 and 86400", StatusCode::BAD_REQUEST)); }
+    // Phase 3: the folder the clone dialog last used. Machine-specific, so it never travels.
+    if k == "projects.folder" && !value.as_str().is_some_and(|path| path.is_empty() || (path.len() <= 1_024 && std::path::Path::new(path).is_absolute() && !path.contains('\0'))) {
+        return Err(derr("invalid_argument", "projects.folder must be empty or an absolute folder path", StatusCode::BAD_REQUEST));
+    }
     if k == "claude.enableWorkflows" && !value.is_boolean() { return Err(derr("invalid_argument", "claude.enableWorkflows requires a JSON boolean", StatusCode::BAD_REQUEST)); }
     if k == "permissions.default_mode" && !value.as_str().is_some_and(|v| ["ask", "auto", "accept_edits", "bypass"].contains(&v)) { return Err(derr("invalid_argument", "permissions.default_mode must be ask, auto, accept_edits or bypass", StatusCode::BAD_REQUEST)); }
     if k == "automations.paused" && !value.is_boolean() { return Err(derr("invalid_argument", "automations.paused requires a JSON boolean", StatusCode::BAD_REQUEST)); }
@@ -5357,6 +5376,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     *st.team.address.lock().unwrap() = Some(addr.to_string());
     *st.team.data_dir.lock().unwrap() = data_dir;
     stash::prune_restored(&st);
+    git_ops::prune_reverted(&st);
     // The outside-session hook needs this run's address and token.
     outside::startup(&st);
     // Wave 14: a fresh token and endpoint file for the Bitbots MCP, when it is on.
@@ -12730,6 +12750,9 @@ mod phase2a_tests {
 
     // Phase 1 (lane A): approval modes and per-project overrides.
     include!("phase1_tests.rs");
+
+    // Phase 3 (Gogo's lane): setup files and submodules, clone, discovery and search.
+    include!("phase3_tests.rs");
 
     #[tokio::test]
     async fn team_update_project_move_does_not_archive() {

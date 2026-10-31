@@ -153,6 +153,8 @@ fn exportable_setting(key: &str, value: &Value) -> bool {
         || lower.starts_with("usage.")
         || lower.starts_with("speech.cloud.consent")
         || lower == "companion.positions"
+        // A machine's folder path is the owner's own machine, so it is set again on another one.
+        || lower == "projects.folder"
     {
         return false;
     }

@@ -128,7 +128,7 @@ pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, Dispat
 
 /// A valid Windows folder name: not empty, none of `<>:"/\|?*` or a control character, no trailing
 /// dot or space, and not a reserved device name (with or without an extension).
-fn valid_folder_name(name: &str) -> bool {
+pub(crate) fn valid_folder_name(name: &str) -> bool {
     let count = name.chars().count();
     if count == 0 || count > MAX_NAME_CHARS || name.trim().is_empty() { return false; }
     if name.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c)) { return false; }

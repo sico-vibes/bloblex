@@ -1510,7 +1510,7 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
             let overrides = match p.get("overrides") {
                 None | Some(Value::Null) => None,
                 Some(value) => {
-                    let valid = bloblex_storage::validate_project_overrides(value).map_err(|_| derr("invalid_argument", "overrides must be {models, approvalMode, setupScript}: models map a provider to a model id of 1 to 200 characters, approvalMode is ask, auto, accept_edits, bypass or null, and the setup script is at most 4000 characters.", StatusCode::BAD_REQUEST))?;
+                    let valid = bloblex_storage::validate_project_overrides(value).map_err(|_| derr("invalid_argument", "overrides must be {models, approvalMode, setupScript, copyFiles, initSubmodules}: models map a provider to a model id of 1 to 200 characters, approvalMode is ask, auto, accept_edits, bypass or null, the setup script is at most 4000 characters, copyFiles is up to 50 relative paths of at most 260 characters, and initSubmodules is true or false.", StatusCode::BAD_REQUEST))?;
                     if valid["approvalMode"] == "bypass" && p["confirm"] != true { return Err(derr("invalid_argument", "Confirm Full access for this project first.", StatusCode::BAD_REQUEST)); }
                     Some(valid)
                 }

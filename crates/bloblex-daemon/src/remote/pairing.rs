@@ -406,7 +406,7 @@ impl PairingState {
 
 fn kind_of(kind: &str) -> String {
     match kind {
-        "phone" | "tablet" | "browser" | "computer" => kind.to_string(),
+        "phone" | "tablet" | "browser" | "computer" | "machine" => kind.to_string(),
         _ => "browser".to_string(),
     }
 }

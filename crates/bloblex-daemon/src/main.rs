@@ -76,6 +76,11 @@ mod worktree_cleanup;
 mod project_clone;
 mod project_search;
 mod project_setup;
+mod repo_identity;
+mod shared_settings;
+// Phase 4: section 6 (the handoff) is the caller of `attach_branch`.
+#[allow(dead_code)]
+mod worktree_attach;
 mod workspace;
 // FIX45: the actual repository changes of a conversation's project folder.
 mod repository;
@@ -83,6 +88,10 @@ mod git_ops;
 mod pull_request;
 // Remote mode (P1): the gateway, its policy and its `remote.*` API.
 mod remote;
+mod machine_client;
+mod machines;
+#[cfg(test)]
+mod machines_tests;
 
 use quota::{normalize_codex_quota, PollFailure, PollOutcome, QuotaPollGate, QUOTA_POLL_INTERVAL, QUOTA_REQUEST_TIMEOUT};
 
@@ -120,6 +129,8 @@ struct AppState {
     /// Remote mode (FIX29 WP6b): the listener, the live offer, the device
     /// sockets and the security options.
     remote: Arc<remote::RemoteState>,
+    /// Phase 4: machine links, pairing jobs and what the other machines showed.
+    machines: Arc<machines::Machines>,
     /// Serialises provider activation per session so a warm-up and a first send
     /// cannot resume the same conversation twice.
     activation_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -939,6 +950,8 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
         "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
         "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
+        "project.findByIdentity" => repo_identity::find_by_identity(st, &p),
+        "project.sharedSettings.get" | "project.sharedSettings.trust" | "project.sharedSettings.untrust" | "project.sharedSettings.write" => shared_settings::rpc(st, method, &p),
         "worktree.abandoned" | "worktree.removeAbandoned" => worktree_cleanup::rpc(st, method, &p).await,
         "project.clone" | "project.clone.cancel" | "project.clone.list" | "project.discover" => project_clone::rpc(st, method, &p).await,
         "project.files.search" | "project.content.search" => project_search::rpc(st, method, &p).await,
@@ -1187,7 +1200,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         }
         "session.list" => {
             let include = match p.get("includeArchived") { None => false, Some(value) => value.as_bool().ok_or_else(|| derr("invalid_argument", "includeArchived must be a boolean", StatusCode::BAD_REQUEST))? };
-            Ok(json!({"sessions":st.db.session_list(include).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?}))
+            let mut sessions = st.db.session_list(include).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?;
+            // Phase 4: a trusted .bitbots.json may set the project's mode.
+            shared_settings::effective_session_modes(st, &mut sessions);
+            Ok(json!({"sessions": sessions}))
         },
         "session.rename" => {
             let id = p["sessionId"].as_str().filter(|id| !id.is_empty()).ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
@@ -1274,6 +1290,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "session.get" => st
             .db
             .session_detail(p["sessionId"].as_str().unwrap_or(""))
+            .map(|mut row| { shared_settings::effective_session_modes(st, std::slice::from_mut(&mut row)); row })
             .map_err(|e| derr("not_found", &e.to_string(), StatusCode::NOT_FOUND)),
         "session.environment" => session_environment(st,&p).await,
         // FIX45: the actual working tree against HEAD, read-only. The folder
@@ -1526,6 +1543,10 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             if k.starts_with("remote.") {
                 return Err(derr("invalid_argument", "Remote settings change only through Settings › Remote.", StatusCode::BAD_REQUEST));
             }
+            // Phase 4: the machine id and name move only through `machine.*`.
+            if k.starts_with("machine.") {
+                return Err(derr("invalid_argument", "Machine settings change only through the machine pages.", StatusCode::BAD_REQUEST));
+            }
             // Wave 14: the Bitbots MCP's switch and level move only through
             // `external.*`, which also makes the token and the endpoint file.
             if k.starts_with("mcp.external.") {
@@ -1570,6 +1591,19 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         | "remote.security.get"
         | "remote.security.set"
         | "remote.activity.list" => remote::rpc(st, method, &p).await,
+        "machine.self"
+        | "machine.self.rename"
+        | "machine.info"
+        | "machine.probe"
+        | "machine.pair.begin"
+        | "machine.pair.cancel"
+        | "machine.pair.list"
+        | "machine.list"
+        | "machine.rename"
+        | "machine.remove"
+        | "machine.refresh"
+        | "machine.conversations"
+        | "machine.conversation" => machines::rpc(st, method, &p).await,
         _ => Err(derr(
             "unsupported",
             "method is not supported",
@@ -1734,7 +1768,7 @@ fn exec_options_for_session(st:&AppState,session:&Value)->Result<ExecOptions,Dis
     let default=st.db.default_approval_mode().map_err(agent_error)?;
     // Phase 1: the conversation's project may set a permission mode. Order: conversation pin
     // (below), the project's mode, the bot's mode, the default.
-    let project_mode=session["projectId"].as_str().and_then(|id|st.db.project_get(id).ok()).and_then(|project|project["overrides"]["approvalMode"].as_str().map(str::to_owned));
+    let project_mode=session["projectId"].as_str().and_then(|id|st.db.project_get(id).ok()).and_then(|project|crate::shared_settings::effective_overrides(st,&project)["approvalMode"].as_str().map(str::to_owned));
     let mut options = if let Some(agent_id)=session["agentId"].as_str() {
         let a=st.db.agent_get(agent_id).map_err(agent_error)?;
         let env=a["customEnv"].as_object().map(|o|o.iter().filter_map(|(k,v)|v.as_str().map(|s|(k.clone(),s.to_owned()))).collect()).unwrap_or_default();
@@ -5323,6 +5357,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         skills: Arc::new(skills::Skills::default()),
         backup_previews: Arc::new(backup::BackupPreviews::default()),
         remote: Arc::new(remote::RemoteState::new()),
+        machines: Arc::new(machines::Machines::default()),
         activation_locks: Arc::new(Mutex::new(HashMap::new())),
         starting_cancels: Arc::new(Mutex::new(HashSet::new())),
         warm_lru: Arc::new(Mutex::new(Vec::new())),
@@ -5414,6 +5449,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // state either way. A problem becomes a status the page explains.
     let remote_state = st.clone();
     tokio::spawn(async move { remote::start_at_boot(&remote_state).await; });
+    let machines_state = st.clone();
+    tokio::spawn(async move { machines::start_at_boot(&machines_state).await; });
+    // Phase 4: every project's repository identity is read once, off the runtime, so a project
+    // registered before this version can be found on another machine. `project.list` never runs git.
+    let identity_state = st.clone();
+    tokio::spawn(async move { repo_identity::sweep(&identity_state).await; });
     println!(
         "{}",
         serde_json::to_string(&DaemonReady {
@@ -6722,7 +6763,7 @@ mod phase2a_tests {
     /// a second state on the same file.
     pub(crate) fn state_with(db:Storage)->(AppState,broadcast::Receiver<EventEnvelope>){
         let db=Arc::new(db);db.upsert_runtime(&json!({"id":"rt-test","provider":"codex","status":"offline"})).unwrap();let(events,rx)=broadcast::channel(64);
-        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),outside:Arc::new(outside::Outside::default()),external:Arc::new(external::External::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
+        let st=AppState{token:Arc::new("test-only".into()),started:Instant::now(),db,events,runtimes:Arc::new(RwLock::new(vec![json!({"id":"rt-test","provider":"codex","status":"offline"})])),catalog:Arc::new(catalog::CatalogCache::default()),discovery:Arc::new(Mutex::new(None)),adapters:Arc::new(Adapters{acp:Arc::new(AcpAdapter::default()),codex:Arc::new(CodexAdapter::default()),claude:Arc::new(ClaudeAdapter::default())}),sessions:Arc::new(Mutex::new(HashMap::new())),active_turns:Arc::new(Mutex::new(HashMap::new())),denied_turns:Arc::new(Mutex::new(HashSet::new())),accepted_turns:Arc::new(Mutex::new(HashSet::new())),session_gates:Arc::new(Mutex::new(HashMap::new())),deleted_sessions:Arc::new(Mutex::new(HashSet::new())),quota_poll_gate:Arc::new(Mutex::new(QuotaPollGate::default())),stopping:Arc::new(tokio::sync::Notify::new()),team:Arc::new(team::Team::default()),queue:Arc::new(queue::Queue::default()),automations:Arc::new(automations::Automations::default()),outside:Arc::new(outside::Outside::default()),external:Arc::new(external::External::default()),memory:Arc::new(memory::Memory::default()),knowledge:Arc::new(knowledge::Knowledge::default()),skills:Arc::new(skills::Skills::default()),backup_previews:Arc::new(backup::BackupPreviews::default()),remote:Arc::new(remote::RemoteState::new()),machines:Arc::new(machines::Machines::default()),activation_locks:Arc::new(Mutex::new(HashMap::new())),starting_cancels:Arc::new(Mutex::new(HashSet::new())),warm_lru:Arc::new(Mutex::new(Vec::new()))};(st,rx)
     }
     #[tokio::test]
     async fn bot_purge_is_confirmed_atomic_and_removes_both_sides_only() {
@@ -12753,6 +12794,15 @@ mod phase2a_tests {
 
     // Phase 3 (Gogo's lane): setup files and submodules, clone, discovery and search.
     include!("phase3_tests.rs");
+
+    // Phase 4 (Gogo's lane): a project's repository identity.
+    include!("phase4_projects_tests.rs");
+
+    // Phase 4 (Gogo's lane): `.bitbots.json`.
+    include!("phase4_shared_tests.rs");
+
+    // Phase 4 (Gogo's lane): taking a branch, and importing a conversation.
+    include!("phase4_attach_tests.rs");
 
     #[tokio::test]
     async fn team_update_project_move_does_not_archive() {

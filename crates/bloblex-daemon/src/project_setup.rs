@@ -59,8 +59,9 @@ pub(crate) fn wanted(st: &AppState, project_id: Option<&str>, link: &Value, sess
     if !link["worktree"].is_object() { return false; }
     let Some(worktree) = link["worktree"]["path"].as_str().map(PathBuf::from).filter(|path| path.is_dir()) else { return false; };
     let Some(project) = project_id.and_then(|id| st.db.project_get(id).ok()) else { return false };
-    let overrides = &project["overrides"];
-    let wanted = overrides["setupScript"].as_str().is_some() || !copy_files(overrides).is_empty() || submodules(overrides);
+    // Phase 4: a trusted `.bitbots.json` may ask for the setup steps, through the one resolver.
+    let overrides = crate::shared_settings::effective_overrides(st, &project);
+    let wanted = overrides["setupScript"].as_str().is_some() || !copy_files(&overrides).is_empty() || submodules(&overrides);
     if !wanted { return false; }
     let main_folder = project["path"].as_str().map(|path| crate::worktree::normalize(Path::new(path)));
     let here = crate::worktree::normalize(&worktree);
@@ -164,13 +165,14 @@ fn plan(st: &AppState, sid: &str) -> Option<Plan> {
     let main = project["path"].as_str().map(PathBuf::from)?;
     // Never in the project's own folder.
     if crate::worktree::normalize(&main) == crate::worktree::normalize(&worktree) { return None; }
-    let overrides = &project["overrides"];
+    // Phase 4: a trusted `.bitbots.json` may supply the script, through the one resolver.
+    let overrides = crate::shared_settings::effective_overrides(st, &project);
     let plan = Plan {
         main,
         worktree,
         script: overrides["setupScript"].as_str().filter(|script| !script.trim().is_empty()).map(str::to_owned),
-        copy_files: copy_files(overrides),
-        submodules: submodules(overrides),
+        copy_files: copy_files(&overrides),
+        submodules: submodules(&overrides),
     };
     plan.any().then_some(plan)
 }

@@ -443,6 +443,8 @@ fn field_policy(path: &[String]) -> FieldPolicy {
         "providerSessionId" => FieldPolicy::Drop,
         // Phase 1: a project's overrides hold its setup script (code) and a permission mode.
         "overrides" => FieldPolicy::Drop,
+        // Phase 4: which `.bitbots.json` the owner trusted is host-only, wherever it sits.
+        "trustedSharedHash" => FieldPolicy::Drop,
         "customEnv" => FieldPolicy::CustomEnv,
         "customArgs" | "args" | "launchArgs" => FieldPolicy::ArgCount,
         "executablePath" => FieldPolicy::FileName,

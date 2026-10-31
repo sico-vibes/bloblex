@@ -891,6 +891,41 @@
       "params": null
     },
     {
+      "method": "project.findByIdentity",
+      "class": "never",
+      "minTier": null,
+      "why": "It matches a repository identity against the host's project folders, which is a desktop action.",
+      "params": null
+    },
+    {
+      "method": "project.sharedSettings.get",
+      "class": "never",
+      "minTier": null,
+      "why": "A repository file is the owner's to read and trust at the desktop; a device never sees it.",
+      "params": null
+    },
+    {
+      "method": "project.sharedSettings.trust",
+      "class": "never",
+      "minTier": null,
+      "why": "Trusting a repository file decides what runs on the host, so only the owner at the desktop may do it.",
+      "params": null
+    },
+    {
+      "method": "project.sharedSettings.untrust",
+      "class": "never",
+      "minTier": null,
+      "why": "It withdraws the owner's trust in a repository file, a desktop action.",
+      "params": null
+    },
+    {
+      "method": "project.sharedSettings.write",
+      "class": "never",
+      "minTier": null,
+      "why": "It writes a file into the host's project folder, which only the owner at the desktop may do.",
+      "params": null
+    },
+    {
       "method": "worktree.abandoned",
       "class": "never",
       "minTier": null,
@@ -1269,6 +1304,20 @@
       "params": null
     },
     {
+      "method": "machine.info",
+      "class": "read",
+      "minTier": "viewer",
+      "why": "The other machine's own daemon asks it for its id, name and version when it links; it carries no conversation, path or credential.",
+      "params": null
+    },
+    {
+      "method": "machine.*",
+      "class": "never",
+      "minTier": null,
+      "why": "Machine links are the owner's, set up at the computer. A paired device must not link, rename or remove machines, or read another machine through this one.",
+      "params": null
+    },
+    {
       "method": "session.git.diff",
       "class": "never",
       "minTier": null,
@@ -1359,6 +1408,8 @@
     "events.replay.complete": "allow",
     "replay.gap": "allow",
     "runtime.models.changed": "allow",
+    "machine.changed": "drop",
+    "machine.pair.changed": "drop",
     "backup.imported": "drop",
     "automation.changed": "drop",
     "automation.deleted": "drop",

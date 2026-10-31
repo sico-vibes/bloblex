@@ -346,6 +346,13 @@ impl RemoteState {
         self.inner.lock().unwrap().serve_origin.clone()
     }
 
+    /// Test seam: the origin the Tailscale method accepts, for a gateway a test
+    /// serves over its own certificate.
+    #[cfg(test)]
+    pub fn set_serve_origin_for_test(&self, origin: &str) {
+        self.inner.lock().unwrap().serve_origin = Some(origin.to_string());
+    }
+
     fn set_link(&self, link: &'static str, error: Option<String>) {
         let mut inner = self.inner.lock().unwrap();
         inner.link = link;
@@ -620,7 +627,7 @@ impl Default for RemoteState {
     }
 }
 
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     std::env::var("COMPUTERNAME")
         .ok()
         .filter(|name| !name.trim().is_empty())

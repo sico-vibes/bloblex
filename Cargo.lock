@@ -616,6 +616,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "webpki-roots 1.0.9",
  "zeroize",
  "zip 2.4.2",
 ]

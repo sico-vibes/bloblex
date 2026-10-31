@@ -1496,9 +1496,25 @@ pub async fn agent_conversations(st: &AppState, p: &Value) -> Result<Value, Disp
 
 pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, DispatchError> {
     match method {
-        "project.list" => Ok(json!({"projects": st.db.project_list().map_err(agent_error)?})),
+        "project.list" => {
+            let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+            let mut projects = st.db.project_list().map_err(agent_error)?;
+            // Phase 4: the repository file's state, from one stat per project and no query.
+            for project in &mut projects { crate::shared_settings::annotate(project, &agents); }
+            Ok(json!({"projects": projects}))
+        }
         "project.create" => {
-            let (project, events) = st.db.project_create(p["name"].as_str().unwrap_or(""), p["path"].as_str()).map_err(agent_error)?;
+            // Phase 4: the repository's identity is read from the folder first, so the row and its
+            // event carry it. A folder that is not a repository, or a read that could not finish,
+            // leaves it empty.
+            let identity = match crate::repo_identity::of_path(p["path"].as_str()).await {
+                crate::repo_identity::Origin::Found(remote) => Some(remote.identity),
+                _ => None,
+            };
+            let (mut project, mut events) = st.db.project_create_with_identity(p["name"].as_str().unwrap_or(""), p["path"].as_str(), identity.as_deref()).map_err(agent_error)?;
+            let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+            crate::shared_settings::annotate(&mut project, &agents);
+            crate::shared_settings::annotate_events(&mut events, &agents);
             st.broadcast_persisted(events);
             Ok(json!({"project": project}))
         }
@@ -1512,10 +1528,35 @@ pub async fn team_rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, D
                 Some(value) => {
                     let valid = bloblex_storage::validate_project_overrides(value).map_err(|_| derr("invalid_argument", "overrides must be {models, approvalMode, setupScript, copyFiles, initSubmodules}: models map a provider to a model id of 1 to 200 characters, approvalMode is ask, auto, accept_edits, bypass or null, the setup script is at most 4000 characters, copyFiles is up to 50 relative paths of at most 260 characters, and initSubmodules is true or false.", StatusCode::BAD_REQUEST))?;
                     if valid["approvalMode"] == "bypass" && p["confirm"] != true { return Err(derr("invalid_argument", "Confirm Full access for this project first.", StatusCode::BAD_REQUEST)); }
+                    // Phase 4: a settings save never grants or withdraws trust in a `.bitbots.json`:
+                    // `validate_project_overrides` refuses `trustedSharedHash`, and storage keeps the
+                    // stored one. Only `project.sharedSettings.trust` and `.write` change it.
                     Some(valid)
                 }
             };
-            let (project, events) = st.db.project_update_with_overrides(id, p, overrides.as_ref()).map_err(agent_error)?;
+            // Phase 4: the identity follows the folder. It is read before the write, from the path the
+            // update will leave behind, so the row and its event carry the value. A layout change
+            // (a collapsed sidebar group) never starts git.
+            let settings_changed = ["path", "name", "description", "tags", "overrides"].iter().any(|key| p.get(*key).is_some());
+            let identity = if settings_changed {
+                let path = match p.get("path") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(path)) if !path.trim().is_empty() => Some(path.trim().to_owned()),
+                    _ => st.db.project_get(id).ok().and_then(|row| row["path"].as_str().map(str::to_owned)),
+                };
+                // A read that could not finish is no evidence, so the stored identity stands.
+                match crate::repo_identity::of_path(path.as_deref()).await {
+                    crate::repo_identity::Origin::Found(remote) => Some(Some(remote.identity)),
+                    crate::repo_identity::Origin::None => Some(None),
+                    crate::repo_identity::Origin::Unknown => None,
+                }
+            } else {
+                None
+            };
+            let (mut project, mut events) = st.db.project_update_with_identity(id, p, overrides.as_ref(), identity.as_ref().map(|identity| identity.as_deref())).map_err(agent_error)?;
+            let agents = st.db.agent_list(false, None).map_err(agent_error)?;
+            crate::shared_settings::annotate(&mut project, &agents);
+            crate::shared_settings::annotate_events(&mut events, &agents);
             st.broadcast_persisted(events);
             Ok(json!({"project": project}))
         }

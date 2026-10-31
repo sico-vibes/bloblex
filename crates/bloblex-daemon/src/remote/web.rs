@@ -73,6 +73,11 @@ pub struct DeviceAuth {
     pub id: String,
     pub name: String,
     pub tier: Tier,
+    /// What kind of device paired: `phone`, `tablet`, `browser`, `computer` or
+    /// `machine` (another Bitbots daemon, Phase 4). Round 2's `handoff.*` check
+    /// reads it.
+    #[allow(dead_code)]
+    pub kind: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +126,9 @@ async fn require_origin(State(state): State<WebState>, request: Request, next: N
         .and_then(|value| value.to_str().ok())
         .map(str::to_ascii_lowercase);
     let accepted = state.remote.accepted_origins(&state.daemon);
-    let origin_ok = origin.as_deref().is_some_and(|origin| accepted.iter().any(|candidate| candidate == origin));
+    // A host name is case-insensitive: `COMPUTERNAME` is upper case and a client
+    // (a browser, or another Bitbots daemon) always sends it lower case.
+    let origin_ok = origin.as_deref().is_some_and(|origin| accepted.iter().any(|candidate| candidate.eq_ignore_ascii_case(origin)));
     let cross_site = matches!(fetch_site.as_deref(), Some("cross-site") | Some("same-site"));
     let refused = if safe && !websocket {
         // A missing `Origin` is normal here; a present one must still match.
@@ -136,7 +143,7 @@ async fn require_origin(State(state): State<WebState>, request: Request, next: N
     if state.remote.active_method(&state.daemon) == super::METHOD_NATIVE {
         let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).map(str::to_owned);
         let authorities = state.remote.accepted_authorities(&state.daemon);
-        let host_ok = host.as_deref().is_some_and(|host| authorities.iter().any(|candidate| candidate == host));
+        let host_ok = host.as_deref().is_some_and(|host| authorities.iter().any(|candidate| candidate.eq_ignore_ascii_case(host)));
         if !host_ok {
             return forbidden_origin();
         }
@@ -364,6 +371,7 @@ async fn authenticate(state: &WebState, headers: &HeaderMap, include_method: boo
     }
     let id = device["id"].as_str().unwrap_or_default().to_string();
     let name = device["name"].as_str().unwrap_or("A device").to_string();
+    let kind = device["kind"].as_str().unwrap_or("browser").to_string();
     // The Tailscale login header is a second check, never a way in on its own.
     if let Some(login) = headers.get("tailscale-user-login").and_then(|value| value.to_str().ok()) {
         let recorded = device["login"].as_str();
@@ -376,7 +384,7 @@ async fn authenticate(state: &WebState, headers: &HeaderMap, include_method: boo
         return Err(refuse(state, include_method, "device_revoked", "This device's pairing was removed or expired. Pair again to continue."));
     };
     let _ = state.daemon.db.remote_device_touch(&id, &now_rfc3339());
-    Ok(DeviceAuth { id, name, tier })
+    Ok(DeviceAuth { id, name, tier, kind })
 }
 
 /// A gateway denial carried as a daemon envelope.

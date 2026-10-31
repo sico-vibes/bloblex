@@ -378,7 +378,7 @@ pub fn ensure_cert(st: &AppState, force: bool) -> Result<CertInfo, String> {
 
 /// Restrict the key file to the current user. Returns the command that was run
 /// (or would be), so a test can record it. No shell is used.
-fn apply_key_permissions(path: &Path) -> Vec<String> {
+pub(crate) fn apply_key_permissions(path: &Path) -> Vec<String> {
     #[cfg(windows)]
     {
         let user = std::env::var("USERNAME").unwrap_or_else(|_| "current user".to_string());
@@ -454,7 +454,7 @@ impl Listener for TlsListener {
     }
 }
 
-fn spawn_tls(listener: TcpListener, config: Arc<rustls::ServerConfig>, state: web::WebState) -> super::RunningServer {
+pub(crate) fn spawn_tls(listener: TcpListener, config: Arc<rustls::ServerConfig>, state: web::WebState) -> super::RunningServer {
     let addr = listener.local_addr().expect("a bound listener has a local address");
     let notify = Arc::new(Notify::new());
     let shutdown = notify.clone();

@@ -9,6 +9,8 @@ use uuid::Uuid;
 mod experiments;
 mod phase1b;
 mod phase2;
+mod phase4;
+mod phase4_sessions;
 pub mod cron;
 
 #[derive(Debug, Error)]
@@ -507,6 +509,9 @@ fn ensure_team_schema(c: &Connection) -> Result<(), StorageError> {
     // Phase 1: per-project overrides (models, approval mode, setup script). Additive; desktop-only.
     let has_project_overrides: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='overrides_json')", [], |r| r.get(0))?;
     if !has_project_overrides { c.execute("ALTER TABLE projects ADD COLUMN overrides_json TEXT NOT NULL DEFAULT '{}'", [])?; }
+    // Phase 4: a project's repository identity, so the same repository is found on another machine.
+    // Additive, and its own block so the two Phase 4 lanes do not edit the same lines.
+    phase4_sessions::ensure_phase4_sessions_schema(c)?;
     // At most one built-in Manager, enforced by a partial unique index rather
     // than by convention: a second `system_role='manager'` row cannot exist.
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_manager ON agents(system_role) WHERE system_role='manager'", [])?;
@@ -2163,7 +2168,7 @@ impl Storage {
     fn migrate(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         let storage = Self::migrate_versions(conn, path)?;
         { let mut c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; ensure_agent_accept_edits(&mut c, path)?; }
-        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; phase1b::ensure_phase1b_schema(&c)?; phase2::ensure_phase2_schema(&c)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
+        { let c = storage.conn.lock().map_err(|_| StorageError::Poisoned)?; phase1b::ensure_phase1b_schema(&c)?; phase2::ensure_phase2_schema(&c)?; phase4::ensure_phase4_schema(&c)?; ensure_tasks_schema(&c)?; ensure_delegation_schema(&c)?; ensure_permission_rules_schema(&c)?; ensure_team_queue_schema(&c)?; ensure_client_message_id_indexes(&c)?; }
         Ok(storage)
     }
     fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
@@ -2452,6 +2457,11 @@ impl Storage {
         project_rows(&c)?.into_iter().find(|project| project["id"] == id).ok_or(StorageError::AgentNotFound)
     }
     pub fn project_create(&self, name: &str, path: Option<&str>) -> Result<(Value, Vec<Value>), StorageError> {
+        self.project_create_with_identity(name, path, None)
+    }
+    /// Phase 4: `repo_identity` is the repository identity read from the folder before the row is
+    /// written, so the row and its `project.changed` event carry it. `None` leaves it empty.
+    pub fn project_create_with_identity(&self, name: &str, path: Option<&str>, repo_identity: Option<&str>) -> Result<(Value, Vec<Value>), StorageError> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 80 { return Err(StorageError::InvalidAgent); }
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -2459,7 +2469,7 @@ impl Storage {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         let order: i64 = tx.query_row("SELECT COALESCE(MAX(sort_order)+1,0) FROM projects", [], |r| r.get(0))?;
-        tx.execute("INSERT INTO projects(id,name,path,sort_order,collapsed,created_at,updated_at) VALUES(?1,?2,?3,?4,0,?5,?5)", params![id, name, path.map(str::trim).filter(|p| !p.is_empty()), order, now])?;
+        tx.execute("INSERT INTO projects(id,name,path,sort_order,collapsed,created_at,updated_at,repo_identity) VALUES(?1,?2,?3,?4,0,?5,?5,?6)", params![id, name, path.map(str::trim).filter(|p| !p.is_empty()), order, now, repo_identity])?;
         let project = project_rows(&tx)?.into_iter().find(|project| project["id"] == id.as_str()).ok_or(StorageError::AgentNotFound)?;
         let event = push_team_event(&tx, "project.changed", &json!({"action":"created","project":project}))?;
         tx.commit()?;
@@ -2473,6 +2483,12 @@ impl Storage {
     }
     /// `overrides`, when given, replaces the whole object after validation (see `validate_project_overrides`).
     pub fn project_update_with_overrides(&self, id: &str, input: &Value, overrides: Option<&Value>) -> Result<(Value, Vec<Value>), StorageError> {
+        self.project_update_with_identity(id, input, overrides, None)
+    }
+    /// Phase 4: `repo_identity` writes the project's repository identity in the same transaction when
+    /// given — `Some(None)` clears it, `None` leaves it alone — so the `project.changed` event carries
+    /// the value the caller just read from the folder.
+    pub fn project_update_with_identity(&self, id: &str, input: &Value, overrides: Option<&Value>, repo_identity: Option<Option<&str>>) -> Result<(Value, Vec<Value>), StorageError> {
         let overrides = overrides.map(validate_project_overrides).transpose()?;
         let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2502,7 +2518,15 @@ impl Storage {
             tx.execute("UPDATE projects SET sort_order=?2 WHERE id=?1", params![id, order.as_i64().ok_or(StorageError::InvalidAgent)?])?;
         }
         if let Some(overrides) = &overrides {
-            tx.execute("UPDATE projects SET overrides_json=?2,updated_at=?3 WHERE id=?1", params![id, overrides.to_string(), now])?;
+            // Phase 4: trust in a `.bitbots.json` is never part of a settings write. It is kept as it
+            // is stored, and only `project_set_trusted_shared_hash` changes it.
+            let mut next = overrides.clone();
+            let stored: Option<String> = tx.query_row("SELECT json_extract(overrides_json,'$.trustedSharedHash') FROM projects WHERE id=?1", [id], |r| r.get::<_, Option<String>>(0)).optional()?.flatten();
+            if let Some(hash) = stored.filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))) { next["trustedSharedHash"] = json!(hash); }
+            tx.execute("UPDATE projects SET overrides_json=?2,updated_at=?3 WHERE id=?1", params![id, next.to_string(), now])?;
+        }
+        if let Some(identity) = repo_identity {
+            tx.execute("UPDATE projects SET repo_identity=?2 WHERE id=?1", params![id, identity])?;
         }
         let project = project_rows(&tx)?.into_iter().find(|project| project["id"] == id).ok_or(StorageError::AgentNotFound)?;
         let event = push_team_event(&tx, "project.changed", &json!({"action":"updated","project":project}))?;
@@ -7830,22 +7854,35 @@ pub fn file_detail(path: &str, raw: &Value) -> Value {
 fn runtime_exists(c:&Connection,id:&str)->Result<bool,StorageError>{Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM runtimes WHERE id=?1)",[id],|r|r.get(0))?)}
 fn ensure_name_free(c:&Connection,key:&str,except:Option<&str>)->Result<(),StorageError>{let n:i64=c.query_row("SELECT count(*) FROM agents WHERE name_key=?1 AND archived=0 AND (?2 IS NULL OR id!=?2)",params![key,except],|r|r.get(0))?;if n>0{Err(StorageError::AgentConflict)}else{Ok(())}}
 fn project_rows(c: &Connection) -> Result<Vec<Value>, StorageError> {
-    let mut rows = query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'overrides',json(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END),'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")?;
+    let mut rows = query_jsons(c, "SELECT json_object('id',id,'name',name,'path',path,'description',description,'sortOrder',sort_order,'collapsed',json(CASE WHEN collapsed=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'overrides',json(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END),'repoIdentity',repo_identity,'createdAt',created_at,'updatedAt',updated_at) FROM projects WHERE ?1=?1 ORDER BY sort_order,created_at,id", "")?;
     // The DTO always carries all three keys, whatever an older row or a hand edit left behind.
-    for row in &mut rows { row["overrides"] = validate_project_overrides(&row["overrides"]).unwrap_or_else(|_| empty_project_overrides()); }
+    for row in &mut rows { row["overrides"] = validate_stored_overrides(&row["overrides"]).unwrap_or_else(|_| empty_project_overrides()); }
     Ok(rows)
 }
 fn empty_project_overrides() -> Value { json!({"models": {}, "approvalMode": null, "setupScript": null, "copyFiles": [], "initSubmodules": false}) }
 /// The per-project overrides, validated and normalised. Anything but `models`, `approvalMode`,
-/// `setupScript`, `copyFiles` and `initSubmodules` is refused. `models` maps a provider name to a
-/// model id (1 to 200 characters); `approvalMode` is a mode or null; `setupScript` is up to 4,000
-/// characters, and a blank one is null; `copyFiles` is up to 50 relative paths of at most 260
-/// characters, each with no `..`, drive, wildcard or leading slash (they are copied into a
+/// `setupScript`, `copyFiles`, `initSubmodules` and `trustedSharedHash` is refused. `models` maps a
+/// provider name to a model id (1 to 200 characters); `approvalMode` is a mode or null; `setupScript`
+/// is up to 4,000 characters, and a blank one is null; `copyFiles` is up to 50 relative paths of at
+/// most 260 characters, each with no `..`, drive, wildcard or leading slash (they are copied into a
 /// conversation's worktree, so the main folder is always the source); `initSubmodules` is a boolean.
+/// `trustedSharedHash` is the SHA-256 (64 lower-case hex) of a `.bitbots.json` the owner trusted; it
+/// is carried through only when present, so a project without trust keeps the five usual keys.
 /// The Full access confirmation for `bypass` is the caller's (it belongs to the request, not the data).
 pub fn validate_project_overrides(v: &Value) -> Result<Value, StorageError> {
+    validate_overrides(v, false)
+}
+
+/// A stored row may carry `trustedSharedHash` (see `project_set_trusted_shared_hash`); a caller may
+/// not, so only this crate reads it back through `validate_overrides(v, true)`.
+fn validate_stored_overrides(v: &Value) -> Result<Value, StorageError> {
+    validate_overrides(v, true)
+}
+
+fn validate_overrides(v: &Value, stored_trust: bool) -> Result<Value, StorageError> {
     let map = v.as_object().ok_or(StorageError::InvalidAgent)?;
-    if map.keys().any(|key| !["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules"].contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
+    let allowed: &[&str] = if stored_trust { &["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules", "trustedSharedHash"] } else { &["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules"] };
+    if map.keys().any(|key| !allowed.contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
     let mut out = empty_project_overrides();
     match map.get("models") {
         None | Some(Value::Null) => {}
@@ -7893,6 +7930,12 @@ pub fn validate_project_overrides(v: &Value) -> Result<Value, StorageError> {
         None | Some(Value::Null) => {}
         Some(Value::Bool(init)) => out["initSubmodules"] = json!(init),
         Some(_) => return Err(StorageError::InvalidAgent),
+    }
+    // Phase 4: the `.bitbots.json` the owner trusted, as the SHA-256 of its bytes. Absent means no
+    // trust, so the DTO keeps the five usual keys; a hand edit that is not 64 hex digits is refused.
+    if let Some(hash) = map.get("trustedSharedHash") {
+        let hash = hash.as_str().filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))).ok_or(StorageError::InvalidAgent)?;
+        out["trustedSharedHash"] = json!(hash);
     }
     Ok(out)
 }

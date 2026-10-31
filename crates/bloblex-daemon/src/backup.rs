@@ -148,6 +148,8 @@ fn exportable_setting(key: &str, value: &Value) -> bool {
         || lower.starts_with("internal.")
         || lower.starts_with("migration.")
         || lower.starts_with("remote.")
+        // A machine's id and name are its own, and a restore must not make two machines one.
+        || lower.starts_with("machine.")
         // Consent to read the coding agents' sign-ins never travels: the owner
         // gives it again on the new machine.
         || lower.starts_with("usage.")
@@ -939,6 +941,13 @@ mod tests {
             Value::Object(root)
         };
         assert_eq!(serde_json::to_vec(&first).unwrap(), serde_json::to_vec(&second).unwrap());
+    }
+
+    #[test]
+    fn machine_settings_are_never_exportable() {
+        for key in ["machine.id", "machine.name", "Machine.ID", "machine.anything"] {
+            assert!(!exportable_setting(key, &json!("x")), "{key}");
+        }
     }
 
     #[test]

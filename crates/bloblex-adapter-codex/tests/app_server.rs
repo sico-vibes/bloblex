@@ -197,12 +197,12 @@ async fn fake_peer_forwards_modern_command_output_deltas_and_mcp_details() {
         _ => None,
     }).collect::<Vec<_>>().concat();
     assert_eq!(chunks, "first chunk");
-    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw } if tool_call_id == "cmd-modern" && raw["aggregatedOutput"] == "first chunk" && raw["exitCode"] == 0)));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw, .. } if tool_call_id == "cmd-modern" && raw["aggregatedOutput"] == "first chunk" && raw["exitCode"] == 0)));
     assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "mcp-modern" && title == "bloblex · message_blob" && raw["arguments"]["blob"] == "Gogo")));
     assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolUpdated { tool_call_id, raw } if tool_call_id == "mcp-modern" && raw["progress"] == "Waiting for teammate")));
-    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw } if tool_call_id == "mcp-modern" && raw["result"]["content"][0]["text"] == "Sent to Gogo.")));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw, .. } if tool_call_id == "mcp-modern" && raw["result"]["content"][0]["text"] == "Sent to Gogo.")));
     assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, title, raw, .. } if tool_call_id == "dynamic-modern" && title == "search · find_page" && raw["arguments"]["query"] == "quota docs")));
-    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw } if tool_call_id == "dynamic-modern" && raw["contentItems"][0]["text"] == "Found usage documentation." && raw["success"] == true)));
+    assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCompleted { tool_call_id, raw, .. } if tool_call_id == "dynamic-modern" && raw["contentItems"][0]["text"] == "Found usage documentation." && raw["success"] == true)));
     adapter.close_session(&handle).await.unwrap();
     let _ = std::fs::remove_dir_all(runtime.cwd.unwrap());
 }

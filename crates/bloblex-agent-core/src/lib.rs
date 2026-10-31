@@ -1154,6 +1154,11 @@ pub enum AgentEvent {
         kind: String,
         title: String,
         raw: Value,
+        /// The tool call that started this one, when a provider runs the call
+        /// inside its own sub-agent (Claude's `Task`/`Agent`). The row is a
+        /// child activity of that parent row, not the bot's own work.
+        #[serde(default)]
+        parent_tool_call_id: Option<String>,
     },
     ToolUpdated {
         tool_call_id: String,
@@ -1162,6 +1167,16 @@ pub enum AgentEvent {
     ToolCompleted {
         tool_call_id: String,
         raw: Value,
+        /// See `ToolStarted::parent_tool_call_id`.
+        #[serde(default)]
+        parent_tool_call_id: Option<String>,
+    },
+    /// Text a provider's own sub-agent produced. It belongs to the row of the
+    /// tool call that started the sub-agent (`detail.output`), never to the
+    /// bot's reply, and is internal to the daemon's event handling.
+    SubagentText {
+        parent_tool_call_id: String,
+        text: String,
     },
     FileChanged {
         path: String,

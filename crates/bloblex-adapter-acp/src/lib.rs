@@ -1254,11 +1254,12 @@ async fn emit_update(tx: &SessionEventSink, p: &Value, context_model: Option<Str
             kind: u["kind"].as_str().unwrap_or("other").into(),
             title: tool_activity(u["kind"].as_str().unwrap_or("other"), u, u["title"].as_str().unwrap_or("Tool call")).label,
             raw: u.clone(),
+            parent_tool_call_id: None,
         }),
         "tool_call_update" => {
             let tool_call_id = u["toolCallId"].as_str().unwrap_or("tool").into();
             if matches!(u["status"].as_str(), Some("completed" | "failed")) {
-                Some(AgentEvent::ToolCompleted { tool_call_id, raw: u.clone() })
+                Some(AgentEvent::ToolCompleted { tool_call_id, raw: u.clone(), parent_tool_call_id: None })
             } else {
                 Some(AgentEvent::ToolUpdated { tool_call_id, raw: u.clone() })
             }
@@ -1955,7 +1956,7 @@ mod tests {
                 raw: json!({}),
             },
             AgentEvent::UsageReport { turn_id: "turn".into(), report },
-            AgentEvent::ToolCompleted { tool_call_id: "tool".into(), raw: json!({}) },
+            AgentEvent::ToolCompleted { tool_call_id: "tool".into(), raw: json!({}), parent_tool_call_id: None },
             AgentEvent::Error { message: "provider failed".into() },
             AgentEvent::TurnCompleted,
         ] {
@@ -2034,7 +2035,7 @@ mod tests {
         }
         const TOOL_STARTED_FLOOD: usize = SESSION_FORWARD_QUEUE_COALESCE_CAP * 8;
         for index in 0..TOOL_STARTED_FLOOD {
-            sink.enqueue(AgentEvent::ToolStarted { tool_call_id: format!("tool-{index}"), kind: "exec".into(), title: "progress".into(), raw: json!({}) }).unwrap();
+            sink.enqueue(AgentEvent::ToolStarted { tool_call_id: format!("tool-{index}"), kind: "exec".into(), title: "progress".into(), raw: json!({}), parent_tool_call_id: None }).unwrap();
         }
         assert_eq!(sink.0.events.lock().unwrap().iter().filter(|item| matches!(item.event, AgentEvent::ToolStarted { .. })).count(), TOOL_STARTED_FLOOD);
         assert!(matches!(receiver.recv().await, Some(AgentEvent::SessionIdle)));

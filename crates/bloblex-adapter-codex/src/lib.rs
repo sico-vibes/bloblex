@@ -444,6 +444,7 @@ impl CodexAdapter {
                             let _ = r.events.enqueue(AgentEvent::ToolCompleted {
                                 tool_call_id: item["id"].as_str().unwrap_or("image").into(),
                                 raw: without_image_bytes(item),
+                                parent_tool_call_id: None,
                             });
                             if let Some(event) = image_generation_request(item) {
                                 let _ = r.events.enqueue(event);
@@ -1041,12 +1042,14 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                     kind: "imageGeneration".into(),
                     title: "Generating an image".into(),
                     raw: without_image_bytes(i),
+                    parent_tool_call_id: None,
                 }),
                 _ => Some(AgentEvent::ToolStarted {
                     tool_call_id: i["id"].as_str().unwrap_or("item").into(),
                     kind: i["type"].as_str().unwrap_or("other").into(),
                     title: codex_item_title(i),
                     raw: i.clone(),
+                    parent_tool_call_id: None,
                 }),
             }
         }
@@ -1073,6 +1076,7 @@ fn map_notification(method: &str, p: &Value) -> Option<AgentEvent> {
                 _ => Some(AgentEvent::ToolCompleted {
                     tool_call_id: i["id"].as_str().unwrap_or("item").into(),
                     raw: i.clone(),
+                    parent_tool_call_id: None,
                 }),
             }
         }
@@ -1977,7 +1981,7 @@ mod tests {
         let command = json!({"threadId":"thread","turnId":"turn","item":{"type":"commandExecution","id":"cmd-1","command":"cargo test -p bloblex-storage","commandActions":[],"cwd":"D:/project","status":"inProgress"}});
         assert!(matches!(map_notification("item/started", &command), Some(AgentEvent::ToolStarted { tool_call_id, title, raw, .. }) if tool_call_id == "cmd-1" && title == "Ran cargo test -p bloblex-storage" && raw["cwd"] == "D:/project"));
         let mcp = json!({"threadId":"thread","turnId":"turn","item":{"type":"mcpToolCall","id":"mcp-1","server":"bloblex","tool":"message_blob","arguments":{"blob":"Gogo"},"status":"completed","result":{"content":[{"type":"text","text":"Sent to Gogo."}]},"error":null}});
-        assert!(matches!(map_notification("item/completed", &mcp), Some(AgentEvent::ToolCompleted { tool_call_id, raw }) if tool_call_id == "mcp-1" && raw["arguments"]["blob"] == "Gogo" && raw["result"]["content"][0]["text"] == "Sent to Gogo."));
+        assert!(matches!(map_notification("item/completed", &mcp), Some(AgentEvent::ToolCompleted { tool_call_id, raw, .. }) if tool_call_id == "mcp-1" && raw["arguments"]["blob"] == "Gogo" && raw["result"]["content"][0]["text"] == "Sent to Gogo."));
         let delta = json!({"threadId":"thread","turnId":"turn","itemId":"cmd-1","delta":"first chunk"});
         assert!(matches!(map_notification("item/commandExecution/outputDelta", &delta), Some(AgentEvent::ToolUpdated { tool_call_id, raw }) if tool_call_id == "cmd-1" && raw["outputDelta"] == "first chunk"));
         let progress = json!({"threadId":"thread","turnId":"turn","itemId":"mcp-1","message":"Fetched 4 pages"});
@@ -2023,7 +2027,7 @@ mod tests {
                 choices: vec!["allow_once".into()], raw: json!({}),
             },
             AgentEvent::UsageReport { turn_id: "turn".into(), report: usage_report(None, None, false) },
-            AgentEvent::ToolCompleted { tool_call_id: "tool".into(), raw: json!({}) },
+            AgentEvent::ToolCompleted { tool_call_id: "tool".into(), raw: json!({}), parent_tool_call_id: None },
             AgentEvent::Error { message: "provider failed".into() },
             AgentEvent::TurnCompleted,
         ] { sink.enqueue(event).unwrap(); }
@@ -2090,7 +2094,7 @@ mod tests {
         }
         const TOOL_STARTED_FLOOD: usize = SESSION_FORWARD_QUEUE_COALESCE_CAP * 8;
         for index in 0..TOOL_STARTED_FLOOD {
-            sink.enqueue(AgentEvent::ToolStarted { tool_call_id: format!("tool-{index}"), kind: "exec".into(), title: "progress".into(), raw: json!({}) }).unwrap();
+            sink.enqueue(AgentEvent::ToolStarted { tool_call_id: format!("tool-{index}"), kind: "exec".into(), title: "progress".into(), raw: json!({}), parent_tool_call_id: None }).unwrap();
         }
         assert_eq!(sink.0.events.lock().unwrap().iter().filter(|item| matches!(item.event, AgentEvent::ToolStarted { .. })).count(), TOOL_STARTED_FLOOD);
         assert!(matches!(receiver.recv().await, Some(AgentEvent::SessionIdle)));

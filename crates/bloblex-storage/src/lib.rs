@@ -6185,12 +6185,13 @@ impl Storage {
         state: &str,
         raw: &Value,
     ) -> Result<Value, StorageError> {
-        self.upsert_tool_in_turn(session, None, id, kind, title, state, raw)
+        self.upsert_tool_in_turn(session, None, id, kind, title, state, raw, None)
     }
     /// Records a tool call against its turn, with start/finish times and a
     /// bounded, provider-neutral `detail` (see `tool_detail`). A completion
     /// merges into what the start recorded, so a command keeps its input
-    /// once its output arrives.
+    /// once its output arrives. `parent_tool_call_id` names the row that
+    /// started this call when the provider ran it inside a sub-agent.
     #[allow(clippy::too_many_arguments)]
     pub fn upsert_tool_in_turn(
         &self,
@@ -6201,6 +6202,7 @@ impl Storage {
         title: &str,
         state: &str,
         raw: &Value,
+        parent_tool_call_id: Option<&str>,
     ) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
         let session_exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [session], |r| r.get(0))?;
@@ -6235,9 +6237,32 @@ impl Storage {
         }
         let mut v =
             json!({"id":id,"sessionId":session,"kind":kind,"title":title,"state":state,"raw":raw,"startedAt":started_at,"detail":detail});
+        // The parent survives a completion that does not repeat it.
+        if let Some(parent) = parent_tool_call_id.map(str::trim).filter(|parent| !parent.is_empty()) {
+            v["parentToolCallId"] = json!(parent);
+        } else if existing["parentToolCallId"].as_str().is_some() {
+            v["parentToolCallId"] = existing["parentToolCallId"].clone();
+        }
         if matches!(state, "completed" | "failed" | "error" | "cancelled") { v["completedAt"] = json!(now); }
         c.execute("INSERT INTO tool_calls(id,session_id,turn_id,state,data) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data,turn_id=COALESCE(tool_calls.turn_id,excluded.turn_id)",params![id,session,turn,state,v.to_string()])?;
         Ok(v)
+    }
+    /// Appends text a provider's own sub-agent produced to the row of the tool
+    /// call that started it, keeping the row's bounded `detail.output`. Returns
+    /// `None` when no such row exists yet, so the caller can hold the text.
+    pub fn append_tool_output(&self, id: &str, text: &str) -> Result<Option<Value>, StorageError> {
+        let text = text.trim();
+        if text.is_empty() { return Ok(None); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let existing: Option<String> = c.query_row("SELECT data FROM tool_calls WHERE id=?1", [id], |r| r.get(0)).optional()?;
+        let Some(existing) = existing else { return Ok(None) };
+        let mut v: Value = serde_json::from_str(&existing).unwrap_or(Value::Null);
+        if !v.is_object() { return Ok(None); }
+        let prior = v["detail"]["output"].as_str().unwrap_or_default().trim_end();
+        let joined = if prior.is_empty() { text.to_owned() } else { format!("{prior}\n{text}") };
+        v["detail"]["output"] = json!(clip_text(&joined, DETAIL_TEXT_LIMIT));
+        c.execute("UPDATE tool_calls SET data=?2 WHERE id=?1", params![id, v.to_string()])?;
+        Ok(Some(v))
     }
     pub fn insert_file(&self, session: &str, path: &str, raw: &Value) -> Result<(), StorageError> {
         self.insert_file_in_turn(session, None, path, raw)
@@ -6900,7 +6925,7 @@ impl Storage {
         let msgs=query_jsons(c,SESSION_MESSAGES_SQL,id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
-        v["tools"] = json!(query_jsons(c,"SELECT json_object('id',id,'sessionId',session_id,'turnId',turn_id,'kind',json_extract(data,'$.kind'),'title',json_extract(data,'$.title'),'state',state,'startedAt',json_extract(data,'$.startedAt'),'completedAt',json_extract(data,'$.completedAt'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM tool_calls WHERE session_id=?1 ORDER BY rowid",id)?);
+        v["tools"] = json!(query_jsons(c,"SELECT json_object('id',id,'sessionId',session_id,'turnId',turn_id,'kind',json_extract(data,'$.kind'),'title',json_extract(data,'$.title'),'state',state,'startedAt',json_extract(data,'$.startedAt'),'completedAt',json_extract(data,'$.completedAt'),'parentToolCallId',json_extract(data,'$.parentToolCallId'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM tool_calls WHERE session_id=?1 ORDER BY rowid",id)?);
         v["files"] = json!(query_jsons(c,"SELECT json_object('id',id,'turnId',turn_id,'path',path,'createdAt',json_extract(data,'$.createdAt'),'detail',json(COALESCE(json_extract(data,'$.detail'),'{}'))) FROM file_changes WHERE session_id=?1 ORDER BY rowid",id)?);
         Ok(v)
     }
@@ -7874,6 +7899,17 @@ pub fn tool_detail(kind: &str, raw: &Value) -> Value {
     if let Some(changes) = raw["changes"].as_array() { if changes.len() > 1 { detail.insert("fileCount".into(), json!(changes.len())); } }
     if let Some(status) = raw["status"].as_str().filter(|status| matches!(*status, "inProgress" | "completed" | "failed" | "declined")) { detail.insert("resultStatus".into(), json!(status)); }
     if let Some(success) = raw["success"].as_bool() { detail.insert("success".into(), json!(success)); }
+    // A tool that starts a child agent (Claude's `Task`/`Agent`) names it here,
+    // so the row can say which sub-agent it is without the provider's
+    // transcript. `model` is absent when the call used the provider's default.
+    if let Some(subagent_type) = input["subagent_type"].as_str().map(str::trim).filter(|value| !value.is_empty()) {
+        let description = input["description"].as_str().map(str::trim).filter(|value| !value.is_empty());
+        detail.insert("subagent".into(), json!({
+            "type": subagent_type,
+            "model": input["model"].as_str().map(str::trim).filter(|value| !value.is_empty()),
+            "description": description,
+        }));
+    }
     if !detail.is_empty() { detail.insert("kind".into(), json!(kind)); }
     Value::Object(detail)
 }
@@ -9596,12 +9632,12 @@ mod tests {
         db.upsert_runtime(&json!({"id":"rt-tools","provider":"codex"})).unwrap();
         db.create_session("s-tools", "rt-tools", "codex", ".", "Tools").unwrap();
         db.create_turn("t-tools", "s-tools").unwrap();
-        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "call", "commandExecution", "npm test", "running", &json!({"command":"npm test"})).unwrap();
-        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "call", "other", "Tool", "completed", &json!({"aggregatedOutput":"ok","exitCode":0})).unwrap();
-        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "commandExecution", "cargo test", "running", &json!({"command":"cargo test"})).unwrap();
-        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "other", "Activity", "running", &json!({"type":"commandExecution","outputDelta":"first "})).unwrap();
-        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "other", "Activity", "running", &json!({"type":"commandExecution","outputDelta":"second"})).unwrap();
-        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "other", "Activity", "completed", &json!({"type":"commandExecution","aggregatedOutput":"first second","exitCode":0,"status":"completed"})).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "call", "commandExecution", "npm test", "running", &json!({"command":"npm test"}), None).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "call", "other", "Tool", "completed", &json!({"aggregatedOutput":"ok","exitCode":0}), None).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "commandExecution", "cargo test", "running", &json!({"command":"cargo test"}), None).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "other", "Activity", "running", &json!({"type":"commandExecution","outputDelta":"first "}), None).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "other", "Activity", "running", &json!({"type":"commandExecution","outputDelta":"second"}), None).unwrap();
+        db.upsert_tool_in_turn("s-tools", Some("t-tools"), "stream", "other", "Activity", "completed", &json!({"type":"commandExecution","aggregatedOutput":"first second","exitCode":0,"status":"completed"}), None).unwrap();
         db.insert_file_in_turn("s-tools", Some("t-tools"), "src/a.ts", &json!({"changes":[{"path":"src/a.ts","diff":"+x"}]})).unwrap();
         let detail = db.session_detail("s-tools").unwrap();
         let tool = &detail["tools"][0];
@@ -10708,6 +10744,58 @@ mod memory_tests {
         assert!(db.session_manager_handover("s-ho").unwrap());
         db.set_session_manager_handover("s-ho", false).unwrap();
         assert!(!db.session_manager_handover("s-ho").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod phase8_subagent_tests {
+    use super::*;
+
+    #[test]
+    fn the_task_row_says_which_subagent() {
+        // Claude's Agent tool (formerly Task) names the sub-agent it starts in
+        // its input; the row keeps that, so it need not read the provider's
+        // private transcript.
+        let started = tool_detail("Agent", &json!({"type":"tool_use","name":"Agent","input":{"description":"Count lines in a.txt","prompt":"read it","subagent_type":"general-purpose"}}));
+        assert_eq!(started["subagent"], json!({"type":"general-purpose","model":null,"description":"Count lines in a.txt"}));
+        let named = tool_detail("Agent", &json!({"input":{"description":"Search","subagent_type":"explore","model":"claude-haiku-5-5"}}));
+        assert_eq!(named["subagent"], json!({"type":"explore","model":"claude-haiku-5-5","description":"Search"}));
+        assert!(tool_detail("Bash", &json!({"input":{"command":"ls"}})).get("subagent").is_none(), "an ordinary tool starts no sub-agent");
+    }
+
+    #[test]
+    fn a_subagent_row_keeps_its_parent_and_its_output() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-sub","provider":"claude"})).unwrap();
+        db.create_session("s-sub", "rt-sub", "claude", ".", "Sub").unwrap();
+        db.create_turn("t-sub", "s-sub").unwrap();
+        db.upsert_tool_in_turn("s-sub", Some("t-sub"), "parent-row", "Agent", "Agent", "running", &json!({"name":"Agent","input":{"subagent_type":"general-purpose","description":"Count lines"}}), None).unwrap();
+        db.upsert_tool_in_turn("s-sub", Some("t-sub"), "child-row", "Read", "Read a.txt", "running", &json!({"name":"Read","input":{"file_path":"a.txt"}}), Some("parent-row")).unwrap();
+        assert_eq!(db.append_tool_output("unknown-row", "text").unwrap(), None, "an unknown row is reported, never invented");
+        assert_eq!(db.append_tool_output("parent-row", "4").unwrap().expect("the parent row exists")["detail"]["output"], "4");
+        db.append_tool_output("parent-row", "and a second line").unwrap();
+        // The tool result that finishes the child does not repeat the parent.
+        db.upsert_tool_in_turn("s-sub", Some("t-sub"), "child-row", "other", "Tool", "completed", &json!({"type":"tool_result","tool_use_id":"child-row","content":[{"type":"text","text":"ok"}]}), None).unwrap();
+        let detail = db.session_detail("s-sub").unwrap();
+        let rows = detail["tools"].as_array().unwrap();
+        let child = rows.iter().find(|row| row["id"] == "child-row").unwrap();
+        assert_eq!(child["parentToolCallId"], "parent-row", "a completion that does not repeat the parent keeps it");
+        let parent = rows.iter().find(|row| row["id"] == "parent-row").unwrap();
+        assert!(parent["parentToolCallId"].is_null(), "the parent's own row has none");
+        assert_eq!(parent["detail"]["output"], "4\nand a second line");
+        assert_eq!(parent["detail"]["subagent"]["type"], "general-purpose");
+    }
+
+    #[test]
+    fn a_subagent_output_stays_bounded() {
+        let db = Storage::open_in_memory().unwrap();
+        db.upsert_runtime(&json!({"id":"rt-sub2","provider":"claude"})).unwrap();
+        db.create_session("s-sub2", "rt-sub2", "claude", ".", "Sub").unwrap();
+        db.upsert_tool_in_turn("s-sub2", None, "row", "Agent", "Agent", "running", &json!({"input":{"subagent_type":"general-purpose"}}), None).unwrap();
+        for _ in 0..4 { db.append_tool_output("row", &"x".repeat(DETAIL_TEXT_LIMIT / 2)).unwrap(); }
+        let detail = db.session_detail("s-sub2").unwrap();
+        let output = detail["tools"][0]["detail"]["output"].as_str().unwrap();
+        assert!(output.chars().count() <= DETAIL_TEXT_LIMIT + 1, "{}", output.chars().count());
     }
 }
 

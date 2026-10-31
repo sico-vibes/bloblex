@@ -4679,6 +4679,9 @@ async fn forward_events_with_timeouts(
     // an install, a test run) is quiet while it works, so the window widens to
     // RUNNING_TOOL_FACTOR times the inactivity window until it completes.
     let mut open_tools: HashSet<String> = HashSet::new();
+    // Phase 8: text a provider's own sub-agent produced for a parent row that
+    // the adapter has not reported yet, kept until that row appears.
+    let mut pending_subagent_text: HashMap<String, String> = HashMap::new();
     loop {
         // While the user is being asked, the provider is legitimately idle:
         // neither window applies, and leaving that state restarts the window.
@@ -4796,6 +4799,7 @@ async fn forward_events_with_timeouts(
                 | AgentEvent::ToolStarted { .. }
                 | AgentEvent::ToolUpdated { .. }
                 | AgentEvent::ToolCompleted { .. }
+                | AgentEvent::SubagentText { .. }
                 | AgentEvent::FileChanged { .. }
                 | AgentEvent::PermissionRequested { .. }
         ) {
@@ -4859,35 +4863,57 @@ async fn forward_events_with_timeouts(
                 kind,
                 title,
                 raw,
+                parent_tool_call_id,
             } => {
-                let tool = st
+                let mut tool = st
                     .db
-                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, &kind, &title, "running", &raw)
+                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, &kind, &title, "running", &raw, parent_tool_call_id.as_deref())
                     .unwrap_or(Value::Null);
+                // A sub-agent's text can arrive before its parent's row does;
+                // nothing is dropped, it is attached when the row appears.
+                if let Some(text) = pending_subagent_text.remove(&tool_call_id) {
+                    if let Ok(Some(updated)) = st.db.append_tool_output(&tool_call_id, &text) { tool = updated; }
+                }
                 (
                     "tool.changed",
-                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"detail":tool["detail"]}),
+                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"parentToolCallId":tool["parentToolCallId"],"detail":tool["detail"]}),
                 )
             }
             AgentEvent::ToolUpdated { tool_call_id, raw } => {
                 let tool = st
                     .db
-                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, "other", "Activity", "running", &raw)
+                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, "other", "Activity", "running", &raw, None)
                     .unwrap_or(Value::Null);
                 (
                     "tool.changed",
-                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"detail":tool["detail"]}),
+                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":"running","startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"parentToolCallId":tool["parentToolCallId"],"detail":tool["detail"]}),
                 )
             }
-            AgentEvent::ToolCompleted { tool_call_id, raw } => {
+            AgentEvent::ToolCompleted { tool_call_id, raw, parent_tool_call_id } => {
                 let state = completed_tool_state(&raw);
                 let tool = st
                     .db
-                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, "other", "Tool", state, &raw)
+                    .upsert_tool_in_turn(&sid, turn.as_deref(), &tool_call_id, "other", "Tool", state, &raw, parent_tool_call_id.as_deref())
                     .unwrap_or(Value::Null);
                 (
                     "tool.changed",
-                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":tool["state"],"startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"detail":tool["detail"]}),
+                    json!({"sessionId":sid,"turnId":turn,"id":tool_call_id,"kind":tool["kind"],"title":tool["title"],"state":tool["state"],"startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"parentToolCallId":tool["parentToolCallId"],"detail":tool["detail"]}),
+                )
+            }
+            AgentEvent::SubagentText { parent_tool_call_id, text } => {
+                // A sub-agent's words are the output of the row that started
+                // it, never the bot's reply. A row that has not arrived yet
+                // holds the text instead of losing it.
+                let appended = st.db.append_tool_output(&parent_tool_call_id, &text).unwrap_or(None);
+                let Some(tool) = appended else {
+                    let held = pending_subagent_text.entry(parent_tool_call_id.clone()).or_default();
+                    if !held.is_empty() { held.push('\n'); }
+                    held.push_str(&text);
+                    continue;
+                };
+                (
+                    "tool.changed",
+                    json!({"sessionId":sid,"turnId":turn,"id":tool["id"],"kind":tool["kind"],"title":tool["title"],"state":tool["state"],"startedAt":tool["startedAt"],"completedAt":tool["completedAt"],"parentToolCallId":tool["parentToolCallId"],"detail":tool["detail"]}),
                 )
             }
             AgentEvent::FileChanged { path, raw } => {
@@ -7029,12 +7055,64 @@ mod phase2a_tests {
     }
 
     #[tokio::test]
+    async fn a_subagents_tools_carry_their_parent_to_the_window() {
+        let (st, mut events) = state();
+        let (tx, forwarder) = live_session_stream(&st, "sub-nest", "sub-nest-turn").await;
+        tx.send(AgentEvent::ToolStarted { tool_call_id: "task-1".into(), kind: "Agent".into(), title: "Agent".into(), raw: json!({"type":"tool_use","name":"Agent","input":{"description":"Count lines","subagent_type":"general-purpose"}}), parent_tool_call_id: None }).await.unwrap();
+        let task = next_event(&mut events, "tool.changed").await;
+        assert!(task.payload["parentToolCallId"].is_null(), "the row that starts the sub-agent is the bot's own: {}", task.payload);
+        assert_eq!(task.payload["detail"]["subagent"]["type"], "general-purpose");
+        tx.send(AgentEvent::ToolStarted { tool_call_id: "read-1".into(), kind: "Read".into(), title: "Read a.txt".into(), raw: json!({"type":"tool_use","name":"Read","input":{"file_path":"a.txt"}}), parent_tool_call_id: Some("task-1".into()) }).await.unwrap();
+        let child = next_event(&mut events, "tool.changed").await;
+        assert_eq!(child.payload["parentToolCallId"], "task-1", "{}", child.payload);
+        assert_eq!(child.payload["title"], "Read a.txt");
+        drop(tx);
+        forwarder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_subagents_text_reaches_its_task_row() {
+        let (st, mut events) = state();
+        let (tx, forwarder) = live_session_stream(&st, "sub-text", "sub-text-turn").await;
+        tx.send(AgentEvent::ToolStarted { tool_call_id: "task-1".into(), kind: "Agent".into(), title: "Agent".into(), raw: json!({"type":"tool_use","name":"Agent","input":{"subagent_type":"general-purpose"}}), parent_tool_call_id: None }).await.unwrap();
+        next_event(&mut events, "tool.changed").await;
+        tx.send(AgentEvent::SubagentText { parent_tool_call_id: "task-1".into(), text: "four lines".into() }).await.unwrap();
+        let appended = next_event(&mut events, "tool.changed").await;
+        assert_eq!(appended.payload["id"], "task-1");
+        assert_eq!(appended.payload["detail"]["output"], "four lines", "{}", appended.payload);
+        // A second report appends rather than replaces.
+        tx.send(AgentEvent::SubagentText { parent_tool_call_id: "task-1".into(), text: "and a summary".into() }).await.unwrap();
+        let again = next_event(&mut events, "tool.changed").await;
+        assert_eq!(again.payload["detail"]["output"], "four lines\nand a summary");
+        // The bot's reply is still its own words.
+        tx.send(AgentEvent::AssistantMessage { text: "Done.".into() }).await.unwrap();
+        let reply = next_event(&mut events, "message.completed").await;
+        assert_eq!(reply.payload["content"], "Done.");
+        drop(tx);
+        forwarder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_subagent_text_that_beats_its_row_is_kept() {
+        let (st, mut events) = state();
+        let (tx, forwarder) = live_session_stream(&st, "sub-early", "sub-early-turn").await;
+        // The sub-agent speaks before the frame that starts its row arrives.
+        tx.send(AgentEvent::SubagentText { parent_tool_call_id: "task-1".into(), text: "four lines".into() }).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tx.send(AgentEvent::ToolStarted { tool_call_id: "task-1".into(), kind: "Agent".into(), title: "Agent".into(), raw: json!({"type":"tool_use","name":"Agent","input":{"subagent_type":"general-purpose"}}), parent_tool_call_id: None }).await.unwrap();
+        let row = next_event(&mut events, "tool.changed").await;
+        assert_eq!(row.payload["detail"]["output"], "four lines", "nothing is dropped: {}", row.payload);
+        drop(tx);
+        forwarder.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_failed_command_is_tool_history_and_a_completed_turn_stays_completed() {
         let (st, mut events) = state();
         let (tx, forwarder) = live_session_stream(&st, "tool-recovery", "tool-recovery-turn").await;
         // A command that fails is history: it never decides the turn.
-        tx.send(AgentEvent::ToolStarted { tool_call_id: "cmd-1".into(), kind: "commandExecution".into(), title: "Ran the tests".into(), raw: json!({"type":"commandExecution","command":"cargo test","status":"inProgress"}) }).await.unwrap();
-        tx.send(AgentEvent::ToolCompleted { tool_call_id: "cmd-1".into(), raw: json!({"type":"commandExecution","status":"failed","exitCode":1,"aggregatedOutput":"one test failed"}) }).await.unwrap();
+        tx.send(AgentEvent::ToolStarted { tool_call_id: "cmd-1".into(), kind: "commandExecution".into(), title: "Ran the tests".into(), raw: json!({"type":"commandExecution","command":"cargo test","status":"inProgress"}), parent_tool_call_id: None }).await.unwrap();
+        tx.send(AgentEvent::ToolCompleted { tool_call_id: "cmd-1".into(), raw: json!({"type":"commandExecution","status":"failed","exitCode":1,"aggregatedOutput":"one test failed"}), parent_tool_call_id: None }).await.unwrap();
         // The model recovers and finishes with a final answer.
         tx.send(AgentEvent::AssistantMessage { text: "The first run failed; after the fix it passes.".into() }).await.unwrap();
         tx.send(AgentEvent::TurnCompleted).await.unwrap();
@@ -8101,7 +8179,7 @@ mod phase2a_tests {
         let(tx,rx)=tokio::sync::mpsc::channel(8);
         let started=Instant::now();
         let task=tokio::spawn(forward_events_with_timeouts(st.clone(),sid.into(),"claude".into(),"rt-test".into(),rx,std::time::Duration::from_millis(40),std::time::Duration::from_millis(40)));
-        tx.send(AgentEvent::ToolStarted{tool_call_id:"npm-install".into(),kind:"execute".into(),title:"npm install".into(),raw:json!({})}).await.unwrap();
+        tx.send(AgentEvent::ToolStarted{tool_call_id:"npm-install".into(),kind:"execute".into(),title:"npm install".into(),raw:json!({}),parent_tool_call_id:None}).await.unwrap();
         let error=loop {
             let event=tokio::time::timeout(std::time::Duration::from_secs(2),events.recv()).await.unwrap().unwrap();
             if event.event_type=="turn.error" { break event; }
@@ -11261,14 +11339,14 @@ mod phase2a_tests {
         st.db.create_session("auto-acted","rt-test","codex",".","Acted").unwrap();
         st.db.update_session_state("auto-acted","idle").unwrap();
         // A change made before the run started never counts against it.
-        st.db.upsert_tool_in_turn("auto-acted",None,"old-edit","edit","Edit","completed",&json!({})).unwrap();
+        st.db.upsert_tool_in_turn("auto-acted",None,"old-edit","edit","Edit","completed",&json!({}),None).unwrap();
         let started=(Utc::now()+chrono::Duration::milliseconds(5)).to_rfc3339_opts(chrono::SecondsFormat::Millis,true);
         std::thread::sleep(std::time::Duration::from_millis(20));
         st.db.set_session_link("auto-acted",&json!({"kind":"automation","automationId":id,"runId":"acted-run","approvalMode":"auto"})).unwrap();
         st.db.automation_run_insert("acted-run",&id,Some("auto-acted"),"running",None,None,&started).unwrap();
-        st.db.upsert_tool_in_turn("auto-acted",None,"read-1","read","Read","completed",&json!({})).unwrap();
+        st.db.upsert_tool_in_turn("auto-acted",None,"read-1","read","Read","completed",&json!({}),None).unwrap();
         assert!(!st.db.session_acted_since("auto-acted",&started).unwrap(),"a read is not a change");
-        st.db.upsert_tool_in_turn("auto-acted",None,"cmd-1","commandExecution","Ran npm run fix","completed",&json!({})).unwrap();
+        st.db.upsert_tool_in_turn("auto-acted",None,"cmd-1","commandExecution","Ran npm run fix","completed",&json!({}),None).unwrap();
         assert!(st.db.session_acted_since("auto-acted",&started).unwrap(),"a command counts as a change");
         automations::after_turn(&st,"auto-acted","turn.error").await;
         assert_eq!(st.db.automation_run_get("acted-run").unwrap()["reason"],"error_after_changes");

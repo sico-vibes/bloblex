@@ -352,9 +352,13 @@ async fn write_control(c: &Conn, wire: Value) -> Result<(), AdapterError> {
     c.stdin.lock().await.write(&bytes).await.map_err(|e| AdapterError::Process(format!("writing Claude control reply: {e}")))
 }
 
-fn is_subagent_message(value: &Value) -> bool {
-    value["parent_tool_use_id"].as_str().is_some()
-        || value["message"]["parent_tool_use_id"].as_str().is_some()
+/// The tool call a frame belongs to when the provider ran it inside a
+/// sub-agent. Claude puts `parent_tool_use_id` at the top of the frame; older
+/// builds nested it under `message`. An empty string means "no parent".
+fn parent_tool_call_id(value: &Value) -> Option<String> {
+    [&value["parent_tool_use_id"], &value["message"]["parent_tool_use_id"]]
+        .into_iter()
+        .find_map(|id| id.as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_owned))
 }
 
 fn unique_model_usage(model_usage: &Value) -> Option<String> {
@@ -531,6 +535,11 @@ async fn parse_line(
             }
         }
         "stream_event" => {
+            // Claude 2.1.314 sends no partial deltas for a sub-agent, but a
+            // frame that names its parent must never stream into the reply.
+            if parent_tool_call_id(v).is_some() {
+                return;
+            }
             let e = &v["event"];
             if e["type"].as_str() == Some("content_block_delta") {
                 if let Some(t) = e["delta"]["text"].as_str() {
@@ -539,8 +548,9 @@ async fn parse_line(
             }
         }
         "assistant" => {
-            let model = (!is_subagent_message(v)).then(|| v["message"]["model"].as_str().map(str::to_owned)).flatten();
-            let used = (!is_subagent_message(v)).then(|| claude_context_used(&v["message"]["usage"])).flatten();
+            let parent = parent_tool_call_id(v);
+            let model = parent.is_none().then(|| v["message"]["model"].as_str().map(str::to_owned)).flatten();
+            let used = parent.is_none().then(|| claude_context_used(&v["message"]["usage"])).flatten();
             if model.is_some() || used.is_some() {
                 let (used, size, context_model) = {
                     let mut context = context_window.lock().await;
@@ -557,9 +567,13 @@ async fn parse_line(
                     match c["type"].as_str().unwrap_or("") {
                         "text" => {
                             if let Some(s) = c["text"].as_str() {
-                                let _ = tx
-                                    .send(AgentEvent::AssistantMessage { text: s.into() })
-                                    .await;
+                                // A sub-agent's words are its own work, shown as
+                                // the output of the row that started it.
+                                let event = match &parent {
+                                    Some(parent_tool_call_id) => AgentEvent::SubagentText { parent_tool_call_id: parent_tool_call_id.clone(), text: s.into() },
+                                    None => AgentEvent::AssistantMessage { text: s.into() },
+                                };
+                                let _ = tx.send(event).await;
                             }
                         }
                         "tool_use" => {
@@ -569,6 +583,7 @@ async fn parse_line(
                                     kind: c["name"].as_str().unwrap_or("tool").into(),
                                     title: tool_activity(c["name"].as_str().unwrap_or("tool"), c, c["name"].as_str().unwrap_or("Claude tool")).label,
                                     raw: c.clone(),
+                                    parent_tool_call_id: parent.clone(),
                                 })
                                 .await;
                         }
@@ -578,6 +593,7 @@ async fn parse_line(
             }
         }
         "user" => {
+            let parent = parent_tool_call_id(v);
             if let Some(content) = v["message"]["content"].as_array() {
                 for c in content {
                     if c["type"].as_str() == Some("tool_result") {
@@ -588,6 +604,7 @@ async fn parse_line(
                                     .unwrap_or("claude-tool")
                                     .into(),
                                 raw: c.clone(),
+                                parent_tool_call_id: parent.clone(),
                             })
                             .await;
                     }
@@ -1615,6 +1632,158 @@ mod tests {
         parse_line(&tx, &json!({"type":"result","is_error":false,"usage":{"input_tokens":9200,"output_tokens":40},"modelUsage":{"claude-sonnet-5-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":100000}}}), &provider_id, &requests, "session", &active_turn, &context).await;
         assert!(matches!(rx.recv().await, Some(AgentEvent::ContextUpdated { size:Some(200000), model:Some(ref model), estimated:false, .. }) if model == "claude-sonnet-5-5"));
         assert!(matches!(rx.recv().await, Some(AgentEvent::UsageReport { report, .. }) if report.model.is_none() && report.context_used == Some(230)));
+    }
+
+    /// The frames of one real Claude Code turn in which the bot called its own
+    /// sub-agent (see the fixture header). Wire order, header line dropped.
+    fn real_subagent_frames() -> Vec<Value> {
+        include_str!("../tests/fixtures/subagent-agent-turn.ndjson")
+            .lines()
+            .filter(|line| line.starts_with('{'))
+            .map(|line| serde_json::from_str::<Value>(line).expect("every fixture line after the header is a JSON frame"))
+            .collect()
+    }
+
+    async fn replay_frames(frames: &[Value]) -> Vec<AgentEvent> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let provider = Mutex::new(None);
+        let requests = Mutex::new(HashMap::new());
+        let active = Mutex::new(Some("turn-subagent".to_owned()));
+        let context = Mutex::new(ClaudeContextWindow::default());
+        for frame in frames {
+            parse_line(&tx, frame, &provider, &requests, "session", &active, &context).await;
+        }
+        drop(tx);
+        let mut seen = Vec::new();
+        while let Some(event) = rx.recv().await { seen.push(event); }
+        seen
+    }
+
+    async fn replay_the_real_subagent_turn() -> Vec<AgentEvent> {
+        replay_frames(&real_subagent_frames()).await
+    }
+
+    /// What a reply and a sub-agent's own words look like, in the order the
+    /// window would see them. A sub-agent's text is never a `reply`.
+    fn replies_and_subagent_text(events: &[AgentEvent]) -> Vec<String> {
+        events.iter().filter_map(|event| match event {
+            AgentEvent::AssistantMessage { text } => Some(format!("reply: {text}")),
+            AgentEvent::SubagentText { text, .. } => Some(format!("sub-agent: {text}")),
+            _ => None,
+        }).collect()
+    }
+
+    #[tokio::test]
+    async fn a_subagents_tools_carry_their_parent() {
+        let events = replay_the_real_subagent_turn().await;
+        // Read in the sub-agent: both its start and its completion name the
+        // parent tool call, so the window can nest them under that row.
+        let started = events.iter().find_map(|event| match event {
+            AgentEvent::ToolStarted { tool_call_id, parent_tool_call_id, .. } if tool_call_id == "toolu_child_read" => Some(parent_tool_call_id.clone()),
+            _ => None,
+        }).expect("the sub-agent's Read is a tool row");
+        assert_eq!(started.as_deref(), Some("toolu_parent_task"), "{events:?}");
+        let completed = events.iter().find_map(|event| match event {
+            AgentEvent::ToolCompleted { tool_call_id, parent_tool_call_id, .. } if tool_call_id == "toolu_child_read" => Some(parent_tool_call_id.clone()),
+            _ => None,
+        }).expect("the sub-agent's Read completes");
+        assert_eq!(completed.as_deref(), Some("toolu_parent_task"));
+    }
+
+    #[tokio::test]
+    async fn the_parents_own_tools_have_no_parent() {
+        let events = replay_the_real_subagent_turn().await;
+        assert!(matches!(
+            events.iter().find(|event| matches!(event, AgentEvent::ToolStarted { .. })),
+            Some(AgentEvent::ToolStarted { tool_call_id, parent_tool_call_id: None, .. }) if tool_call_id == "toolu_parent_task"
+        ), "the row that starts the sub-agent is the parent's own work: {events:?}");
+    }
+
+    #[tokio::test]
+    async fn a_subagents_text_stays_out_of_the_reply() {
+        let events = replay_the_real_subagent_turn().await;
+        let replies: Vec<&str> = events.iter().filter_map(|event| match event {
+            AgentEvent::AssistantMessage { text } => Some(text.as_str()),
+            _ => None,
+        }).collect();
+        // The real turn: the parent's first reply, then the sub-agent's answer,
+        // then the parent's final reply. Only the parent's own words are replies.
+        assert_eq!(replies, vec![
+            "The sub-agent is still running, so I don't have the line count yet. I'll reply with the number once it reports back.",
+            "4",
+        ], "{events:?}");
+        let subagent: Vec<(&str, &str)> = events.iter().filter_map(|event| match event {
+            AgentEvent::SubagentText { parent_tool_call_id, text } => Some((parent_tool_call_id.as_str(), text.as_str())),
+            _ => None,
+        }).collect();
+        assert_eq!(subagent, vec![("toolu_parent_task", "4")]);
+        assert_eq!(replies_and_subagent_text(&events).len(), 3, "two replies and one sub-agent text, never three replies");
+    }
+
+    #[tokio::test]
+    async fn a_subagents_streamed_delta_never_reaches_the_reply() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let (provider, requests, active, context) = (Mutex::new(None), Mutex::new(HashMap::new()), Mutex::new(Some("turn".to_owned())), Mutex::new(ClaudeContextWindow::default()));
+        parse_line(&tx, &json!({"type":"stream_event","parent_tool_use_id":"toolu_parent_task","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"sub-agent words"}}}), &provider, &requests, "session", &active, &context).await;
+        assert!(rx.try_recv().is_err(), "a frame that names its parent cannot stream into the reply");
+        parse_line(&tx, &json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"the bot's own words"}}}), &provider, &requests, "session", &active, &context).await;
+        assert!(matches!(rx.recv().await, Some(AgentEvent::AssistantDelta { text }) if text == "the bot's own words"));
+    }
+
+    #[tokio::test]
+    async fn a_subagents_text_reaches_its_task_row() {
+        let events = replay_the_real_subagent_turn().await;
+        // The row the text is attached to exists in the same turn, and it is the
+        // row the parent's Agent call created.
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolStarted { tool_call_id, .. } if tool_call_id == "toolu_parent_task")));
+        let (parent, text) = events.iter().find_map(|event| match event {
+            AgentEvent::SubagentText { parent_tool_call_id, text } => Some((parent_tool_call_id.as_str(), text.as_str())),
+            _ => None,
+        }).expect("the sub-agent's words are reported");
+        assert_eq!((parent, text), ("toolu_parent_task", "4"));
+        assert!(!text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_subagents_permission_still_reaches_the_owner() {
+        // A sub-agent's permission request arrives on the same control channel.
+        // It must still become a card the owner answers, with no filtering.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let (provider, requests, active, context) = (Mutex::new(None), Mutex::new(HashMap::new()), Mutex::new(Some("turn".to_owned())), Mutex::new(ClaudeContextWindow::default()));
+        parse_line(&tx, &json!({"type":"control_request","parent_tool_use_id":"toolu_parent_task","request_id":"r-sub","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf build"}}}), &provider, &requests, "session", &active, &context).await;
+        let event = rx.recv().await.expect("the request reaches the owner");
+        match &event {
+            AgentEvent::PermissionRequested { provider_request_id, title, choices, .. } => {
+                assert_eq!(provider_request_id, "session:r-sub");
+                assert!(title.contains("Bash"), "{title}");
+                assert_eq!(choices, &vec!["allow".to_owned(), "deny".to_owned()]);
+            }
+            other => panic!("expected a permission card, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_real_claude_subagent_turn_parses_into_the_expected_events() {
+        let events = replay_the_real_subagent_turn().await;
+        let wire: Vec<String> = events.iter().filter_map(|event| match event {
+            AgentEvent::SessionStarted { provider_session_id } => Some(format!("session {provider_session_id}")),
+            AgentEvent::AssistantMessage { text } => Some(format!("reply {text:?}")),
+            AgentEvent::SubagentText { parent_tool_call_id, text } => Some(format!("sub-agent {parent_tool_call_id} {text:?}")),
+            AgentEvent::ToolStarted { tool_call_id, kind, parent_tool_call_id, .. } => Some(format!("start {tool_call_id} {kind} {parent_tool_call_id:?}")),
+            AgentEvent::ToolCompleted { tool_call_id, parent_tool_call_id, .. } => Some(format!("finish {tool_call_id} {parent_tool_call_id:?}")),
+            _ => None,
+        }).collect();
+        assert_eq!(wire, vec![
+            "session 11111111-2222-3333-4444-555555555555",
+            "start toolu_parent_task Agent None",
+            "finish toolu_parent_task None",
+            "reply \"The sub-agent is still running, so I don't have the line count yet. I'll reply with the number once it reports back.\"",
+            "start toolu_child_read Read Some(\"toolu_parent_task\")",
+            "finish toolu_child_read Some(\"toolu_parent_task\")",
+            "sub-agent toolu_parent_task \"4\"",
+            "reply \"4\"",
+        ], "{events:?}");
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::TurnCompleted)));
     }
 }
 

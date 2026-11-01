@@ -139,7 +139,12 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [page, setPage] = useState<SettingsPageId>(focusUpdates ? 'Updates' : initialPage)
   useEffect(() => { setPage(focusUpdates ? 'Updates' : initialPage) }, [initialPage, focusUpdates])
   const [busyMode, setBusyMode] = useState<'steer' | 'queue'>('steer')
-  const [loading, setLoading] = useState(false)
+  // Starts true: the sheet unmounts when it closes, so every open fetched
+  // everything again. Starting false painted the real page with default values
+  // for a frame, then the skeleton, then the real values — a content, skeleton,
+  // content flicker. The three reads below are started together rather than one
+  // after another, so one open is one wait.
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [profiles, setProfiles] = useState<Record<string, unknown>[]>([])
   const [policy, setPolicy] = useState<PermissionsPolicy | null>(null)
@@ -194,9 +199,19 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
   const [speechBusy, setSpeechBusy] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    if (!inDesktop) return
+    if (!inDesktop) { setLoading(false); return }
     setLoading(true)
     setFormError(null)
+    // Started together, awaited in the order the values are applied. Before
+    // 2026-11-01 these were three waits in a row (settings + profiles, then the
+    // native hotkey probe, then the permission policy), so the skeleton stayed up
+    // for the sum of three round trips.
+    const policyRead = permissionsPolicyGet()
+      .then((next) => ({ next, failure: null as string | null }))
+      .catch((reason) => ({ next: null, failure: messageOf(reason) }))
+    const hotkeyRead = invokeNative<boolean>('companion_hotkey_registered')
+      .then((registered) => ({ registered, failure: null as string | null }))
+      .catch((reason) => ({ registered: null, failure: messageOf(reason) }))
     try {
       const [settingsResult, profileResult] = await Promise.all([
         rpc<Record<string, unknown>>('settings.get').catch((reason) => ({ loadError: messageOf(reason) })),
@@ -219,14 +234,14 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (settings['companion.startPosition'] === 'last') setStartPosition('last')
       if (typeof settings['companion.hotkey'] === 'boolean') setCompanionHotkey(settings['companion.hotkey'])
       if (settings['companion.hotkey'] !== false) {
-        try {
-          const registered = await invokeNative<boolean>('companion_hotkey_registered')
-          setCompanionHotkey(registered)
-          if (!registered) {
+        const hotkey = await hotkeyRead
+        if (hotkey.registered !== null) {
+          setCompanionHotkey(hotkey.registered)
+          if (!hotkey.registered) {
             await rpc('settings.set', { key: 'companion.hotkey', value: false }).catch(() => undefined)
             setFormError('Ctrl+Alt+B is used by another app. The companion shortcut is off.')
           }
-        } catch { /* Shortcut support may be unavailable on this platform. */ }
+        }
       }
       setNotificationsEnabled(settings['notifications.enabled'] !== false)
       if (typeof settings['retry.maxWaitSecs'] === 'number') setRetryMaxWaitSecs(settings['retry.maxWaitSecs'])
@@ -243,14 +258,14 @@ export function SettingsSheet({ snapshot, scanStatus = EMPTY_DISCOVERY_STATUS, i
       if (Array.isArray(settings.editorArgs) && settings.editorArgs.every((argument) => typeof argument === 'string')) setEditorArgs(JSON.stringify(settings.editorArgs))
       if (settings['permissions.default_mode'] === 'ask' || settings['permissions.default_mode'] === 'auto') setDefaultMode(settings['permissions.default_mode'])
       setProfiles(listFrom(profileResult))
-      try {
-        const next = await permissionsPolicyGet()
-        setPolicy(next)
-        setDefaultMode(next.defaultMode)
+      const policy = await policyRead
+      if (policy.next) {
+        setPolicy(policy.next)
+        setDefaultMode(policy.next.defaultMode)
         setPolicyError(null)
-      } catch (reason) {
+      } else {
         setPolicy(null)
-        setPolicyError(messageOf(reason))
+        setPolicyError(policy.failure)
       }
     } finally { setLoading(false) }
     void Promise.all([companionMonitorOptions(), currentCompanionMonitor()]).then(([available, current]) => {

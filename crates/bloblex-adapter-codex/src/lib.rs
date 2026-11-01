@@ -1760,8 +1760,8 @@ impl AgentAdapter for CodexAdapter {
             .to_owned();
         {
             let mut turn = c.turn.lock().await;
+            // `completed` was reset before the call: the reader may already have finished this turn.
             turn.id = Some(id);
-            turn.completed = false;
         }
         Ok(())
     }

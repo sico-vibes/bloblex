@@ -89,13 +89,13 @@ pub struct BackupPreviews {
 
 struct PreviewEntry {
     id: String,
-    created: Instant,
+    expires: Instant,
     document: Value,
 }
 
 impl BackupPreviews {
     fn prune(entries: &mut Vec<PreviewEntry>) {
-        entries.retain(|entry| entry.created.elapsed() < PREVIEW_TTL);
+        entries.retain(|entry| Instant::now() < entry.expires);
     }
     /// Stores a parsed document and returns its one-use id.
     pub fn store(&self, document: Value) -> String {
@@ -106,12 +106,12 @@ impl BackupPreviews {
                 let oldest = entries
                     .iter()
                     .enumerate()
-                    .min_by_key(|(_, entry)| entry.created)
+                    .min_by_key(|(_, entry)| entry.expires)
                     .map(|(index, _)| index)
                     .unwrap_or(0);
                 entries.remove(oldest);
             }
-            entries.push(PreviewEntry { id: id.clone(), created: Instant::now(), document });
+            entries.push(PreviewEntry { id: id.clone(), expires: Instant::now() + PREVIEW_TTL, document });
         }
         id
     }
@@ -127,9 +127,9 @@ impl BackupPreviews {
     #[cfg(test)]
     pub fn expire_all(&self) {
         if let Ok(mut entries) = self.entries.lock() {
-            let expired = Instant::now().checked_sub(PREVIEW_TTL + Duration::from_secs(1)).unwrap_or_else(Instant::now);
+            let now = Instant::now();
             for entry in entries.iter_mut() {
-                entry.created = expired;
+                entry.expires = now;
             }
         }
     }

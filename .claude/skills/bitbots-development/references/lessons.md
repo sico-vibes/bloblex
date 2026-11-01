@@ -2,6 +2,10 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-11-01 · Tests · An `Instant` can't go further back than the machine's uptime
+
+`backup_import_of_an_expired_preview_is_not_found` failed in CI on `9f8fdae` and passed locally: the import succeeded after `expire_all`. The helper did `Instant::now().checked_sub(TTL + 1 s).unwrap_or_else(Instant::now)`. On Windows an `Instant` counts from boot, so on a runner up for less than 10 minutes `checked_sub` returns `None` and the preview is simply "created now". Inferred from the code; the runner's uptime wasn't read. Fix: store when a preview expires, not when it was made, so a test sets `expires` to now. Avoid: never fake the past by subtracting from an `Instant`.
+
 ## 2026-11-01 · Performance · The app feels slow everywhere at once: one lock, one huge snapshot
 
 Symptom: skeleton loaders and "unsnappy" throughout, not tied to any one screen. Root cause, measured on a copy of the owner's real database (`<data>/bloblex.db`, then 510 MB):

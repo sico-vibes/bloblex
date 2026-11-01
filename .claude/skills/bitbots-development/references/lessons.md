@@ -2,6 +2,32 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-11-01 · Performance · The app feels slow everywhere at once: one lock, one huge snapshot
+
+Symptom: skeleton loaders and "unsnappy" throughout, not tied to any one screen. Root cause, measured on a copy of the owner's real 510 MB database (`<data>/bitbots.db`, 66 sessions, 3,973 tool calls, 136,870 events):
+
+- `Storage` holds **one** `Mutex<Connection>` (`crates/bloblex-storage/src/lib.rs:1946`), so every read queues behind the longest one.
+- `app.snapshot` is the longest: lazy (15 fully detailed conversations) **304 ms and 3.1 MB of JSON**, full **1,297 ms and 9.6 MB**. Settings, opening a conversation and project add all wait behind it.
+- Inside that, the per-session `tool_calls` query was a **full scan**: the table holds 383 MB in 3,973 rows (≈96 KB each of provider payload) and had **no index on `session_id`**. With one: 318 ms → 137 ms. Reading only columns, without the `data` blob: **3.4 ms** — so the remaining cost is reading blobs the snapshot barely needs.
+
+Fixes: `ensure_read_indexes` in storage (called from every `migrate_versions` branch, like the other `ensure_*`), and the Settings sheet now starts `loading` at `true` and runs its three reads at once instead of one after another.
+
+**To avoid:** copy the database to a temp dir and time the exact SQL before optimising; never open the live file. Also: SQLite refuses `rowid` inside `CREATE INDEX` ("no such column: rowid") — index the column alone.
+
+## 2026-11-01 · Native shell · Every app start copied a 39 MB binary, and left the old ones
+
+`start_daemon` copied `bitbotsd.exe` to a new UUID name on every start and removed it only if the app was alive when the daemon died: one install had **18 stale copies, 557 MB**, and the copy itself measured **333 ms warm / 600 ms cold**, synchronously on the main thread. Now the copy is named by the source's size and modification time and reused while the build is the same, other copies are pruned, and the stop paths no longer delete it.
+
+Same entry: `rpc_call` built a **new `reqwest::Client` per request** (no pooling); it uses one shared client. `select_project_folder`/`select_local_file` used `blocking_pick_*` in a sync command, which freezes every native operation (drag, tray, other commands) while the dialog is open; they are async now and wait on a worker thread.
+
+## 2026-11-01 · Composer · `#` names a project now, not a side conversation
+
+Owner decision: a bot works in many projects, so what a request needs to say is *where*, and `#` is the natural token. `#` in the composer now opens `ProjectPicker` (`teamSelectors.projectMatches`: exact name, then prefix, then substring, then tag), and picking a project stores its id, which travels to `agent.conversation.create` as `projectId`. Naming a bot with `@` appends `#` and opens the project step at once. Side conversations are still referenceable from a message's own menu (`MessageMenu` → `conversationRefs`), and `splitReferences` still renders stored ones.
+
+The daemon resolves the same three ways in one place, `team::project_named`: id, exact name, unique tag, ignoring a leading `#`. An ambiguous tag or name is an error **naming the candidates**, so the Manager asks with real options instead of guessing; `message_blob`/`start_conversation`/`assign_task`/`propose_bot` all go through it. The Manager's instruction (team.rs) now says to read `#Name` from the message and to `ask_user` with the projects when none is named. The per-turn `<bloblex_manager>` workspace block lists each project's tags.
+
+`Agent.defaultProject` (a path) is no longer read anywhere: `external.rs project_path_of` dropped its fallback. The bot editor's "Working folder" box still writes it, so it is inert — remove that box and the column together when someone has the test fixtures to spare.
+
 ## 2026-11-01 · CSS · A component's stylesheet can load before `theme.css`
 
 The icon picker rendered 1,300 px wide and the bell panel ran off the window. `main.tsx` imports `App` first, so a stylesheet imported by a component arrives before `theme.css`, and `.menu-surface` then wins any tie. Fix: give the rule more weight (`.menu-surface.project-icon-picker`). Avoid: never restyle a shared class at equal specificity from a component's own CSS. Tests can't see this; look at the screen.

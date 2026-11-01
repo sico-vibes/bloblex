@@ -63,7 +63,9 @@ fn enqueue(queues: &mut HashMap<String, VecDeque<Queued>>, session_id: &str, ite
 }
 
 /// The tags line the team tools add to a project or a bot, or an empty string.
-fn tags_suffix(tags: &Value) -> String {
+/// `pub(crate)` so the Manager's per-turn workspace block speaks the same
+/// vocabulary the tools do (knowledge.rs).
+pub(crate) fn tags_suffix(tags: &Value) -> String {
     let list = tags.as_array().map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
     if list.is_empty() { String::new() } else { format!(" · tags: {}", list.join(", ")) }
 }
@@ -466,9 +468,9 @@ pub fn runtime_instructions_in(st: &AppState, agent: &Value, link: &Value, works
         None => lines.push(format!("You are a casual {noun}, not tied to a project. Your scratch workspace is {}; take general requests and work wherever the user points you.", workspace.display())),
     }
     if agent["systemRole"].as_str() == Some("manager") {
-        lines.push(format!("You are {name}, the user's Manager: chat like a capable team lead. Ground yourself with list_projects and list_blobs, then route by role, description, tags and project. Resolve any project mentioned by name, tags or context before acting; when unsure, ask_user with concrete options. With no project, research goes to a free bot tagged researcher; for project P, use P's researcher. If none fits, propose_bot for that project (or propose_project when a project is needed); do small things yourself when appropriate; you ask the user before creating projects, bots or assigning tasks."));
+        lines.push(format!("You are {name}, the user's Manager: chat like a capable team lead. Ground yourself with list_projects and list_blobs, then route by role, description, tags and project. Read the user's message for the project first: a #Name in it is a project, matched by its name or one of its tags. When the request needs a project and they named none, call ask_user and offer the projects as options before you delegate; never let a bot's own placement decide where its work lands, and pass `project` on message_blob and start_conversation whenever you know it. With no project, research goes to a free bot tagged researcher; for project P, use P's researcher. If none fits, propose_bot for that project (or propose_project when a project is needed); do small things yourself when appropriate; you ask the user before creating projects, bots or assigning tasks."));
         lines.push("Read details with your read tools, and make consequential changes an approval card: creating or updating projects and bots, assigning a task, opening a conversation and changing a permission are proposed and wait for the owner. A message to a teammate is not consequential: `message_blob` is sent at once with no approval, so use it for ordinary delegation and only use `assign_task` when the user wants the work tracked as a task. Fill the brief or message yourself, and for a task also doneGoal and reportBack; never ask the user to fill a task form. Use a new topic for parallel work or conversation to follow up. Locked bots refuse settings changes; never propose Full access. After delegating, say briefly who will do what and end your turn. Approval outcomes are recorded here; teammate replies arrive later and wake you to report back.".into());
-        lines.push(format!("Any {noun} can work in any project: each conversation is opened in one project. Pass `project` (an id or exact name from list_projects) to `message_blob` or `assign_task` to open the work in a specific project; without it, the work opens in the project of the conversation you are in."));
+        lines.push(format!("Any {noun} can work in any project: each conversation is opened in one project. Pass `project` (an id, an exact name, or one of the project's tags from list_projects) to `message_blob` or `assign_task` to open the work in a specific project; without it, the work opens in the project of the conversation you are in."));
         lines.push("Your notes about the user and your playbook are yours across model changes: keep the profile current with `remember_about_user` (read it with `recall_about_user`), and propose playbook edits with `update_playbook`. Never store secrets in either.".to_owned());
         lines.push("A message that starts with [Update from NAME] means a teammate is waiting for the user to approve or answer something in that teammate's own conversation. Tell the user briefly which teammate and what is being asked, point them to that conversation, and do not try to answer for them, approve anything, or send the task again.".to_owned());
         // Wave 12, part D: the relay carries the assignment's own "Done when" line,
@@ -1688,16 +1690,41 @@ fn manager_tool_schemas() -> Vec<Value> {
     list
 }
 
+/// A project, from what the sender wrote: its id, its name, or one of its routing
+/// tags (owner decision, 1 November 2026: tags are handles a person can type with
+/// `#`, not decoration). A tag is only usable when exactly one project carries it,
+/// and every refusal names the candidates so the caller can ask with real options
+/// instead of guessing. The leading `#` the composer inserts is ignored.
 pub(crate) fn project_named(st: &AppState, wanted: &str) -> Result<Value, String> {
     let projects = st.db.project_list().map_err(|error| error.to_string())?;
-    let wanted = wanted.trim();
-    if let Some(project) = projects.iter().find(|p| p["id"].as_str() == Some(wanted)) { return Ok(project.clone()); }
-    let matches = projects.into_iter().filter(|p| p["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))).collect::<Vec<_>>();
-    match matches.as_slice() {
-        [project] => Ok(project.clone()),
-        [] => Err(format!("No project matches {wanted}. List projects and propose_project if needed.")),
-        _ => Err("Several projects have that name. Ask the user with options, then use its id.".into()),
+    let wanted = wanted.trim().trim_start_matches('#').trim();
+    if wanted.is_empty() {
+        return Err("Name a project, or leave it out and ask the user which one.".into());
     }
+    if let Some(project) = projects.iter().find(|p| p["id"].as_str() == Some(wanted)) { return Ok(project.clone()); }
+    let by_name = projects.iter().filter(|p| p["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))).collect::<Vec<_>>();
+    match by_name.len() {
+        1 => return Ok(by_name[0].clone()),
+        0 => {}
+        _ => return Err(format!("Several projects have that name: {}. Ask the user with options, then use its id.", candidates(&by_name))),
+    }
+    let wanted_tag = wanted.to_lowercase();
+    let by_tag = projects.iter().filter(|p| project_has_tag(p, &wanted_tag)).collect::<Vec<_>>();
+    match by_tag.len() {
+        1 => Ok(by_tag[0].clone()),
+        0 => Err(format!("No project matches {wanted}. List projects and ask the user which one this is for.")),
+        _ => Err(format!("More than one project is tagged {wanted}: {}. Ask the user which one, naming them.", candidates(&by_tag))),
+    }
+}
+
+/// Whether a project carries `tag` (the stored vocabulary is lower case).
+fn project_has_tag(project: &Value, tag: &str) -> bool {
+    project["tags"].as_array().map(|tags| tags.iter().filter_map(Value::as_str).any(|item| item.eq_ignore_ascii_case(tag))).unwrap_or(false)
+}
+
+/// "Blolblex, Storefront" — the projects a caller may choose between.
+fn candidates(projects: &[&Value]) -> String {
+    projects.iter().filter_map(|project| project["name"].as_str()).collect::<Vec<_>>().join(", ")
 }
 
 pub(crate) fn blob_named(st: &AppState, wanted: &str) -> Result<Value, String> {

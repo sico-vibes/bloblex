@@ -296,7 +296,7 @@ fn workspace_summary(st: &AppState) -> String {
     for project in &projects {
         let id = project["id"].as_str().unwrap_or("");
         let bots = agents.iter().filter(|agent| agent["projectId"].as_str() == Some(id)).filter_map(|agent| name_of(agent["id"].as_str().unwrap_or(""))).collect::<Vec<_>>();
-        let line = format!("- Project \"{}\" — bots: {}", project["name"].as_str().unwrap_or("Project"), if bots.is_empty() { "none".to_owned() } else { bots.join(", ") });
+        let line = format!("- Project \"{}\" — bots: {}{}", project["name"].as_str().unwrap_or("Project"), if bots.is_empty() { "none".to_owned() } else { bots.join(", ") }, crate::team::tags_suffix(&project["tags"]));
         if total + line.chars().count() > MAX_WORKSPACE_BLOCK {
             lines.push("- … more projects exist; list them with list_projects.".to_owned());
             break;

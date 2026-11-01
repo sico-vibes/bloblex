@@ -524,8 +524,10 @@ async fn busy_agents(st: &AppState) -> HashSet<String> {
 }
 
 fn project_path_of(st: &AppState, agent: &Value) -> Option<String> {
+    // A bot's folder comes from the project it works in. The legacy
+    // `defaultProject` path is deliberately not read any more (2026-11-01): bots
+    // work across projects, so no single stored path describes where they work.
     agent["projectId"].as_str().and_then(|id| st.db.project_get(id).ok()).and_then(|project| project["path"].as_str().filter(|path| !path.is_empty()).map(str::to_owned))
-        .or_else(|| agent["defaultProject"].as_str().filter(|path| !path.is_empty()).map(str::to_owned))
 }
 
 /// A bot as the MCP shows it: allowlisted fields only (never instructions, environment or profile values).

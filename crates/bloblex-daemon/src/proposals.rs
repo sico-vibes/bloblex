@@ -507,10 +507,11 @@ async fn apply_bot(st: &AppState, agent_id: Option<&str>, payload: &Value) -> Re
     // half-made teammate behind.
     let project_id = match payload["project"].as_str().filter(|project| !project.is_empty()) {
         None => None,
+        // One resolver for every path that turns what a person typed into a
+        // project: id, exact name, or a unique tag (`team::project_named`).
         Some(wanted) => {
-            let projects = st.db.project_list().map_err(agent_error)?;
-            let found = projects.iter().find(|project| project["id"].as_str() == Some(wanted) || project["name"].as_str().is_some_and(|project_name| project_name.trim().eq_ignore_ascii_case(wanted)));
-            Some(found.and_then(|project| project["id"].as_str()).map(str::to_owned).ok_or_else(|| invalid(format!("No project matches \"{wanted}\".")))?)
+            let project = crate::team::project_named(st, wanted).map_err(invalid)?;
+            project["id"].as_str().map(str::to_owned)
         }
     };
     let runtime = st.runtimes.read().await.iter().find(|runtime| runtime["provider"].as_str() == Some(provider)).cloned().ok_or_else(|| invalid(format!("No {provider} runtime is installed.")))?;
@@ -548,9 +549,7 @@ async fn apply_task(st: &AppState, session_id: &str, payload: &Value) -> Result<
     // exact place the bot may write with `auto`.
     let mut project_path = Value::Null;
     if let Some(project) = payload["project"].as_str().filter(|project| !project.is_empty()) {
-        let projects = st.db.project_list().map_err(agent_error)?;
-        let found = projects.iter().find(|candidate| candidate["id"].as_str() == Some(project) || candidate["name"].as_str().is_some_and(|name| name.trim().eq_ignore_ascii_case(project)));
-        let found = found.ok_or_else(|| invalid(format!("No project matches \"{project}\".")))?;
+        let found = crate::team::project_named(st, project).map_err(invalid)?;
         project_path = json!(found["path"].as_str().unwrap_or(""));
     }
     let brief = format!("{}\n\nDone goal:\n{}\n\nReport back:\n{}", payload["brief"].as_str().unwrap_or(""), payload["doneGoal"].as_str().unwrap_or(""), payload["reportBack"].as_str().unwrap_or(""));

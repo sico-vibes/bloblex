@@ -138,6 +138,32 @@ fn the_identity_crosses_to_a_device_and_the_folder_does_not() {
 }
 
 #[tokio::test]
+async fn a_project_is_found_by_its_tag_and_an_ambiguous_tag_names_the_candidates() {
+    // Owner decision, 1 November 2026: a project's tags are handles the Manager
+    // (and the composer's `#`) can resolve, not decoration. A tag that fits more
+    // than one project is refused with the names, so the caller can ask.
+    let (st, _) = state();
+    let first = dispatch(&st, "project.create", json!({"name":"Blolblex"})).await.unwrap()["project"]["id"].as_str().unwrap().to_owned();
+    let second = dispatch(&st, "project.create", json!({"name":"Storefront"})).await.unwrap()["project"]["id"].as_str().unwrap().to_owned();
+    dispatch(&st, "project.update", json!({"projectId": first, "tags": ["bitbots", "desktop"]})).await.unwrap();
+    dispatch(&st, "project.update", json!({"projectId": second, "tags": ["web"]})).await.unwrap();
+
+    // By tag, with and without the `#` the composer inserts, and by name.
+    assert_eq!(crate::team::project_named(&st, "bitbots").unwrap()["id"], first.as_str());
+    assert_eq!(crate::team::project_named(&st, "#bitbots").unwrap()["id"], first.as_str());
+    assert_eq!(crate::team::project_named(&st, "storefront").unwrap()["id"], second.as_str());
+    assert_eq!(crate::team::project_named(&st, first.as_str()).unwrap()["id"], first.as_str());
+
+    // A tag only one project keeps is not enough once a second project takes it.
+    dispatch(&st, "project.update", json!({"projectId": second, "tags": ["web", "bitbots"]})).await.unwrap();
+    let error = crate::team::project_named(&st, "bitbots").unwrap_err();
+    assert!(error.contains("Blolblex") && error.contains("Storefront"), "{error}");
+    // Nothing matches: the sentence tells the caller what to do next.
+    let missing = crate::team::project_named(&st, "nothing-here").unwrap_err();
+    assert!(missing.contains("ask the user"), "{missing}");
+}
+
+#[tokio::test]
 async fn project_list_runs_no_git() {
     let _reads = hold_reads().await;
     let (st, _) = state();

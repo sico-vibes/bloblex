@@ -99,3 +99,5 @@ When the owner's baseline is the uncommitted working tree, not `HEAD`: `git work
 ## Claude Code lanes and background commands (31 October 2026)
 
 A Claude Code bot can end its turn while its own background command runs. `wait_for_turn` then says done, with a reply like "still running", and the report may never arrive as a turn: `get_status` shows nothing running while the bot keeps working. So tell a lane to run the full gates in the foreground and report in the same turn. If it happens anyway, read its worktree: the fixes are there, and its `target` folder being gone means it finished.
+
+A Haiku sub-agent running a release does the same (beta.48, 1 November 2026): it handed back "stopped partway" while its gates ran, then resumed by itself, and its final notice carried no new report. Check the result yourself: `gh release view`, the asset digests against the local files, `latest.json` and `channel-beta`. Cleanup tools here refuse top-level `D:\` folders, so give the owner the paths; a lane worktree still open in the app can also refuse removal after `git worktree remove` has dropped its entry.

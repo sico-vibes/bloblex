@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "78d4590",
-  "documentCount": 370,
+  "revision": "d75120e",
+  "documentCount": 372,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -2853,6 +2853,71 @@
       "headings": []
     },
     {
+      "id": "project/design/components",
+      "source": "docs/design/components.md",
+      "title": "Bitbots Components",
+      "section": "Design & product",
+      "status": "Design rule",
+      "sha256": "cf17fa66c7f3ad01616a3278b2b77700356b0d5fda89a92061921484170287dd",
+      "headings": [
+        {
+          "id": "the-test-for-anything-new",
+          "text": "The test for anything new",
+          "level": 2
+        },
+        {
+          "id": "surfaces",
+          "text": "Surfaces",
+          "level": 2
+        },
+        {
+          "id": "hazes-controls",
+          "text": "Haze's controls",
+          "level": 2
+        },
+        {
+          "id": "focus",
+          "text": "Focus",
+          "level": 2
+        },
+        {
+          "id": "selection-and-status",
+          "text": "Selection and status",
+          "level": 2
+        },
+        {
+          "id": "controls",
+          "text": "Controls",
+          "level": 2
+        },
+        {
+          "id": "messages-and-the-composer",
+          "text": "Messages and the composer",
+          "level": 2
+        },
+        {
+          "id": "copy",
+          "text": "Copy",
+          "level": 2
+        },
+        {
+          "id": "settings",
+          "text": "Settings",
+          "level": 2
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "charts",
+          "text": "Charts",
+          "level": 2
+        }
+      ]
+    },
+    {
       "id": "project/design/design-system",
       "source": "docs/design/design-system.md",
       "title": "Bitbots Design System",
@@ -3058,6 +3123,46 @@
         {
           "id": "report-plain-text-last-message",
           "text": "Report (plain text, last message)",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/design/facelift-audit",
+      "source": "docs/design/facelift-audit.md",
+      "title": "Facelift Audit",
+      "section": "Design & product",
+      "status": "Design rule",
+      "sha256": "ae3e106951188775f2b90dfa0ef366562829148c76c29451809ae1338f32276f",
+      "headings": [
+        {
+          "id": "the-app",
+          "text": "The app",
+          "level": 2
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "settings",
+          "text": "Settings",
+          "level": 2
+        },
+        {
+          "id": "other-screens",
+          "text": "Other screens",
+          "level": 2
+        },
+        {
+          "id": "second-round-owners-review-1-november-2026",
+          "text": "Second round (owner's review, 1 November 2026)",
+          "level": 2
+        },
+        {
+          "id": "where-the-experimental-switches-went",
+          "text": "Where the Experimental switches went",
           "level": 2
         }
       ]

@@ -27,7 +27,7 @@ import { agentColorHex } from './agentColor'
 import { TeamSidebar } from './TeamSidebar'
 import { RuntimeProblemMarker } from './RuntimeProblemMarker'
 import { OutsideSessionPills, useOutsideSessions } from './OutsideSessions'
-import { AutoRetryNotice, ContextResetDivider, ConversationPicker, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, QuestionCard, ReplyChip, SideConversationHeader, UpdateChip, UsageLimitNotice, conversationMatches, mentionMatches, sideTitle } from './TeamMessages'
+import { AutoRetryNotice, ContextResetDivider, CreatedBotChip, HandoffDialog, DelegationChip, MentionPicker, PlanCard, ProjectPicker, QuestionCard, ReplyChip, SideConversationHeader, UpdateChip, UsageLimitNotice, mentionMatches } from './TeamMessages'
 import { CompanionConversationPicker } from './CompanionConversationPicker'
 import { SignInHelp } from './SignInHelp'
 import { ProposalCard } from './ProposalCard'
@@ -66,7 +66,7 @@ import { WorkingBotsPanel } from './WorkingBotsPanel'
 import { DelegationGroup } from './DelegationGroup'
 import { buildDelegationRows, delegationRuns, newestNoticeBySide, useDelegations } from './delegations'
 import { ChangeBanner } from './ChangeBanner'
-import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, projectOfSession, sideSessionsFor, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, projectMatches, projectOfSession, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -301,8 +301,12 @@ export function App() {
   const [textPrompt, setTextPrompt] = useState<{ title: string; label: string; value: string; confirmLabel: string; onSubmit: (value: string) => void | Promise<void> } | null>(null)
   const [projectDelete, setProjectDelete] = useState<Project | null>(null)
   const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(null)
-  /** The `#conversation` being typed, and the side conversations already referenced in the draft. */
+  /** The `#project` being typed. Owner decision, 1 November 2026: `#` names a
+   * project, because that is what a request needs to land somewhere. A side
+   * conversation is still referenceable from a message's own menu. */
   const [hashRef, setHashRef] = useState<{ start: number; query: string; index: number } | null>(null)
+  /** The project picked with `#` for the conversation this draft will create. */
+  const composerProject = useRef<string | null>(null)
   const [conversationRefs, setConversationRefs] = useState<Array<{ id: string; title: string }>>([])
   /** Where "Close chat" returns: the blob and conversation a side conversation was opened from. */
   const sideReturn = useRef<{ agentId: string | null; sessionId: string | null } | null>(null)
@@ -434,18 +438,6 @@ export function App() {
   const messageListRef = useRef<HTMLElement>(null)
   /** The outline only appears once the conversation is long enough to scroll. */
   const [conversationScrollable, setConversationScrollable] = useState(false)
-  useEffect(() => {
-    const list = messageListRef.current
-    if (!list) { setConversationScrollable(false); return }
-    // Without layout (clientHeight 0) the size is unknown; keep the outline available.
-    const measure = () => setConversationScrollable(list.clientHeight === 0 || list.scrollHeight - list.clientHeight > 24)
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(measure)
-    observer.observe(list)
-    for (const child of Array.from(list.children)) observer.observe(child)
-    return () => observer.disconnect()
-  })
   const stickToBottom = useRef(true)
   const queuedEvents = useRef<DaemonEvent[]>([])
   const hydrating = useRef(true)
@@ -630,11 +622,29 @@ export function App() {
   const composerKeyRef = useRef(composerKey)
   composerKeyRef.current = composerKey
   const [composer, setComposer] = useDraft(composerKey)
+  // A project picked for one draft must not follow the owner into the next box.
+  useEffect(() => { composerProject.current = null }, [composerKey])
   useAutosizeTextarea(composerRef, composer, composerMaxHeight)
   detailsSessionIdRef.current = selectedSession?.id ?? null
   // Remember every conversation's blob, so a removed id can still be traced to its owner.
   for (const session of sessions) sessionOwnersRef.current.set(session.id, session.agentId ?? null)
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
+  // The scroll-outline probe. It lives here, after `sessionMessages`, because it
+  // re-attaches only when a different conversation opens or another message
+  // arrives: until 2026-11-01 it had no dependency list, so it rebuilt its
+  // ResizeObserver and re-observed every message on every render.
+  useEffect(() => {
+    const list = messageListRef.current
+    if (!list) { setConversationScrollable(false); return }
+    // Without layout (clientHeight 0) the size is unknown; keep the outline available.
+    const measure = () => setConversationScrollable(list.clientHeight === 0 || list.scrollHeight - list.clientHeight > 24)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(list)
+    for (const child of Array.from(list.children)) observer.observe(child)
+    return () => observer.disconnect()
+  }, [selectedSession?.id, sessionMessages.length])
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
   // The app's rebindable shortcuts (Settings › Chat › Keyboard). Ctrl+` for the terminal is the same key as in editors.
   const shortcutHandlers = useRef<Parameters<typeof useShortcutActions>[2]>({})
@@ -1807,22 +1817,28 @@ export function App() {
       await refresh()
     } catch (reason) { await refresh(); setError(messageOf(reason)) }
   }
-  const pickConversation = (session: Session) => {
+  const pickProject = (project: Project) => {
     if (!hashRef) return
-    const title = sideTitle(session, agents)
     const caret = composerRef.current?.selectionStart ?? composer.length
-    setComposer(`${composer.slice(0, hashRef.start)}#${title} ${composer.slice(caret)}`)
-    setConversationRefs((current) => [...current.filter((ref) => ref.id !== session.id), { id: session.id, title }])
+    setComposer(`${composer.slice(0, hashRef.start)}#${project.name} ${composer.slice(caret)}`)
+    // The id travels to the conversation this draft becomes, so the daemon needs
+    // no model judgement to know which folder the work belongs in.
+    composerProject.current = project.id
     setHashRef(null)
-    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = hashRef.start + title.length + 2; node.focus(); node.setSelectionRange(position, position) })
+    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = hashRef.start + project.name.length + 2; node.focus(); node.setSelectionRange(position, position) })
   }
   const pickMention = (agent: Agent) => {
     if (!mention) return
     const caret = composerRef.current?.selectionStart ?? composer.length
-    const next = `${composer.slice(0, mention.start)}@${agent.name} ${composer.slice(caret)}`
+    // Owner decision, 1 November 2026: naming a bot opens the project step at
+    // once, as `#`, so "ask Vex to…" ends with a project rather than the bot's
+    // own last-used folder. Typing on filters the list; Delete removes the `#`.
+    const askProject = projects.length > 0
+    const next = `${composer.slice(0, mention.start)}@${agent.name}${askProject ? ' #' : ' '}${composer.slice(caret)}`
     setComposer(next)
     setMention(null)
-    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = mention.start + agent.name.length + 2; node.focus(); node.setSelectionRange(position, position) })
+    if (askProject) setHashRef({ start: mention.start + agent.name.length + 2, query: '', index: 0 })
+    requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = mention.start + agent.name.length + 3; node.focus(); node.setSelectionRange(position, position) })
   }
   const pickFileMention = (file: FileMatch) => {
     if (!mention) return
@@ -2010,8 +2026,9 @@ ${fileReferenceText(sentFile)}` : typed
     let target = selectedSession
     if (isDraftSession(target)) {
       const agent = activeSelectedAgent
-      const created = agent ? await createConversation(agent, { quiet: true }) : null
+      const created = agent ? await createConversation(agent, { quiet: true, projectId: composerProject.current ?? undefined }) : null
       if (!created) { setError('Could not start the conversation. Try again.'); return }
+      composerProject.current = null
       target = created
     }
     const sessionId = target.id
@@ -2677,8 +2694,7 @@ ${fileReferenceText(sentFile)}` : typed
     selectSession(target)
     setChangesFor({ sessionId, path: null })
   })
-  const blobSideSessions = activeSelectedAgent ? sideSessionsFor(sessions, activeSelectedAgent.id) : []
-  const hashCandidates = hashRef ? conversationMatches(blobSideSessions, agents, hashRef.query) : []
+  const hashCandidates = hashRef ? projectMatches(projects, hashRef.query) : []
   const slashCandidates = slash ? slashItems(slash.query, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) : []
   const visibleSessions = sessions.filter((session) => session.archived !== true)
   const quickSwitcherItems: QuickSwitcherItem[] = [
@@ -2965,9 +2981,9 @@ ${fileReferenceText(sentFile)}` : typed
               {clipboardReadPending && <p className="clipboard-paste-status" role="status">Preparing pasted image…</p>}
               {slashCommand && <SlashCommandChip command={slashCommand} onRemove={() => setSlashCommand(null)} />}
               {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
-              {hashRef && !mention && <ConversationPicker sessions={blobSideSessions} agents={agents} ownerId={activeSelectedAgent?.id} query={hashRef.query} activeIndex={hashRef.index} onPick={pickConversation} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
+              {hashRef && !mention && <ProjectPicker projects={projects} query={hashRef.query} activeIndex={hashRef.index} onPick={pickProject} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} files={fileCandidates} onPickFile={pickFileMention} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true; setDraftFocus(composerKey, true) }} onBlur={() => { composerTypingRef.current = false; setDraftFocus(composerKey, false) }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && blobSideSessions.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true; setDraftFocus(composerKey, true) }} onBlur={() => { composerTypingRef.current = false; setDraftFocus(composerKey, false) }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && projects.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
                 if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
                 if (slash && slashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : slashCandidates.length - 1)) % slashCandidates.length }); return }
@@ -2987,7 +3003,7 @@ ${fileReferenceText(sentFile)}` : typed
                 }
                 if (hashRef && hashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setHashRef({ ...hashRef, index: (hashRef.index + (event.key === 'ArrowDown' ? 1 : hashCandidates.length - 1)) % hashCandidates.length }); return }
-                  if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickConversation(hashCandidates[Math.min(hashRef.index, hashCandidates.length - 1)]); return }
+                  if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickProject(hashCandidates[Math.min(hashRef.index, hashCandidates.length - 1)]!); return }
                   if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
                 }
                 const enter = composerEnterAction(event.nativeEvent, sendShortcut)

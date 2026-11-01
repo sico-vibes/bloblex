@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, sessionIsLimited, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
+import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, projectMatches, sessionIsLimited, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -15,6 +15,23 @@ describe('team selectors', () => {
       { text: 'See ' }, { text: '#Model check', reference: refs[0] }, { text: ' and ' }, { text: '#Model', reference: refs[1] }, { text: ', not #other' },
     ])
     expect(splitReferences('plain', null)).toEqual([{ text: 'plain' }])
+  })
+
+  // Owner decision, 1 November 2026: `#` names a project, by its name or one of
+  // its routing tags. The daemon resolves the same three ways (`team::project_named`).
+  it('offers the projects a # can name, by name then by tag', () => {
+    const projects: Project[] = [
+      { id: 'p1', name: 'Blolblex', path: 'D:\\b', sortOrder: 0, tags: ['bitbots', 'desktop'] },
+      { id: 'p2', name: 'Blolblex site', path: 'D:\\s', sortOrder: 1 },
+      { id: 'p3', name: 'Storefront', path: 'D:\\w', sortOrder: 2, tags: ['web'] },
+    ]
+    // Best match first: the exact name, then a name that starts with it.
+    expect(projectMatches(projects, 'blolblex').map((project) => project.id)).toEqual(['p1', 'p2'])
+    expect(projectMatches(projects, 'bitbots').map((project) => project.id)).toEqual(['p1'])
+    expect(projectMatches(projects, 'web').map((project) => project.id)).toEqual(['p3'])
+    // An empty query lists them all, so opening `#` after `@Vex` shows the choices.
+    expect(projectMatches(projects, '').map((project) => project.id)).toEqual(['p1', 'p2', 'p3'])
+    expect(projectMatches(projects, 'nothing')).toEqual([])
   })
 
   it('never treats a scheduled run as the main conversation of a blob', () => {

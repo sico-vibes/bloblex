@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { useDialogAccessibility, useDialogEntered } from './dialogFocus'
 import { ArrowLeftRight, ArrowUpRight, Check, ChevronDown, ClipboardList, Gauge, Hash, RotateCw, Send, X } from 'lucide-react'
-import type { Agent, PermissionRequest, Session, UserQuestion } from '../types'
+import type { Agent, PermissionRequest, Project, Session, UserQuestion } from '../types'
 import { agentLook } from '../blob/look'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentColorHex } from './agentColor'
 import { providerBrand } from './providerBrand'
-import { sideTitle } from './teamSelectors'
+import { projectMatches, sideTitle } from './teamSelectors'
 import { useEntityNoun } from './vocabulary'
 import { FileMentionOptions, type FileMatch } from './ProjectSearch'
 
@@ -216,24 +216,23 @@ export function SideConversationMenu({ sessions, agents, ownerId, onOpen }: { se
   </div>
 }
 
-/** Autocomplete for #conversation references in the composer. */
-export function ConversationPicker({ sessions, agents, ownerId, query, activeIndex, onPick, onHover }: { sessions: readonly Session[]; agents: readonly Agent[]; ownerId?: string; query: string; activeIndex: number; onPick: (session: Session) => void; onHover: (index: number) => void }) {
-  const matches = conversationMatches(sessions, agents, query)
+/** `#` in the composer names a project (owner decision, 1 November 2026). What a
+ * bot should work on is a project, not a side conversation: the tag vocabulary
+ * already existed for routing and had no way to be typed. Until that date this
+ * slot held `ConversationPicker`, which listed side conversations; a message's
+ * own menu still restores `conversationRefs`, so nothing was lost. */
+export function ProjectPicker({ projects, query, activeIndex, onPick, onHover }: { projects: readonly Project[]; query: string; activeIndex: number; onPick: (project: Project) => void; onHover: (index: number) => void }) {
+  const matches = projectMatches(projects, query)
   if (!matches.length) return null
-  return <div className="mention-picker conversation-picker" role="listbox" aria-label="Reference a side conversation">
-    <div className="mention-picker-heading"><Hash size={12} aria-hidden="true" />Side conversations</div>
-    {matches.map((session, index) => <button key={session.id} type="button" role="option" aria-selected={index === activeIndex} className={`mention-option side-option ${index === activeIndex ? 'active' : ''}`} onMouseDown={(event) => { event.preventDefault(); onPick(session) }} onMouseEnter={() => onHover(index)}>
-      <SideConversationRow session={session} agents={agents} ownerId={ownerId} />
+  return <div className="mention-picker conversation-picker" role="listbox" aria-label="Which project this is for">
+    <div className="mention-picker-heading"><Hash size={12} aria-hidden="true" />Project</div>
+    {matches.map((project, index) => <button key={project.id} type="button" role="option" aria-selected={index === activeIndex} className={`mention-option side-option ${index === activeIndex ? 'active' : ''}`} onMouseDown={(event) => { event.preventDefault(); onPick(project) }} onMouseEnter={() => onHover(index)}>
+      <span className="discover-name"><strong>{project.name}</strong><small>{project.tags?.length ? project.tags.join(', ') : project.path ?? 'No folder'}</small></span>
     </button>)}
   </div>
 }
 
 export { sideTitle }
-
-export function conversationMatches(sessions: readonly Session[], agents: readonly Agent[], query: string) {
-  const needle = query.trim().toLowerCase()
-  return sessions.filter((session) => !needle || sideTitle(session, agents).toLowerCase().includes(needle)).slice(0, 6)
-}
 
 export function PlanCard({ text, renderText, canApprove, onApprove, onRevise, steps = [], progress = [] }: { text: string; renderText: (text: string) => ReactNode; canApprove: boolean; onApprove: () => void; onRevise: () => void; steps?: readonly string[]; progress?: readonly number[] }) {
   const done = progress.filter(Boolean).length

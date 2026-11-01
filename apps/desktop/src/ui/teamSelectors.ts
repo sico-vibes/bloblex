@@ -156,6 +156,22 @@ export function defaultProjectFor(agent: Pick<Agent, 'projectId' | 'lastProjectI
 
 export type ProjectConversations = { key: string; project: Project | null; nodes: ConversationNode[] }
 
+/** The projects whose name or tag matches what was typed after `#`, best match
+ * first: an exact name, then a name that starts with it, then a name that holds
+ * it, then a tag. Owner decision, 1 November 2026: `#` names a project, and a
+ * tag is one of the ways to name it (the daemon resolves the same three). */
+export function projectMatches(projects: readonly Project[], query: string): Project[] {
+  const needle = query.trim().toLowerCase()
+  const scored: Array<{ project: Project; score: number }> = []
+  for (const project of projects) {
+    const name = project.name.trim().toLowerCase()
+    if (!needle) { scored.push({ project, score: 0 }); continue }
+    const score = name === needle ? 3 : name.startsWith(needle) ? 2 : name.includes(needle) ? 1 : (project.tags ?? []).some((tag) => tag.toLowerCase().includes(needle)) ? 0 : -1
+    if (score >= 0) scored.push({ project, score })
+  }
+  return scored.sort((a, b) => b.score - a.score).slice(0, 6).map((entry) => entry.project)
+}
+
 /** A bot's conversations grouped by the project each one works in; the most recently active project comes first. */
 export function conversationsByProject(nodes: readonly ConversationNode[], projects: readonly Project[]): ProjectConversations[] {
   const groups = new Map<string, ProjectConversations>()

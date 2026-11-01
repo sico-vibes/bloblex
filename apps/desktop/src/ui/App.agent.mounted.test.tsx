@@ -1268,7 +1268,8 @@ describe('blob roster and editor', () => {
     expect(h.rpc).toHaveBeenCalledWith('session.prompt', { sessionId: 'session-claude', text: 'Approved. Go ahead and implement the plan.' })
   })
 
-  it('completes an @mention from the picker with the keyboard', async () => {
+  it('completes an @mention from the picker and opens the project step', async () => {
+    configure(snapshot({ projects: [board] }))
     const view = startApp()
     await view.settle()
     const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
@@ -1278,8 +1279,15 @@ describe('blob roster and editor', () => {
     await typeInto(textarea, 'Ask @co')
     expect([...view.host.querySelectorAll('.mention-option strong')].map((node) => node.textContent)).toEqual(['Codex', 'OpenCode'])
     await press(textarea, 'Enter')
-    expect(textarea.value).toBe('Ask @Codex ')
-    expect(view.host.querySelector('.mention-picker')).toBeNull()
+    // Owner decision, 1 November 2026: naming a bot starts the project step, so a
+    // request says where it lands instead of falling back to the bot's last folder.
+    expect(textarea.value).toBe('Ask @Codex #')
+    // The mention list is replaced by the project list: one `#` step, same keyboard.
+    expect([...view.host.querySelectorAll('.conversation-picker .mention-option strong')].map((node) => node.textContent)).toEqual(['Board'])
+    // Enter then picks the project, and the `#` in the text names it.
+    await press(textarea, 'Enter')
+    expect(textarea.value).toBe('Ask @Codex #Board ')
+    expect(view.host.querySelector('.conversation-picker')).toBeNull()
     expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
   })
 

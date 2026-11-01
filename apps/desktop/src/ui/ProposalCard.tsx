@@ -39,16 +39,19 @@ export function folderNameFor(name: string): string {
 
 /**
  * FIX39 P6 audit finding 4: a task's named project is matched by the daemon by
- * id or by a trimmed, case-insensitive name. The card must resolve it the same
- * way, or it shows "—" while the delegated bot still runs and writes in that
- * project's folder. Undefined means the name matches nothing (the daemon will
- * refuse it).
+ * id, by a trimmed, case-insensitive name, or by a tag only one project carries
+ * (`team::project_named`). The card must resolve it the same way, or it shows "—"
+ * while the delegated bot still runs and writes in that project's folder. Undefined
+ * means the name matches nothing (the daemon will refuse it).
  */
 export function projectForDraft(projects: readonly Project[], name: string | undefined): Project | undefined {
-  const wanted = (name ?? '').trim()
+  const wanted = (name ?? '').trim().replace(/^#+/, '').trim()
   if (!wanted) return undefined
   const lower = wanted.toLowerCase()
-  return projects.find((project) => project.id === wanted || project.name.trim().toLowerCase() === lower)
+  const named = projects.find((project) => project.id === wanted || project.name.trim().toLowerCase() === lower)
+  if (named) return named
+  const tagged = projects.filter((project) => (project.tags ?? []).some((tag) => tag.toLowerCase() === lower))
+  return tagged.length === 1 ? tagged[0] : undefined
 }
 
 /** The full path of a new project folder inside the chosen parent. */

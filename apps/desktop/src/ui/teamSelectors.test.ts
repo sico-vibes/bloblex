@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Project, Session } from '../types'
-import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, projectMatches, sessionIsLimited, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
+import { ancestorIds, conversationPlaceName, conversationPreview, conversationTree, groupAgentsByProject, isWaitingDelegation, leaderOf, mainSessionFor, mentionedAgents, mentionQuery, hashQuery, leaveProjectStep, projectMatches, projectNamedInText, sessionIsLimited, sideSessionsFor, sidebarSubtitle, splitMentions, splitReferences } from './teamSelectors'
 
 const agent = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({ id, name, description: '', instructions: '', color: 'mint', runtimeId: 'rt', model: null, thinking: null, serviceTier: null, customArgs: [], customEnv: {}, maxConcurrency: 1, defaultProject: null, sortOrder: 0, archived: false, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', ...extra })
 const session = (id: string, extra: Partial<Session> = {}): Session => ({ id, runtimeId: 'rt', updatedAt: '2026-10-01T00:00:00Z', ...extra })
@@ -32,6 +32,41 @@ describe('team selectors', () => {
     // An empty query lists them all, so opening `#` after `@Vex` shows the choices.
     expect(projectMatches(projects, '').map((project) => project.id)).toEqual(['p1', 'p2', 'p3'])
     expect(projectMatches(projects, 'nothing')).toEqual([])
+  })
+
+  it('reads the project a message names from its own words', () => {
+    const projects: Project[] = [
+      { id: 'p1', name: 'Blolblex', path: 'D:\\b', sortOrder: 0, tags: ['bitbots', 'shared'] },
+      { id: 'p2', name: 'Blolblex site', path: 'D:\\s', sortOrder: 1, tags: ['shared'] },
+      { id: 'p3', name: 'Twin', path: 'D:\\t', sortOrder: 2 },
+      { id: 'p4', name: 'twin', path: 'D:\\u', sortOrder: 3 },
+    ]
+    const id = (text: string) => { const found = projectNamedInText(text, projects); return found && 'project' in found ? found.project.id : found }
+    expect(id('Ask @Codex #Blolblex to look')).toBe('p1')
+    // The longest name wins, so a name inside another name does not steal it.
+    expect(id('#blolblex site, please')).toBe('p2')
+    expect(id('work in #bitbots')).toBe('p1')
+    // No `#` word, a word inside another word, or an unknown one names nothing.
+    expect(id('Blolblex is fine')).toBeNull()
+    expect(id('issue#Blolblex')).toBeNull()
+    expect(id('#Blolblexes and #123')).toBeNull()
+    // Several projects fit: the caller refuses instead of guessing, like the daemon.
+    expect(id('in #shared')).toEqual({ ambiguous: 'shared' })
+    expect(id('in #Twin')).toEqual({ ambiguous: 'Twin' })
+  })
+
+  it('takes the added # back out once the words are the message', () => {
+    const projects: Project[] = [{ id: 'p1', name: 'Board', path: 'D:\\b', sortOrder: 0, tags: ['web'] }]
+    const at = (text: string) => leaveProjectStep(text, text.length, text.indexOf('#'), projects)
+    expect(at('@Codex #')).toBeNull()
+    expect(at('@Codex #bo')).toBeNull()
+    expect(at('@Codex #web')).toBeNull()
+    expect(at('@Codex #fix')).toEqual({ text: '@Codex fix', caret: 10 })
+    expect(at('@Codex # ')).toEqual({ text: '@Codex ', caret: 7 })
+    // Words after the caret stay where they are.
+    expect(leaveProjectStep('@Codex #x tail', 9, 7, projects)).toEqual({ text: '@Codex x tail', caret: 8 })
+    // The `#` is already gone: nothing to take out.
+    expect(leaveProjectStep('@Codex ', 7, 7, projects)).toBeNull()
   })
 
   it('never treats a scheduled run as the main conversation of a blob', () => {

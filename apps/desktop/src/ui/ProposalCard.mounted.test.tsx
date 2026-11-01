@@ -128,6 +128,10 @@ describe('task folder line (FIX39 risk 7)', () => {
     expect(projectForDraft(projects, 'p-two')?.id).toBe('p-two')
     expect(projectForDraft(projects, 'Missing')).toBeUndefined()
     expect(projectForDraft(projects, '  ')).toBeUndefined()
+    // A tag names a project only while one project carries it, as in `team::project_named`.
+    const tagged = [{ ...projects[0]!, tags: ['bitbots', 'shared'] }, { ...projects[1]!, tags: ['shared'] }]
+    expect(projectForDraft(tagged, '#BitBots')?.id).toBe(tagged[0]!.id)
+    expect(projectForDraft(tagged, 'shared')).toBeUndefined()
   })
 })
 

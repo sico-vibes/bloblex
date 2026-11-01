@@ -1291,6 +1291,54 @@ describe('blob roster and editor', () => {
     expect(h.rpc).not.toHaveBeenCalledWith('session.prompt', expect.anything())
   })
 
+  it('takes the # of the project step back out when the owner carries on with the message', async () => {
+    configure(snapshot({ projects: [board] }))
+    const view = startApp()
+    await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    await typeInto(textarea, 'Ask @co')
+    await press(textarea, 'Enter')
+    expect(textarea.value).toBe('Ask @Codex #')
+    await typeInto(textarea, 'Ask @Codex #fix')
+    expect(textarea.value).toBe('Ask @Codex fix')
+    expect(view.host.querySelector('.conversation-picker')).toBeNull()
+    // Escape leaves the step too, and a # the owner typed themselves stays.
+    await typeInto(textarea, 'Ask @co')
+    await press(textarea, 'Enter')
+    await press(textarea, 'Escape')
+    expect(textarea.value).toBe('Ask @Codex ')
+    await typeInto(textarea, 'see #')
+    await press(textarea, 'Escape')
+    expect(textarea.value).toBe('see #')
+  })
+
+  it('sends a message without the empty # of the project step', async () => {
+    configure(snapshot({ projects: [board] }))
+    const view = startApp()
+    await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    await typeInto(textarea, 'Ask @co')
+    await press(textarea, 'Enter')
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('.send-button')!.click() })
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('session.prompt', expect.objectContaining({ text: 'Ask @Codex' }))
+  })
+
+  it('opens a draft in the project its words name, and only that', async () => {
+    const created = session({ id: 'session-invoice', runtimeId: 'runtime-codex', agentId: 'agent-invoice', title: 'New chat', updatedAt: '2026-10-02T02:00:00.000Z', messages: [] })
+    configure(snapshot({ projects: [board] }))
+    withRpc((method) => method === 'agent.conversation.create' ? { session: created } : undefined)
+    const view = startApp()
+    await view.settle()
+    await click(view.host.querySelector('.team-row[data-agent-id="agent-invoice"]'))
+    await view.settle()
+    const textarea = view.host.querySelector<HTMLTextAreaElement>('.composer-box textarea')!
+    await typeInto(textarea, 'Parse these in #Board please')
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('.send-button')!.click() })
+    await view.settle()
+    expect(h.rpc).toHaveBeenCalledWith('agent.conversation.create', { agentId: 'agent-invoice', projectId: 'project-board' })
+  })
+
 })
 
 describe('opt-in conversation experiments', () => {

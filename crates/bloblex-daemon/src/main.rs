@@ -6294,6 +6294,8 @@ mod phase2a_tests {
         // With no Manager yet, an ordinary bot is told to ask the user to set one up.
         let no_manager = team::runtime_instructions(&st, &mate, &main, std::path::Path::new("."));
         assert!(no_manager.contains("tell the user they need to set up a Manager"), "{no_manager}");
+        // Every bot is told what the composer's `#` means, not only the Manager.
+        assert!(no_manager.contains("A #Name in the user's message names a project"), "{no_manager}");
         assert!(!no_manager.contains("tag the Manager as @"), "{no_manager}");
         // The Manager gets the manager paragraph, not the refusal.
         let boss = dispatch(&st, "manager.ensure", json!({"name":"Boss","runtimeId":runtime_id})).await.unwrap()["manager"].clone();

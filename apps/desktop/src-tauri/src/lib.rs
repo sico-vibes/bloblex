@@ -245,14 +245,25 @@ fn reusable_daemon_copy(runtime_dir: &Path, executable: &Path) -> Result<PathBuf
     if let Ok(entries) = fs::read_dir(runtime_dir) {
         for path in entries.flatten().map(|entry| entry.path()) {
             let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
-            if name.starts_with("bitbotsd-") && name.ends_with(".exe") && path != copy {
+            if name.starts_with("bitbotsd-") && (name.ends_with(".exe") || name.ends_with(".partial")) && path != copy {
                 let _ = fs::remove_file(&path);
             }
         }
     }
-    fs::copy(executable, &copy).map_err(|error| {
+    // Written under another name, then renamed: Windows can give a file its full
+    // size before the bytes arrive, so an interrupted copy under the final name
+    // would pass the size check above and fail every later start.
+    let partial = runtime_dir.join(format!("bitbotsd-{}.partial", std::process::id()));
+    fs::copy(executable, &partial).map_err(|error| {
         format!("Could not copy the daemon to its private run location: {error}")
     })?;
+    if let Err(error) = fs::rename(&partial, &copy) {
+        let _ = fs::remove_file(&partial);
+        // Another start may have put the same build there first and be running it.
+        if !copy.is_file() {
+            return Err(format!("Could not copy the daemon to its private run location: {error}"));
+        }
+    }
     Ok(copy)
 }
 
@@ -591,6 +602,43 @@ fn retry_startup_read(method: &str, error: &str) -> bool {
         && (error.starts_with("Daemon request failed:")
             || error == "The local Bitbots daemon is not running."
             || error == "The local Bitbots daemon stopped unexpectedly.")
+}
+
+#[cfg(test)]
+mod reusable_daemon_copy_tests {
+    use super::*;
+
+    #[test]
+    fn a_copy_is_reused_for_one_build_and_older_ones_are_removed() {
+        let root = std::env::temp_dir().join(format!("bitbots-copy-{}", Uuid::new_v4()));
+        let runtime_dir = root.join("runtime");
+        fs::create_dir_all(&runtime_dir).unwrap();
+        let source = root.join("bitbotsd.exe");
+        fs::write(&source, b"first build").unwrap();
+        let older = runtime_dir.join("bitbotsd-1-1.exe");
+        let interrupted = runtime_dir.join("bitbotsd-99.partial");
+        let unrelated = runtime_dir.join("other.exe");
+        for path in [&older, &interrupted, &unrelated] { fs::write(path, b"x").unwrap(); }
+
+        let copy = reusable_daemon_copy(&runtime_dir, &source).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), b"first build");
+        assert!(!older.exists() && !interrupted.exists() && unrelated.exists());
+        // Nothing is left under a temporary name.
+        assert_eq!(fs::read_dir(&runtime_dir).unwrap().filter(|entry| entry.as_ref().unwrap().path().extension().is_some_and(|ext| ext == "partial")).count(), 0);
+
+        // The same build keeps its copy: a marker written into it survives.
+        fs::write(&copy, b"first-build").unwrap();
+        assert_eq!(reusable_daemon_copy(&runtime_dir, &source).unwrap(), copy);
+        assert_eq!(fs::read(&copy).unwrap(), b"first-build");
+
+        // A new build gets a new copy, and the old one goes.
+        fs::write(&source, b"second, longer build").unwrap();
+        let next = reusable_daemon_copy(&runtime_dir, &source).unwrap();
+        assert_ne!(next, copy);
+        assert_eq!(fs::read(&next).unwrap(), b"second, longer build");
+        assert!(!copy.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

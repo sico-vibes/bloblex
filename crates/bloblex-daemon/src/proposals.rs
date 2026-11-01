@@ -46,11 +46,11 @@ pub fn tool_schemas() -> Vec<Value> {
             "instructions":{"type":"string","description":"Persona and working style, up to 4000 characters (optional)."},
             "provider":{"type":"string","enum":["claude","codex","opencode"],"description":"The coding agent the bot runs on."},
             "model":{"type":"string","description":"A model id from that runtime's catalog (optional)."},
-            "project":{"type":"string","description":"A project id or exact project name to attach the bot to (optional; absent makes a casual bot)."}
+            "project":{"type":"string","description":"A project id, exact project name or unique tag to attach the bot to (optional; absent makes a casual bot)."}
         },"required":["name","provider"],"additionalProperties":false}}),
         json!({"name":"assign_task","description":"Propose a task for one of your bots. It is delivered like message_blob when the user approves: a private side conversation, and the reply comes back here. Nothing is assigned until they approve it.","inputSchema":{"type":"object","properties":{
             "bot":{"type":"string","description":"The bot's name or id."},
-            "project":{"type":"string","description":"A project id or exact project name the task belongs to (optional)."},
+            "project":{"type":"string","description":"A project id, exact project name or unique tag the task belongs to (optional)."},
             "brief":{"type":"string","description":"A self-contained brief: goal, context, paths, constraints and what to send back."}
         },"required":["bot","brief"],"additionalProperties":false}}),
         json!({"name":"project_status","description":"Show a project's bots with their latest conversation title, state and last activity.","inputSchema":{"type":"object","properties":{

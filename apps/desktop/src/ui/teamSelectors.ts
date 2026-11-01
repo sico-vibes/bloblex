@@ -172,6 +172,46 @@ export function projectMatches(projects: readonly Project[], query: string): Pro
   return scored.sort((a, b) => b.score - a.score).slice(0, 6).map((entry) => entry.project)
 }
 
+/** The project a message names with `#`, read from the text itself so the words on
+ * screen and the folder the work lands in cannot disagree: deleting `#Board` drops
+ * the project, and a draft left and reopened keeps it. Same rules as the daemon's
+ * `team::project_named`: an exact name (the longest wins, for "Blolblex site"), else
+ * a tag only one project carries; `ambiguous` holds the words that fit several. */
+export function projectNamedInText(text: string, projects: readonly Project[]): { project: Project } | { ambiguous: string } | null {
+  const lower = text.toLowerCase()
+  for (const match of lower.matchAll(/(?:^|\s)#/g)) {
+    const start = match.index + match[0].length
+    const named = projects.filter((project) => {
+      const name = project.name.trim().toLowerCase()
+      if (!name || !lower.startsWith(name, start)) return false
+      const after = lower[start + name.length]
+      return after === undefined || !/[\p{L}\p{N}_-]/u.test(after)
+    })
+    const longest = Math.max(0, ...named.map((project) => project.name.trim().length))
+    const best = named.filter((project) => project.name.trim().length === longest)
+    if (best.length === 1) return { project: best[0]! }
+    if (best.length > 1) return { ambiguous: best[0]!.name.trim() }
+    const word = /^[\p{L}\p{N}_-]+/u.exec(lower.slice(start))?.[0]
+    if (!word) continue
+    const tagged = projects.filter((project) => (project.tags ?? []).some((tag) => tag.toLowerCase() === word))
+    if (tagged.length === 1) return { project: tagged[0]! }
+    if (tagged.length > 1) return { ambiguous: word }
+  }
+  return null
+}
+
+/** The composer after the `#` an `@` pick added is left behind: what is typed next
+ * starts with a space, or fits no project, so it is the message and not a project.
+ * `null` while the words can still name one. Only a `#` the person did not type
+ * themselves ever comes here. */
+export function leaveProjectStep(value: string, caret: number, start: number, projects: readonly Project[]): { text: string; caret: number } | null {
+  if (value[start] !== '#' || caret <= start) return null
+  const query = value.slice(start + 1, caret)
+  if (!query || (!/^\s/.test(query) && projectMatches(projects, query).length > 0)) return null
+  const kept = query.trimStart()
+  return { text: `${value.slice(0, start)}${kept}${value.slice(caret)}`, caret: start + kept.length }
+}
+
 /** A bot's conversations grouped by the project each one works in; the most recently active project comes first. */
 export function conversationsByProject(nodes: readonly ConversationNode[], projects: readonly Project[]): ProjectConversations[] {
   const groups = new Map<string, ProjectConversations>()
@@ -243,7 +283,7 @@ export function splitMentions(text: string, agents: readonly Agent[]): MentionSe
   return segments
 }
 
-/** The `#query` being typed at the caret, if any: a side conversation reference. */
+/** The `#query` being typed at the caret, if any: a project being named. */
 export function hashQuery(text: string, caret: number): { start: number; query: string } | null {
   const before = text.slice(0, caret)
   const match = /(^|\s)#([^\n#@]{0,60})$/u.exec(before)

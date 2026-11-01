@@ -66,7 +66,7 @@ import { WorkingBotsPanel } from './WorkingBotsPanel'
 import { DelegationGroup } from './DelegationGroup'
 import { buildDelegationRows, delegationRuns, newestNoticeBySide, useDelegations } from './delegations'
 import { ChangeBanner } from './ChangeBanner'
-import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, sideTopic, mainSessionFor, mentionQuery, projectMatches, projectOfSession, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, leaveProjectStep, sideTopic, mainSessionFor, mentionQuery, projectMatches, projectNamedInText, projectOfSession, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -304,9 +304,7 @@ export function App() {
   /** The `#project` being typed. Owner decision, 1 November 2026: `#` names a
    * project, because that is what a request needs to land somewhere. A side
    * conversation is still referenceable from a message's own menu. */
-  const [hashRef, setHashRef] = useState<{ start: number; query: string; index: number } | null>(null)
-  /** The project picked with `#` for the conversation this draft will create. */
-  const composerProject = useRef<string | null>(null)
+  const [hashRef, setHashRef] = useState<{ start: number; query: string; index: number; auto?: boolean } | null>(null)
   const [conversationRefs, setConversationRefs] = useState<Array<{ id: string; title: string }>>([])
   /** Where "Close chat" returns: the blob and conversation a side conversation was opened from. */
   const sideReturn = useRef<{ agentId: string | null; sessionId: string | null } | null>(null)
@@ -622,8 +620,6 @@ export function App() {
   const composerKeyRef = useRef(composerKey)
   composerKeyRef.current = composerKey
   const [composer, setComposer] = useDraft(composerKey)
-  // A project picked for one draft must not follow the owner into the next box.
-  useEffect(() => { composerProject.current = null }, [composerKey])
   useAutosizeTextarea(composerRef, composer, composerMaxHeight)
   detailsSessionIdRef.current = selectedSession?.id ?? null
   // Remember every conversation's blob, so a removed id can still be traced to its owner.
@@ -1821,9 +1817,8 @@ export function App() {
     if (!hashRef) return
     const caret = composerRef.current?.selectionStart ?? composer.length
     setComposer(`${composer.slice(0, hashRef.start)}#${project.name} ${composer.slice(caret)}`)
-    // The id travels to the conversation this draft becomes, so the daemon needs
-    // no model judgement to know which folder the work belongs in.
-    composerProject.current = project.id
+    // `sendPrompt` reads the project back from these words (`projectNamedInText`),
+    // so the daemon needs no model judgement to know where the work belongs.
     setHashRef(null)
     requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = hashRef.start + project.name.length + 2; node.focus(); node.setSelectionRange(position, position) })
   }
@@ -1832,12 +1827,13 @@ export function App() {
     const caret = composerRef.current?.selectionStart ?? composer.length
     // Owner decision, 1 November 2026: naming a bot opens the project step at
     // once, as `#`, so "ask Vex to…" ends with a project rather than the bot's
-    // own last-used folder. Typing on filters the list; Delete removes the `#`.
+    // own last-used folder. Typing on filters the list; a word no project fits, a
+    // space, Escape or sending takes this `#` back out (`leaveProjectStep`).
     const askProject = projects.length > 0
     const next = `${composer.slice(0, mention.start)}@${agent.name}${askProject ? ' #' : ' '}${composer.slice(caret)}`
     setComposer(next)
     setMention(null)
-    if (askProject) setHashRef({ start: mention.start + agent.name.length + 2, query: '', index: 0 })
+    if (askProject) setHashRef({ start: mention.start + agent.name.length + 2, query: '', index: 0, auto: true })
     requestAnimationFrame(() => { const node = composerRef.current; if (!node) return; const position = mention.start + agent.name.length + 3; node.focus(); node.setSelectionRange(position, position) })
   }
   const pickFileMention = (file: FileMatch) => {
@@ -2008,7 +2004,8 @@ export function App() {
    * message sent during a turn.
    */
   const sendPrompt = async (dueAt?: string, opposite = false) => {
-    const text = composer.trim()
+    // The `#` an `@` pick added, still empty, was never part of the message.
+    const text = (hashRef?.auto && !hashRef.query && composer[hashRef.start] === '#' ? `${composer.slice(0, hashRef.start)}${composer.slice(hashRef.start + 1)}` : composer).trim()
     const ready = attachments.filter((item) => item.status === 'ready' && item.path)
     // A picked or hand-typed leading `/command` travels as a `command` with the
     // message stored exactly as typed.
@@ -2026,9 +2023,10 @@ ${fileReferenceText(sentFile)}` : typed
     let target = selectedSession
     if (isDraftSession(target)) {
       const agent = activeSelectedAgent
-      const created = agent ? await createConversation(agent, { quiet: true, projectId: composerProject.current ?? undefined }) : null
+      const named = projectNamedInText(text, projects)
+      if (named && 'ambiguous' in named) { setError(`More than one project answers to #${named.ambiguous}. Rename one or use its full name.`); return }
+      const created = agent ? await createConversation(agent, { quiet: true, projectId: named?.project.id }) : null
       if (!created) { setError('Could not start the conversation. Try again.'); return }
-      composerProject.current = null
       target = created
     }
     const sessionId = target.id
@@ -2052,6 +2050,7 @@ ${fileReferenceText(sentFile)}` : typed
     const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const heldId = holdDraft(originKey, text)
     setSlash(null)
+    setHashRef(null)
     setSlashCommand(null)
     setConversationRefs([])
     setReplyTarget(null)
@@ -2983,7 +2982,7 @@ ${fileReferenceText(sentFile)}` : typed
               {slash && slashCandidates.length > 0 && <SlashMenu items={slashCandidates} activeIndex={slash.index} onPick={pickSlash} onHover={(index) => setSlash((current) => current ? { ...current, index } : current)} />}
               {hashRef && !mention && <ProjectPicker projects={projects} query={hashRef.query} activeIndex={hashRef.index} onPick={pickProject} onHover={(index) => setHashRef((current) => current ? { ...current, index } : current)} />}
               {mention && <MentionPicker agents={agents.filter((agent) => agent.id !== activeSelectedAgent?.id && !agent.hidden)} query={mention.query} activeIndex={mention.index} onPick={pickMention} onHover={(index) => setMention((current) => current ? { ...current, index } : current)} files={fileCandidates} onPickFile={pickFileMention} />}
-              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true; setDraftFocus(composerKey, true) }} onBlur={() => { composerTypingRef.current = false; setDraftFocus(composerKey, false) }} onChange={(event) => { const value = event.target.value; setComposer(value); const caret = event.target.selectionStart ?? value.length; const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && projects.length ? { ...hash, index: 0 } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
+              <textarea ref={composerRef} value={composer} onFocus={() => { composerTypingRef.current = true; setDraftFocus(composerKey, true) }} onBlur={() => { composerTypingRef.current = false; setDraftFocus(composerKey, false) }} onChange={(event) => { let value = event.target.value; let caret = event.target.selectionStart ?? value.length; const autoHash = hashRef?.auto ? hashRef.start : null; const left = autoHash === null ? null : leaveProjectStep(value, caret, autoHash, projects); if (left) { value = left.text; caret = left.caret; requestAnimationFrame(() => composerRef.current?.setSelectionRange(left.caret, left.caret)) } setComposer(value); const slashFound = slashQuery(value, caret); setSlash(slashFound ? { ...slashFound, index: 0 } : null); const found = slashFound ? null : mentionQuery(value, caret); setMention(found ? { ...found, index: 0 } : null); const hash = (slashFound || found) ? null : hashQuery(value, caret); setHashRef(hash && projects.length && !/^\s/.test(hash.query) ? { ...hash, index: 0, auto: hash.start === autoHash } : null) }} onPaste={handleComposerPaste} onKeyDownCapture={(event) => { if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'v') pasteNativeComposerImage() }} onKeyDown={(event) => {
                 if (event.key === 'Backspace' && slashCommand && !composer) { event.preventDefault(); setSlashCommand(null); return }
                 if (slash && slashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setSlash({ ...slash, index: (slash.index + (event.key === 'ArrowDown' ? 1 : slashCandidates.length - 1)) % slashCandidates.length }); return }
@@ -3004,7 +3003,12 @@ ${fileReferenceText(sentFile)}` : typed
                 if (hashRef && hashCandidates.length) {
                   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setHashRef({ ...hashRef, index: (hashRef.index + (event.key === 'ArrowDown' ? 1 : hashCandidates.length - 1)) % hashCandidates.length }); return }
                   if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); pickProject(hashCandidates[Math.min(hashRef.index, hashCandidates.length - 1)]!); return }
-                  if (event.key === 'Escape') { event.preventDefault(); setHashRef(null); return }
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    if (hashRef.auto && !hashRef.query) { const at = hashRef.start; setComposer(`${composer.slice(0, at)}${composer.slice(at + 1)}`); requestAnimationFrame(() => composerRef.current?.setSelectionRange(at, at)) }
+                    setHashRef(null)
+                    return
+                  }
                 }
                 const enter = composerEnterAction(event.nativeEvent, sendShortcut)
                 if (enter) { event.preventDefault(); void sendPrompt(undefined, enter === 'opposite') }

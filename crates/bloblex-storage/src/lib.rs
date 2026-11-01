@@ -743,6 +743,23 @@ fn ensure_model_catalog_schema(c: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
+/// Read-path indexes for the calls the window makes constantly, added 2026-11-01
+/// after measuring a real 510 MB database. `app.snapshot` builds each fully
+/// detailed conversation with a per-session `tool_calls` query; without this
+/// index that query could only scan the whole table (383 MB in 3,973 rows), and
+/// that scan ran once per conversation while holding the one database lock every
+/// RPC shares. Measured on a copy of the owner's database: the snapshot's tool
+/// read went from 318 ms to 137 ms with the index. `file_changes` gets the same
+/// treatment for the same reason. Both are additive and idempotent, so they run
+/// on every open without a `user_version` bump.
+fn ensure_read_indexes(c: &Connection) -> Result<(), StorageError> {
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
+         CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(session_id);",
+    )?;
+    Ok(())
+}
+
 /// Shared skills pool schema (FIX32). Additive and idempotent like the other
 /// `ensure_*` functions, so it runs on every open without a `user_version`
 /// bump. `skills` is the one pool every bot shares; `skill_agent_settings`
@@ -2214,6 +2231,7 @@ impl Storage {
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
+                ensure_read_indexes(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==11 {
@@ -2231,6 +2249,7 @@ impl Storage {
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
+                ensure_read_indexes(&conn)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
             if ledger==10 {
@@ -2249,6 +2268,7 @@ impl Storage {
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
+                ensure_read_indexes(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -2270,6 +2290,7 @@ impl Storage {
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
+                ensure_read_indexes(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
                 return Ok(Self { conn: Mutex::new(conn) });
             }
@@ -2392,6 +2413,7 @@ impl Storage {
                 ensure_remote_schema(&conn)?;
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
+                ensure_read_indexes(&conn)?;
                 ensure_tasks_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
         Ok(Self {

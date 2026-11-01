@@ -1011,7 +1011,8 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (method === 'stash.delete') return { deleted: true } as T
     if (method === 'stash.restore') return { item: { text: item.text, attachments: item.attachments.map((part) => ({ path: `C:/Bitbots/stash-restored/${part.file}`, name: part.name })) } } as T
   }
-  if (method === 'project.scaffold.status') return { git: true, gh: { available: true, login: 'preview-user' } } as T
+  if (method === 'project.scaffold.status') return { git: true, gh: { available: true, login: 'preview-user', loginChecked: true } } as T
+  if (method === 'project.scaffold.login') return { login: 'preview-user', loginChecked: true } as T
   if (method === 'project.scaffold') {
     if (params.confirm !== true) throw rpcError('invalid_argument', 'Confirm creating the project first.')
     const name = String(params.name ?? '').trim()

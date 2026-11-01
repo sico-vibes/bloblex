@@ -979,7 +979,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "diagnostics.preview" | "diagnostics.export" | "diagnostics.issueDraft" | "diagnostics.issuePost" => diagnostics::rpc(st, method, &p).await,
         "fanout.start" | "fanout.get" | "fanout.list" | "fanout.pick" | "fanout.delete" => fanout::rpc(st, method, &p).await,
         "stash.add" | "stash.list" | "stash.update" | "stash.image" | "stash.restore" | "stash.delete" => stash::rpc(st, method, &p).await,
-        "project.scaffold" | "project.scaffold.status" => scaffold::rpc(st, method, &p).await,
+        "project.scaffold" | "project.scaffold.status" | "project.scaffold.login" => scaffold::rpc(st, method, &p).await,
         // Phase 8: a conversation's or a bot's sub-bots, status read from the ledger.
         "subbot.list" => subbots::rpc(st, method, &p).await,
         "automation.webhook.enable" | "automation.webhook.rotate" | "automation.webhook.update" | "automation.webhook.disable" => webhooks::rpc(st, method, &p).await,
@@ -1057,17 +1057,24 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             }
             let mut effective = existing.clone();
             if let (Some(dst), Some(src)) = (effective.as_object_mut(), fields.as_object()) { for (key, value) in src { dst.insert(key.clone(), value.clone()); } }
-            if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned() {
-                if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
-                    let catalog = served.value;
-                    if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &effective, &catalog) {
-                        if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
-                        if let (Some(destination), Some(source)) = (effective.as_object_mut(), normalized.as_object()) { for (key, value) in source { destination.insert(key.clone(), value.clone()); } }
+            // Everything the catalog has an opinion about: the runtime, the
+            // model and its effort and speed. A save that touches none of them
+            // (an icon, a colour, a name) must not start a provider probe: the
+            // `Fresh` read can take seconds, and the icon editor felt like it
+            // hung because of it (2026-11-01).
+            let options_changed = ["runtimeId", "model", "thinking", "serviceTier"].iter().any(|key| fields.get(*key).is_some());
+            if options_changed {
+                if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned() {
+                    if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
+                        let catalog = served.value;
+                        if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &effective, &catalog) {
+                            if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
+                            if let (Some(destination), Some(source)) = (effective.as_object_mut(), normalized.as_object()) { for (key, value) in source { destination.insert(key.clone(), value.clone()); } }
+                        }
                     }
                 }
+                validate_agent_catalog(st, &runtime_id, &effective).await?;
             }
-            let options_changed = ["runtimeId", "model", "thinking", "serviceTier"].iter().any(|key| fields.get(*key).is_some());
-            if options_changed { validate_agent_catalog(st, &runtime_id, &effective).await?; }
             let (agent, events) = st.db.agent_update(id, &fields).map_err(agent_error)?;
             if let Some(refs) = &refs { st.db.env_refs_set(id, refs).map_err(agent_error)?; }
             st.broadcast_persisted(events);
@@ -8262,6 +8269,31 @@ mod phase2a_tests {
         let updated=dispatch(&st,"agent.update",json!({"agentId":id,"approvalMode":"ask"})).await.unwrap()["agent"].clone();assert_eq!(updated["approvalMode"],"ask");assert_eq!(updated["effectiveApprovalMode"],"ask");assert_eq!(events.recv().await.unwrap().event_type,"agent.changed");
         let policy=dispatch(&st,"permissions.policy.get",json!({})).await.unwrap();assert_eq!(policy["defaultMode"],"auto");assert_eq!(policy["perAgent"][0]["effectiveMode"],"ask");
         assert_eq!(dispatch(&st,"agent.create",json!({"name":"Bad","runtimeId":"rt-test","approvalMode":"dangerous"})).await.unwrap_err().1.code,"invalid_argument");
+    }
+    #[tokio::test]
+    async fn an_icon_save_leaves_the_model_catalog_alone_and_a_model_save_still_reads_it() {
+        let (st, mut events) = state();
+        let created = dispatch(&st, "agent.create", json!({"name":"Painter","runtimeId":"rt-test","model":"beta"})).await.unwrap()["agent"].clone();
+        let id = created["id"].as_str().unwrap().to_owned();
+        let _ = events.recv().await.unwrap();
+        // A catalog that would fill in an effort level on any save, because the
+        // bot has none stored. Before the icon path stopped reading the catalog,
+        // painting a bot silently gave it an effort level.
+        let runtime = { let runtimes = st.runtimes.read().await; runtimes[0].clone() };
+        catalog::seed(&st, &runtime, json!({
+            "runtimeId":"rt-test","provider":"codex","fallback":false,"validated":true,
+            "models":[{"id":"beta","supportedThinking":["high"],"defaultThinking":"high","serviceTiers":[]}]
+        }));
+        let painted = dispatch(&st, "agent.update", json!({"agentId":id,"look":{"shape":"circle","icon":"char-kratos"}})).await.unwrap()["agent"].clone();
+        assert_eq!(painted["look"]["icon"], "char-kratos");
+        assert_eq!(painted["model"], "beta");
+        assert_eq!(painted["thinking"], Value::Null, "an icon save leaves the execution settings alone");
+        // A save that names the model still normalizes and validates it.
+        let reworked = dispatch(&st, "agent.update", json!({"agentId":id,"model":"beta"})).await.unwrap()["agent"].clone();
+        assert_eq!(reworked["thinking"], "high", "a model save still reads the catalog");
+        // And a locked bot refuses an icon save like any other.
+        dispatch(&st, "agent.lock.set", json!({"agentId":id,"locked":true})).await.unwrap();
+        assert_eq!(dispatch(&st, "agent.update", json!({"agentId":id,"look":{"shape":"circle","icon":"char-gandalf"}})).await.unwrap_err().1.code, "conflict");
     }
     #[tokio::test]
     async fn new_bot_full_access_default_preserves_existing_and_explicit_modes() {

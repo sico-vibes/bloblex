@@ -89,6 +89,25 @@ describe('new project', () => {
     expect(noGit.textContent).toContain('Git isn\u2019t installed'.replace('\u2019', "'"))
   })
 
+  it('is usable while the GitHub sign-in check is still out', async () => {
+    let answer: ((value: unknown) => void) | undefined
+    h.rpc.mockImplementation((method: string) => method === 'project.scaffold.status'
+      ? Promise.resolve({ git: true, gh: { available: true, login: null, loginChecked: false } })
+      : method === 'project.scaffold.login' ? new Promise((resolve) => { answer = resolve })
+        : Promise.resolve({}))
+    h.openProjectFolder.mockResolvedValue('D:/work')
+    const view = await mount(<NewProjectDialog onCancel={vi.fn()} onDone={vi.fn()} />); await settle()
+    expect(view.textContent).toContain('Checking your GitHub sign-in')
+    await type(view.querySelector<HTMLInputElement>('.new-project-field input')!, 'site')
+    await act(async () => { button(view, 'Choose a folder')!.click() }); await settle()
+    expect(button(view, 'Create project')!.disabled, 'the form never waits on GitHub').toBe(false)
+    expect(check(view, 'Also create it on GitHub').disabled, 'GitHub waits for its sign-in').toBe(true)
+    await act(async () => { answer?.({ login: 'me' }) }); await settle()
+    expect(view.textContent).toContain('Signed in as me')
+    expect(check(view, 'Also create it on GitHub').disabled).toBe(false)
+    expect(h.rpc).toHaveBeenCalledWith('project.scaffold.login', {})
+  })
+
   it('reports a failed step and keeps the project that was made', async () => {
     const project = { id: 'p9', name: 'site', path: 'D:/work/site', sortOrder: 0 }
     h.rpc.mockImplementation(async (method: string) => method === 'project.scaffold.status'

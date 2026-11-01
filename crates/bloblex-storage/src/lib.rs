@@ -752,10 +752,24 @@ fn ensure_model_catalog_schema(c: &Connection) -> Result<(), StorageError> {
 /// read went from 318 ms to 137 ms with the index. `file_changes` gets the same
 /// treatment for the same reason. Both are additive and idempotent, so they run
 /// on every open without a `user_version` bump.
+///
+/// The two partial expression indexes close the same hole for `app_events`:
+/// its only index is on `(event_type, sequence)`, so a lookup by a field inside
+/// the payload could only scan the whole log. `session_context_locked` runs once
+/// per conversation on every snapshot and `session_detail_parts`' turns query
+/// runs once per turn in a detailed one; both filter on `json_extract(payload)`.
+/// Measured on a copy of the owner's 548 MB database (141,692 events, 65
+/// conversations, 160 turns): 2.2 s for the context lookups and 23.2 s for the
+/// turn details, against a handful of milliseconds with these indexes.
+/// `json_valid` is part of every `WHERE` because `json_extract` raises an error
+/// on malformed JSON: the query has to match the index's `WHERE` exactly, or the
+/// planner cannot use it.
 fn ensure_read_indexes(c: &Connection) -> Result<(), StorageError> {
     c.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id);
-         CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(session_id);",
+         CREATE INDEX IF NOT EXISTS idx_file_changes_session ON file_changes(session_id);
+         CREATE INDEX IF NOT EXISTS idx_app_events_session_context ON app_events(json_extract(payload,'$.sessionId'), sequence) WHERE event_type IN ('session.context.updated','session.context.reset') AND json_valid(payload);
+         CREATE INDEX IF NOT EXISTS idx_app_events_turn_error ON app_events(json_extract(payload,'$.turnId'), sequence) WHERE event_type='turn.error' AND json_valid(payload);",
     )?;
     Ok(())
 }
@@ -1960,8 +1974,35 @@ fn push_settings_event(tx:&Transaction<'_>,key:&str,enabled:bool)->Result<Value,
     Ok(json!({"v":1,"eventId":id,"sequence":tx.last_insert_rowid(),"timestamp":ts,"type":"settings.changed","payload":payload}))
 }
 
+/// A read-only connection to the same database file, opened once the file is
+/// settled (after migration, never before).
+///
+/// Read-only, so a bug in a read path cannot write. Its reads still take the
+/// newest committed write, because each one starts a new transaction; and being
+/// a separate connection it never waits on `conn`'s lock. A read-only
+/// connection on a write-ahead log needs the `-shm` file, which the writer
+/// already created, and cannot recover a hot log, which is why this is only
+/// called after the read-write connection has opened and recovered it.
+fn open_reader(path: &Path) -> Result<Connection, StorageError> {
+    let reader = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // A checkpoint or a schema change can hold the file for a moment; wait
+    // rather than fail a read that is only late.
+    reader.busy_timeout(std::time::Duration::from_secs(5))?;
+    Ok(reader)
+}
+
 pub struct Storage {
     conn: Mutex<Connection>,
+    /// The heavy read: `app.snapshot` builds every detailed conversation and
+    /// can take seconds. It gets its own connection so no other read waits on
+    /// it (2026-11-01, measured: `settings.get` waited up to 20 s behind one
+    /// snapshot). `None` for an in-memory database, which a second connection
+    /// cannot see, and every read then falls back to `conn` exactly as before.
+    snapshot_reader: Option<Mutex<Connection>>,
+    /// The small reads Settings opens with (`settings.get`, the approval
+    /// policy, runtime profiles). They get their own connection so they never
+    /// queue behind a snapshot either.
+    read_conn: Option<Mutex<Connection>>,
 }
 
 /// What an unclean exit had to settle, so boot can announce it: the sessions
@@ -2166,6 +2207,19 @@ pub fn restore_verified_backup(backup_path:&Path,destination:&Path,expected_vers
     Ok(failed)
 }
 
+impl Drop for Storage {
+    /// Close the read connections first. A read-only connection cannot
+    /// checkpoint the write-ahead log, so if one were the last to close the
+    /// `-wal` and `-shm` files would stay behind: a later copy, backup or
+    /// restore of the database would find them alongside a file they no longer
+    /// belong to. Closing the writer last lets SQLite fold the log back in and
+    /// remove the sidecars, exactly as before there were readers.
+    fn drop(&mut self) {
+        drop(self.snapshot_reader.take());
+        drop(self.read_conn.take());
+    }
+}
+
 impl Storage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let path = path.as_ref();
@@ -2212,6 +2266,16 @@ impl Storage {
     }
     fn migrate_versions(mut conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // A file is in write-ahead mode for every open path. Before 2026-11-01
+        // only the fresh-database path asked, so a restored or unusual file
+        // could be in rollback mode, where a reader blocks a writer: the read
+        // connections this build opens depend on it not doing that.
+        if path.is_some() {
+            let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+            if !mode.eq_ignore_ascii_case("wal") {
+                return Err(StorageError::Io(std::io::Error::other("the database could not be switched to write-ahead mode")));
+            }
+        }
         let has_ledger:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",[],|r|r.get(0))?;
         if has_ledger {
             let ledger:i64=conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations",[],|r|r.get(0))?;
@@ -2232,7 +2296,7 @@ impl Storage {
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
                 ensure_read_indexes(&conn)?;
-                return Ok(Self { conn: Mutex::new(conn) });
+                return Self::finish(conn, path);
             }
             if ledger==11 {
                 if !schema_v11_valid(&conn)? { return Err(StorageError::InvalidAgent); }
@@ -2250,7 +2314,7 @@ impl Storage {
                 ensure_proposal_schema(&conn)?;
                 ensure_manager_knowledge_schema(&conn)?;
                 ensure_read_indexes(&conn)?;
-                return Ok(Self { conn: Mutex::new(conn) });
+                return Self::finish(conn, path);
             }
             if ledger==10 {
                 if !schema_v10_valid(&conn)? { return Err(StorageError::InvalidAgent); }
@@ -2270,7 +2334,7 @@ impl Storage {
                 ensure_manager_knowledge_schema(&conn)?;
                 ensure_read_indexes(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
-                return Ok(Self { conn: Mutex::new(conn) });
+                return Self::finish(conn, path);
             }
             if ledger==9 {
                 if !schema_v9_valid(&conn)? { return Err(StorageError::InvalidAgent); }
@@ -2292,7 +2356,7 @@ impl Storage {
                 ensure_manager_knowledge_schema(&conn)?;
                 ensure_read_indexes(&conn)?;
                 migrate_message_reactions(&mut conn, path, false)?;
-                return Ok(Self { conn: Mutex::new(conn) });
+                return Self::finish(conn, path);
             }
             if ledger==8 && !schema_v8_valid(&conn)? { return Err(StorageError::InvalidAgent); }
             if ledger==7 && !schema_v7_valid(&conn)? { return Err(StorageError::InvalidAgent); }
@@ -2416,9 +2480,38 @@ impl Storage {
                 ensure_read_indexes(&conn)?;
                 ensure_tasks_schema(&conn)?;
         migrate_message_reactions(&mut conn, path, false)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Self::finish(conn, path)
+    }
+    /// Wraps the migrated connection and opens the two read connections, once
+    /// the file is settled: a reader opened before a migration would serve the
+    /// old schema. A file database gets them; an in-memory one does not, because
+    /// a second connection would see an empty database.
+    fn finish(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
+        let (snapshot_reader, read_conn) = match path {
+            Some(path) => (Some(Mutex::new(open_reader(path)?)), Some(Mutex::new(open_reader(path)?))),
+            None => (None, None),
+        };
+        Ok(Self { conn: Mutex::new(conn), snapshot_reader, read_conn })
+    }
+    /// Runs one read on the given private connection inside a read transaction,
+    /// so a value built from several queries cannot see a write land between
+    /// them. Falls back to the one shared connection for an in-memory database.
+    ///
+    /// A read started after a write committed on the other connection sees that
+    /// write: every call opens and closes its own transaction, and the log is in
+    /// write-ahead mode, so a reader takes the newest commit at the moment it
+    /// starts. Nothing holds a transaction open between calls, which is also
+    /// what keeps a writer's checkpoint from stalling.
+    fn read_in<T>(&self, reader: &Option<Mutex<Connection>>, read: impl FnOnce(&Connection) -> Result<T, StorageError>) -> Result<T, StorageError> {
+        let Some(reader) = reader else {
+            let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+            return read(&c);
+        };
+        let c = reader.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.unchecked_transaction()?;
+        let value = read(&tx)?;
+        tx.commit()?;
+        Ok(value)
     }
     pub fn push_event(
         &self,
@@ -2484,12 +2577,11 @@ impl Storage {
         Ok(())
     }
     pub fn agent_list(&self, include_archived: bool, runtime_id: Option<&str>) -> Result<Vec<Value>, StorageError> {
-        let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
-        {
+        self.read_in(&self.read_conn, |c| {
             let mut q=c.prepare("SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'accountId',account_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'parentAgentId',parent_agent_id,'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'tags',json(tags),'lastProjectId',(SELECT COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)) FROM sessions s WHERE ((s.agent_id=agents.id AND (json_extract(s.data,'$.link.kind') IS NULL OR json_extract(s.data,'$.link.kind') NOT IN ('automation','handoff'))) OR (json_extract(s.data,'$.link.kind')='side' AND json_extract(s.data,'$.link.peerAgentId')=agents.id)) AND s.archived=0 ORDER BY s.updated_at DESC LIMIT 1)) FROM agents WHERE (?1 OR archived=0) AND (?2 IS NULL OR runtime_id=?2) ORDER BY runtime_id,sort_order,created_at,id")?;
             let vals=q.query_map(params![include_archived,runtime_id],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
             vals.into_iter().map(|v|Ok(serde_json::from_str(&v)?)).collect()
-        }
+        })
     }
     // ── Team: projects, blob placement and side conversations ─────────────
     pub fn project_list(&self) -> Result<Vec<Value>, StorageError> {
@@ -6520,9 +6612,10 @@ impl Storage {
         Ok(())
     }
     pub fn default_approval_mode(&self)->Result<String,StorageError>{
-        let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?;
+        self.read_in(&self.read_conn, |c| {
         let raw:String=c.query_row("SELECT value FROM settings WHERE key='permissions.default_mode'",[],|r|r.get(0)).optional()?.unwrap_or("\"ask\"".into());
         let mode:String=serde_json::from_str(&raw)?; if !["ask","auto","accept_edits","bypass"].contains(&mode.as_str()){return Err(StorageError::InvalidAgent)} Ok(mode)
+        })
     }
     pub fn session_detail(&self, id: &str) -> Result<Value, StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -6599,7 +6692,7 @@ impl Storage {
         Ok(())
     }
     pub fn settings(&self) -> Result<Value, StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        self.read_in(&self.read_conn, |c| {
         let mut q = c.prepare("SELECT key,value FROM settings")?;
         let rows = q
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -6609,6 +6702,7 @@ impl Storage {
             out.insert(k, serde_json::from_str(&v)?);
         }
         Ok(Value::Object(out))
+        })
     }
     pub fn set_setting(&self, k: &str, v: &Value) -> Result<Vec<Value>, StorageError> {
         validate_setting_value(k, v)?;
@@ -6755,10 +6849,11 @@ impl Storage {
         Ok(c.query_row("SELECT COUNT(*) FROM remote_activity", [], |r| r.get(0))?)
     }
     pub fn profiles(&self) -> Result<Value, StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        self.read_in(&self.read_conn, |c| {
         Ok(
-            json!({"profiles":query_column_json(&c,"SELECT data FROM runtime_profiles ORDER BY name","")?}),
+            json!({"profiles":query_column_json(c,"SELECT data FROM runtime_profiles ORDER BY name","")?}),
         )
+        })
     }
     pub fn save_profile(&self, p: &Value) -> Result<(), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -6873,9 +6968,7 @@ impl Storage {
     /// three messages (enough for previews); the window loads the rest with
     /// `session.get` when one is opened. `None` keeps the full snapshot.
     pub fn snapshot_with(&self, keep: Option<usize>) -> Result<Value, StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        let tx=c.unchecked_transaction()?;
-        let c=&tx;
+        self.read_in(&self.snapshot_reader, |c| {
         let seq: u64 = c.query_row(
             "SELECT COALESCE(MAX(sequence),0) FROM app_events",
             [],
@@ -6917,8 +7010,8 @@ impl Storage {
         let agents=self.agent_rows_locked(c,true)?;
         let projects=project_rows(c)?;
         let result=json!({"projects":projects,"snapshotVersion":1,"sequence":seq,"daemon":{"state":"ready"},"hosts":[{"id":"host_windows_local","name":std::env::var("COMPUTERNAME").unwrap_or_else(|_|"Windows Local".into()),"kind":"windows","status":"online"}],"runtimes":runtimes,"sessions":session_values,"agents":agents,"permissions":permissions,"usageSummary":usage,"settings":settings});
-        tx.commit()?;
         Ok(result)
+        })
     }
     fn agent_rows_locked(&self,c:&Connection,include_archived:bool)->Result<Vec<Value>,StorageError>{
         let sql="SELECT json_object('id',id,'name',name,'description',description,'instructions',instructions,'color',color,'outfit',outfit,'runtimeId',runtime_id,'accountId',account_id,'model',model,'thinking',thinking,'serviceTier',service_tier,'approvalMode',approval_mode,'effectiveApprovalMode',COALESCE(approval_mode,(SELECT json_extract(value,'$') FROM settings WHERE key='permissions.default_mode'),'ask'),'customArgs',json(custom_args),'customEnv',json(custom_env),'maxConcurrency',max_concurrency,'defaultProject',default_project,'sortOrder',sort_order,'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'projectId',project_id,'role',role,'leader',json(CASE WHEN leader=1 THEN 'true' ELSE 'false' END),'systemRole',system_role,'hidden',json(CASE WHEN hidden=1 THEN 'true' ELSE 'false' END),'parentAgentId',parent_agent_id,'look',json(look),'notificationLevel',COALESCE(notification_level,'all'),'locked',json(CASE WHEN locked=1 THEN 'true' ELSE 'false' END),'lastProjectId',(SELECT COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(s.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=s.project_path LIMIT 1)) FROM sessions s WHERE ((s.agent_id=agents.id AND (json_extract(s.data,'$.link.kind') IS NULL OR json_extract(s.data,'$.link.kind') NOT IN ('automation','handoff'))) OR (json_extract(s.data,'$.link.kind')='side' AND json_extract(s.data,'$.link.peerAgentId')=agents.id)) AND s.archived=0 ORDER BY s.updated_at DESC LIMIT 1)) FROM agents WHERE (?1 OR archived=0) ORDER BY runtime_id,sort_order,created_at,id";
@@ -6948,7 +7041,7 @@ impl Storage {
             v["partial"] = json!(true);
             return Ok(v);
         }
-        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'delivery',json_extract(t.data,'$.delivery'),'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
+        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'delivery',json_extract(t.data,'$.delivery'),'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_valid(e.payload) AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
         let msgs=query_jsons(c,SESSION_MESSAGES_SQL,id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
@@ -11448,5 +11541,50 @@ mod task_ledger_tests {
         assert_eq!(missed["scheduleState"], "missed");
         assert!(db.task_schedules_due(&far).unwrap().is_empty(), "a missed schedule does not fire again");
         assert!(matches!(db.task_schedule_record(id, "x", None, "bogus"), Err(StorageError::InvalidAgent)));
+    }
+
+    /// 2026-11-01: a file database reads on two connections of its own, so the
+    /// window's reads never queue behind a snapshot. An in-memory database has
+    /// no second connection to give, and must keep working through the one.
+    #[test]
+    fn a_file_database_reads_on_its_own_connections_and_never_goes_stale() {
+        let path = std::env::temp_dir().join(format!("bloblex-read-connections-{}.db", Uuid::new_v4()));
+        {
+            let db = Storage::open(&path).unwrap();
+            assert!(db.snapshot_reader.is_some(), "a file gets a snapshot connection");
+            assert!(db.read_conn.is_some(), "a file gets a connection for the small reads");
+            db.upsert_runtime(&json!({"id": "rt-read", "provider": "codex"})).unwrap();
+            db.create_session("s-read", "rt-read", "codex", ".", "Reads").unwrap();
+            db.update_session_state("s-read", "idle").unwrap();
+            // A read straight after a write sees that write, on both readers.
+            let snapshot = db.snapshot().unwrap();
+            assert!(snapshot["sessions"].as_array().unwrap().iter().any(|row| row["id"] == "s-read"), "the snapshot reader sees the new conversation");
+            db.set_setting("permissions.default_mode", &json!("auto")).unwrap();
+            assert_eq!(db.default_approval_mode().unwrap(), "auto", "the small-read connection sees the new setting");
+            assert_eq!(db.settings().unwrap()["permissions.default_mode"], "auto");
+            assert!(db.agent_list(false, None).unwrap().is_empty());
+        }
+        assert!(!path.with_extension("db-wal").exists(), "closing the writer last folds the log back in");
+        assert!(!path.with_extension("db-shm").exists());
+        let _ = fs::remove_file(&path);
+        let memory = Storage::open_in_memory().unwrap();
+        assert!(memory.snapshot_reader.is_none() && memory.read_conn.is_none(), "an in-memory database has no second connection");
+        assert!(memory.snapshot().unwrap()["sessions"].is_array(), "and still serves a snapshot");
+    }
+
+    #[test]
+    fn a_file_database_is_in_write_ahead_mode_and_keeps_its_indexes() {
+        let path = std::env::temp_dir().join(format!("bloblex-wal-{}.db", Uuid::new_v4()));
+        {
+            let db = Storage::open(&path).unwrap();
+            let mode: String = db.conn.lock().unwrap().query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+            assert_eq!(mode.to_ascii_lowercase(), "wal", "every file open leaves the log in write-ahead mode");
+            let read = db.read_conn.as_ref().unwrap().lock().unwrap();
+            assert_eq!(read.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0)).unwrap().to_ascii_lowercase(), "wal");
+            for index in ["idx_app_events_session_context", "idx_app_events_turn_error"] {
+                assert!(read.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)", [index], |r| r.get::<_, bool>(0)).unwrap(), "{index} is created on open");
+            }
+        }
+        let _ = fs::remove_file(&path);
     }
 }

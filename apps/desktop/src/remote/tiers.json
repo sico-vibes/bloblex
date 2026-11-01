@@ -964,7 +964,14 @@
       "method": "project.scaffold.status",
       "class": "never",
       "minTier": null,
-      "why": "Creating a project is a desktop action; it checks the host's git and GitHub sign-in.",
+      "why": "Creating a project is a desktop action; it checks the host's git and GitHub installation.",
+      "params": null
+    },
+    {
+      "method": "project.scaffold.login",
+      "class": "never",
+      "minTier": null,
+      "why": "It asks the host's GitHub CLI who is signed in, which is a desktop action on the owner's account.",
       "params": null
     },
     {

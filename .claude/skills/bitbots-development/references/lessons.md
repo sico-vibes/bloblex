@@ -4,17 +4,34 @@ Newest first. One entry per lesson: date, area, symptom, root cause with evidenc
 
 ## 2026-11-01 · Performance · The app feels slow everywhere at once: one lock, one huge snapshot
 
-Symptom: skeleton loaders and "unsnappy" throughout, not tied to any one screen. Root cause, measured on a copy of the owner's real 510 MB database (`<data>/bitbots.db`, 66 sessions, 3,973 tool calls, 136,870 events):
+Symptom: skeleton loaders and "unsnappy" throughout, not tied to any one screen. Root cause, measured on a copy of the owner's real database (`<data>/bloblex.db`, then 510 MB):
 
-- `Storage` holds **one** `Mutex<Connection>` (`crates/bloblex-storage/src/lib.rs:1946`), so every read queues behind the longest one.
-- `app.snapshot` is the longest: lazy (15 fully detailed conversations) **304 ms and 3.1 MB of JSON**, full **1,297 ms and 9.6 MB**. Settings, opening a conversation and project add all wait behind it.
-- Inside that, the per-session `tool_calls` query was a **full scan**: the table holds 383 MB in 3,973 rows (≈96 KB each of provider payload) and had **no index on `session_id`**. With one: 318 ms → 137 ms. Reading only columns, without the `data` blob: **3.4 ms** — so the remaining cost is reading blobs the snapshot barely needs.
+- `Storage` held **one** `Mutex<Connection>`, so every read queued behind the longest one.
+- `app.snapshot` was the longest: lazy (15 fully detailed conversations) **304 ms and 3.1 MB of JSON**, full **1,297 ms and 9.6 MB**.
+- Inside that, the per-session `tool_calls` query was a **full scan**: 383 MB in 3,973 rows (≈96 KB each of provider payload), with no index on `session_id`. With one: 318 ms → 137 ms. Reading only the ids: **3.4 ms**.
 
-Fixes: `ensure_read_indexes` in storage (called from every `migrate_versions` branch, like the other `ensure_*`), and the Settings sheet now starts `loading` at `true` and runs its three reads at once instead of one after another.
+**Second wave, same day (done).** Numbers from `cargo run --release -p bloblex-storage --example snapshot-timing -- <copy> --runs 3 --concurrent 20 --index` on a copy of the owner's **548 MB** database (65 open conversations, 4,310 tool calls, 141,692 events, 160 turns). The 304 ms figure above is not reproducible: this machine and this data give seconds. Measurements here vary ±30% with the page cache, so compare medians of three:
 
-Still open after those fixes (traced the same day, not fixed yet): `session_context_locked` (`crates/bloblex-storage/src/lib.rs:7541`) runs per session on every snapshot and calls `json_extract` on every context event, because `idx_app_events_type_sequence` can't narrow by session. One read pass on a copy took about 1.7 s for 64 sessions, and about 1 ms with a partial expression index on `json_extract(payload,'$.sessionId'), sequence`. That doesn't reconcile with the 304 ms snapshot above, so measure the whole snapshot before and after. Also open: `agent.update` calls `catalog::get` in `Fresh` mode even for an icon-only save (`main.rs:1044`), and every read shares the one lock.
+| measure | before | after |
+|---|---|---|
+| lazy snapshot | 8,080–8,828 ms (median) | 5,335 ms |
+| full snapshot | 21,771–22,493 ms | 17,451 ms |
+| `session_context_locked`, all 65 conversations | 2,172–2,982 ms (`SCAN app_events`) | 2.2 ms (`SEARCH … USING INDEX`) |
+| `turn.error` detail read, all 160 turns | 23,209 ms (`SCAN e`) | 2.8 ms (`SEARCH … USING INDEX`) |
+| `settings.get` while a snapshot runs | max 19,382–33,813 ms | max 8.6 ms |
+| creating both indexes (once, at startup) | — | 143 ms + 115 ms |
 
-**To avoid:** copy the database to a temp dir and time the exact SQL before optimising; never open the live file. Also: SQLite refuses `rowid` inside `CREATE INDEX` ("no such column: rowid") — index the column alone.
+- **A partial expression index on `app_events` is the fix for a `json_extract` lookup.** The `WHERE` must repeat every condition the query has — `event_type IN (…)` **and** `json_valid(payload)`, because `json_extract` raises on malformed JSON — and the query must say the same, or the planner silently keeps the scan. `ensure_read_indexes` now creates `idx_app_events_session_context` and `idx_app_events_turn_error`; `session_detail_parts`' turns query gained `json_valid(e.payload)` to match (proved identical for every turn on the real data).
+- **Two read connections, not one shared one.** `app.snapshot` gets its own, and the small Settings reads (`settings.get`, the approval policy, `runtime.profile.list`) get another: one reader for both would have put Settings behind the snapshot again. In-memory databases have no second connection, so they fall back to the old single-connection path. Every read runs in its own transaction, which is also what makes a read see a write committed a moment earlier.
+- **A read-only connection cannot checkpoint the log.** With readers open at close, the last connection to go is a reader, so `-wal` and `-shm` stayed on disk beside the database (`v1_migration_…rolls_back_in_temp_paths` failed with a stale log applied to a restored file). `impl Drop for Storage` closes the readers first, so the writer is still last and folds the log in.
+- **`PRAGMA journal_mode=WAL` now runs on every file open**, not only the fresh-database branch; the readers rely on it.
+- **`agent.update` only reads the model catalog when the save touches `runtimeId`/`model`/`thinking`/`serviceTier`.** `catalog::get(Mode::Fresh)` can start a provider probe, and an icon save was paying for it (and could silently fill in an effort level). The lock check stays first, and `validate_agent_catalog` still runs for the fields it validates.
+- **A full `refresh()` after every action is what made the window feel slow**: it re-reads the whole snapshot. The send path, pull-request and review-comment sends, project creation, project restore and a scheduled conversation delete now rely on the reply plus the live events; `replay.gap` still reloads (that is the recovery), with a 250 ms window that turns a burst into one reload. Undo of a conversation delete still reloads: the snapshot is what puts the row back in its place.
+- **An icon shows before the save:** a project's icon and a bot's look/colour are applied to the snapshot at once, and put back with the daemon's reason if the save is refused.
+- **Not fixed, and measured:** one streamed token costs a whole-message rewrite plus a `message.delta` row: **2.6–11.6 ms** each on this database (`synchronous=FULL`, an fsync per commit). Batching it needs a flush before every non-delta event of that session to keep replay order, and a crash would drop the buffered tail of a partial message, so it was left. What is left of a snapshot is the per-conversation detail: 250–400 ms each, while each of its queries is under 10 ms on its own — the time goes on the ~380 MB of tool payloads the snapshot returns in full. That is the next thing to chase, and it needs the snapshot to carry less, not a faster query.
+- **A UI test can depend on `refresh()` without saying so.** `App.emptyConversation` saw its auto-title only through the reloaded snapshot; with the reload gone the fixture has to emit the `session.changed` the daemon really sends.
+
+**To avoid:** copy the database to a temp dir and time the exact SQL before optimising; never open the live file. Also: SQLite refuses `rowid` inside `CREATE INDEX` ("no such column: rowid") — index the column alone. For a read path nobody has timed end to end, write the timing tool first (`crates/bloblex-storage/examples/snapshot-timing.rs`), and never edit an `app_events` query without re-reading the plan it prints.
 
 ## 2026-11-01 · Native shell · Every app start copied a 39 MB binary, and left the old ones
 

@@ -103,12 +103,23 @@ pub(crate) fn one_line(text: &str) -> String {
 
 /// Whether the GitHub CLI is installed, and who it is signed in as (null on any failure).
 pub(crate) async fn gh_status() -> Value {
+    if !gh_installed().await { return json!({"available": false, "login": Value::Null}); }
+    json!({"available": true, "login": gh_login().await})
+}
+
+/// Whether `gh` runs at all: a local process, no network.
+async fn gh_installed() -> bool {
     let gh = gh_program();
-    let installed = run(&gh, None, &["--version"], None, LOGIN_LIMIT).await;
-    if !installed.ok { return json!({"available": false, "login": Value::Null}); }
+    run(&gh, None, &["--version"], None, LOGIN_LIMIT).await.ok
+}
+
+/// Who `gh` is signed in as. This is the part that needs the network and can
+/// take up to `LOGIN_LIMIT`, so the new-project dialog asks for it separately
+/// and never waits on it to be usable (2026-11-01).
+async fn gh_login() -> Option<String> {
+    let gh = gh_program();
     let user = run(&gh, None, &["api", "user", "--jq", ".login"], None, LOGIN_LIMIT).await;
-    let login = user.ok.then(|| user.stdout.trim().to_owned()).filter(|login| !login.is_empty() && login.len() <= 100 && !login.contains(char::is_whitespace));
-    json!({"available": true, "login": login})
+    user.ok.then(|| user.stdout.trim().to_owned()).filter(|login| !login.is_empty() && login.len() <= 100 && !login.contains(char::is_whitespace))
 }
 
 fn invalid(message: &str) -> DispatchError {
@@ -117,10 +128,14 @@ fn invalid(message: &str) -> DispatchError {
 
 pub async fn rpc(st: &AppState, method: &str, p: &Value) -> Result<Value, DispatchError> {
     match method {
+        // Local checks only: the dialog is usable the moment it opens, and the
+        // sign-in question (`project.scaffold.login`) is a separate call that
+        // can take ten seconds without holding anything up.
         "project.scaffold.status" => {
             let git = run(&OsString::from("git"), None, &["--version"], None, LOGIN_LIMIT).await.ok;
-            Ok(json!({"git": git, "gh": gh_status().await}))
+            Ok(json!({"git": git, "gh": {"available": gh_installed().await, "login": Value::Null, "loginChecked": false}}))
         }
+        "project.scaffold.login" => Ok(json!({"login": gh_login().await, "loginChecked": true})),
         "project.scaffold" => scaffold(st, p).await,
         _ => Err(derr("not_found", "unknown project method", StatusCode::NOT_FOUND)),
     }

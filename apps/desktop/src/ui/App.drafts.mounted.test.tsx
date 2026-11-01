@@ -410,3 +410,38 @@ describe('FIX45 drafts', () => {
     expect(composerOf(view.host, 'Coco')?.value).toBe('still works')
   })
 })
+
+// 2026-11-01: a send used to take a whole new snapshot (seconds on the owner's
+// database) before the message appeared. The reply and the live events already
+// carry it, so the window must not reload at all.
+describe('a change the events carry needs no reload', () => {
+  it('sends a message without taking a new snapshot', async () => {
+    const view = startApp()
+    await view.settle()
+    const reloads = h.fetchSnapshot.mock.calls.length
+    // The send is held open, so the row it stands in for is observable.
+    let release: (() => void) | undefined
+    h.rpc.mockImplementation(async (method: string) => {
+      if (method === 'session.prompt') await new Promise<void>((resolve) => { release = resolve })
+      return {}
+    })
+    await typeInto(composerOf(view.host, 'Coco'), 'is the build green')
+    await act(async () => { view.host.querySelector<HTMLButtonElement>('.send-button')!.click() })
+    expect(view.host.querySelector('[aria-label="You, sending"]'), 'the message shows before the daemon answers').not.toBeNull()
+    await act(async () => { release?.() })
+    await view.settle()
+    await act(async () => {
+      for (const handler of h.daemonEventHandlers) {
+        handler({
+          type: 'message.completed', sequence: 21,
+          payload: { sessionId: 'session-coco', turnId: 'turn-1', messageId: 'message-1', role: 'user', message: { id: 'message-1', sessionId: 'session-coco', turnId: 'turn-1', role: 'user', sequence: 1, createdAt: '2026-10-02T12:00:00.000Z', content: 'is the build green' } },
+        })
+      }
+    })
+    await view.settle()
+    expect(rpcMethods()).toContain('session.prompt')
+    expect(h.fetchSnapshot.mock.calls.length, 'a send never reloads the whole window').toBe(reloads)
+    expect(view.host.querySelector('[aria-label="You, sending"]'), 'the message replaced its stand-in').toBeNull()
+    expect(view.host.textContent).toContain('is the build green')
+  })
+})

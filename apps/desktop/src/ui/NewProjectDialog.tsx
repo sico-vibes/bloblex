@@ -11,7 +11,7 @@ import { CloneProject, DiscoverProjects } from './ProjectSources'
 import './newProject.css'
 import './diffBody.css'
 
-export type ScaffoldStatus = { git: boolean; gh: { available: boolean; login: string | null } }
+export type ScaffoldStatus = { git: boolean; gh: { available: boolean; login: string | null; loginChecked?: boolean } }
 export type ScaffoldStep = { id: string; status: 'done' | 'failed' | 'skipped'; detail: string | null }
 export type ScaffoldResult = { project: Project | null; steps: ScaffoldStep[]; githubUrl: string | null }
 export type GithubVisibility = 'private' | 'public'
@@ -56,14 +56,26 @@ export function NewProjectDialog({ onCancel, onDone }: { onCancel: () => void; o
   const [github, setGithub] = useState(false)
   const [visibility, setVisibility] = useState<GithubVisibility>('private')
   const [problem, setProblem] = useState<string | null>(null)
+  // `gh api user` is a network call: it is asked for on its own, after the
+  // dialog is already usable, so a slow GitHub CLI never holds up the form.
+  const [loginChecked, setLoginChecked] = useState(false)
+  const [login, setLogin] = useState<string | null>(null)
   useEffect(() => {
     let live = true
-    void rpc<ScaffoldStatus>('project.scaffold.status', {}).then((next) => { if (live) { setStatus(next); if (next?.git === false) setGit(false) } }).catch(() => { if (live) setStatus({ git: false, gh: { available: false, login: null } }) })
+    void rpc<ScaffoldStatus>('project.scaffold.status', {}).then((next) => {
+      if (!live) return
+      setStatus(next)
+      if (next?.git === false) setGit(false)
+      if (next?.gh.loginChecked === true || next?.gh.login) { setLogin(next.gh.login ?? null); setLoginChecked(true); return }
+      if (!next?.gh.available) { setLoginChecked(true); return }
+      void rpc<{ login: string | null }>('project.scaffold.login', {}).then((who) => { if (live) { setLogin(who.login ?? null); setLoginChecked(true) } }).catch(() => { if (live) setLoginChecked(true) })
+    }).catch(() => { if (live) { setStatus({ git: false, gh: { available: false, login: null, loginChecked: true } }); setLoginChecked(true) } })
     return () => { live = false }
   }, [])
   const nameProblem = name ? folderNameProblem(name) : null
   // `available` only means the command runs; GitHub also needs a sign-in.
-  const githubReady = !!status?.gh.available && !!status.gh.login
+  const signedInAs = login ?? status?.gh.login ?? null
+  const githubReady = !!status?.gh.available && !!signedInAs
   const wantsGithub = git && github && githubReady
   const ready = !busy && !folderNameProblem(name) && !!parent
   const browse = async () => { const path = await openProjectFolder().catch(() => null); if (path) setParent(path) }
@@ -102,11 +114,11 @@ export function NewProjectDialog({ onCancel, onDone }: { onCancel: () => void; o
             <button type="button" className="secondary-button new-project-browse" aria-describedby="new-project-where" onClick={() => void browse()}><FolderOpen size={14} aria-hidden="true" /><span>{parent || 'Choose a folder…'}</span></button>
           </div>
           <label className="new-project-check"><input type="checkbox" checked={git} disabled={status?.git === false} onChange={(event) => setGit(event.target.checked)} /><span>Start a git repository{status?.git === false && <small>Git isn't installed on this computer.</small>}</span></label>
-          <label className="new-project-check"><input type="checkbox" checked={wantsGithub} disabled={!git || !githubReady} onChange={(event) => setGithub(event.target.checked)} /><span>Also create it on GitHub<small>{status === null ? 'Checking the GitHub CLI…' : !status.gh.available ? 'Install and sign in to the GitHub CLI (gh) to use this.' : status.gh.login ? `Signed in as ${status.gh.login}` : 'Sign in to the GitHub CLI first: run gh auth login in a terminal.'}</small></span></label>
+          <label className="new-project-check"><input type="checkbox" checked={wantsGithub} disabled={!git || !githubReady} onChange={(event) => setGithub(event.target.checked)} /><span>Also create it on GitHub<small>{status === null ? 'Checking the GitHub CLI…' : !status.gh.available ? 'Install and sign in to the GitHub CLI (gh) to use this.' : !loginChecked ? 'Checking your GitHub sign-in…' : signedInAs ? `Signed in as ${signedInAs}` : 'Sign in to the GitHub CLI first: run gh auth login in a terminal.'}</small></span></label>
           {wantsGithub && <div className="new-project-visibility" role="radiogroup" aria-label="Who can see the GitHub repository">
             {(['private', 'public'] as const).map((choice) => <label key={choice}><input type="radio" name="new-project-visibility" checked={visibility === choice} onChange={() => setVisibility(choice)} /><span>{choice === 'private' ? 'Private' : 'Public'}</span></label>)}
           </div>}
-          {ready && <div className="scaffold-plan"><strong>This will:</strong><ol>{scaffoldPlan(name, parent, git, wantsGithub ? visibility : null, status?.gh.login ?? null).map((line) => <li key={line}>{line}</li>)}</ol></div>}
+          {ready && <div className="scaffold-plan"><strong>This will:</strong><ol>{scaffoldPlan(name, parent, git, wantsGithub ? visibility : null, signedInAs).map((line) => <li key={line}>{line}</li>)}</ol></div>}
           {problem && <p className="new-project-error" role="alert">{problem}</p>}
           <div className="blob-dialog-actions">
             <button type="button" className="secondary-button" disabled={busy} onClick={close}>Cancel</button>

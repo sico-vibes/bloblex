@@ -184,9 +184,14 @@ function configure(snapshotValue = snapshot()) {
       return { session: created }
     }
     if (method === 'session.prompt') {
-      // The daemon titles a default-titled conversation from the first message.
+      // The daemon titles a default-titled conversation from the first message and
+      // announces it with `session.changed`; the window takes the title from that
+      // event instead of reloading the whole snapshot (2026-11-01).
       const target = createdSessions.find((item) => item.id === String(params.sessionId))
-      if (target && target.title === 'New chat') target.title = String(params.text ?? '').split(/\s+/).slice(0, 6).join(' ')
+      if (target && target.title === 'New chat') {
+        target.title = String(params.text ?? '').split(/\s+/).slice(0, 6).join(' ')
+        for (const handler of h.daemonEventHandlers) handler({ type: 'session.changed', sequence: 31, payload: { session: { id: target.id, title: target.title, updatedAt: target.updatedAt } } })
+      }
       return {}
     }
     return {}

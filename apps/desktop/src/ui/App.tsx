@@ -442,6 +442,8 @@ export function App() {
   const appearanceHydrated = useRef(false)
   const refreshingRef = useRef(false)
   const refreshAgain = useRef(false)
+  /** The pending reload a `replay.gap` burst shares (0 when none is scheduled). */
+  const gapRefresh = useRef(0)
   const snapshotRef = useRef<Snapshot | null>(null)
   const pendingSessionHydrations = useRef(new Set<string>())
   /** Background loads that failed; the conversation loads again when it is opened. */
@@ -1094,11 +1096,19 @@ export function App() {
         if (typeof payload.key === 'string' && 'value' in payload) applyWindowSetting(payload.key, payload.value)
       }
       if (event.type === 'replay.gap') {
+        // The window recovers by taking a fresh snapshot, and it must: the
+        // events it missed are gone. A gap usually arrives in a burst (one per
+        // dropped frame), so wait a moment and let the burst become one reload.
         queuedEvents.current = []
         hydrating.current = true
         setConnection('disconnected')
-        if (refreshingRef.current) refreshAgain.current = true
-        else void refresh()
+        if (gapRefresh.current === 0) {
+          gapRefresh.current = window.setTimeout(() => {
+            gapRefresh.current = 0
+            if (refreshingRef.current) refreshAgain.current = true
+            else void refresh()
+          }, GAP_RELOAD_DELAY_MS)
+        }
       } else if (hydrating.current) queuedEvents.current.push(event)
       else {
         setSnapshot((current) => current ? applyEvent(current, event) : current)
@@ -1681,10 +1691,21 @@ export function App() {
       const params = updateParams(editing.id, draft, baseline, executionGate.current)
       const team = teamParams(draft, baseline)
       if (Object.keys(params).length === 1 && Object.keys(team).length === 0) return
+      // The new icon and colour show at once: the roster, the companion and the
+      // sidebar all draw the bot, and waiting for the round trip (which can
+      // include a model catalog read) made picking an icon feel stuck. If the
+      // save fails, the old look goes back below.
+      const showsLook = Object.prototype.hasOwnProperty.call(params, 'look') || Object.prototype.hasOwnProperty.call(params, 'color')
+      if (showsLook) mergeAgent({ ...editing, ...(Object.prototype.hasOwnProperty.call(params, 'look') ? { look: draft.look } : {}), ...(Object.prototype.hasOwnProperty.call(params, 'color') ? { color: draft.color } : {}) })
       let agent: Agent | undefined = editing
       if (Object.keys(params).length > 1) {
-        const result = await doRpc<{ agent?: Agent }>('agent.update', params, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { archived: editing.archived, sentName: Object.prototype.hasOwnProperty.call(params, 'name') }))
-        agent = result.agent
+        try {
+          const result = await doRpc<{ agent?: Agent }>('agent.update', params, (reason) => messageForDaemonCode(daemonCodeOf(reason), 'agent.update', { archived: editing.archived, sentName: Object.prototype.hasOwnProperty.call(params, 'name') }))
+          agent = result.agent
+        } catch (reason) {
+          if (showsLook) mergeAgent(editing)
+          throw reason
+        }
       }
       if (agent?.id && Object.keys(team).length) {
         const updated = await doRpc<{ agent?: Agent }>('agent.team.update', { agentId: editing.id, ...team })
@@ -2070,7 +2091,6 @@ ${fileReferenceText(sentFile)}` : typed
         for (const item of ready) URL.revokeObjectURL(item.previewUrl)
         if (sent.fallback) setDeliveryNotice('Queued because this turn could not accept steering. It sends after the turn ends.')
         if (sent.queued) void loadQueue(sessionId)
-        await refresh()
       } catch (reason) {
         setError(messageOf(reason))
         // Back into the box it came from, unless something new was typed there. The chips and images belong to the open box only.
@@ -2099,7 +2119,6 @@ ${fileReferenceText(sentFile)}` : typed
       if (sent.fallback) setDeliveryNotice('Queued because this turn could not accept steering. It sends after the turn ends.')
       if (sent.queued) void loadQueue(item.sessionId)
       setPendingSends((current) => current.filter((row) => row.id !== item.id))
-      await refresh()
     } catch (reason) {
       // The daemon could not confirm delivery: the message may have reached the bot, so it is never sent again on its own.
       const unknown = daemonCodeOf(reason) === 'delivery_unknown'
@@ -2117,8 +2136,9 @@ ${fileReferenceText(sentFile)}` : typed
     if (!target || isDraftSession(target)) throw new Error('Open the conversation first.')
     const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
     const sent = await sendWithDelivery(live ? 'session.queue.add' : 'session.prompt', { sessionId, text: pullRequestPrompt(repository) })
+    // The daemon's own events carry the message, the turn and the queue: a full
+    // snapshot reload here only delayed the dialog by its seconds (2026-11-01).
     if (sent.queued) void loadQueue(sessionId)
-    await refresh()
   }
 
   /** Review comments are an ordinary message, queued if the bot is working. */
@@ -2127,8 +2147,8 @@ ${fileReferenceText(sentFile)}` : typed
     if (!target || isDraftSession(target)) throw new Error('Open the conversation first.')
     const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
     const sent = await sendWithDelivery(live ? 'session.queue.add' : 'session.prompt', { sessionId, text })
+    // As with a pull request: the live events carry this message.
     if (sent.queued) void loadQueue(sessionId)
-    await refresh()
   }
 
   /** Puts a failed message back in the composer so it can be changed and sent again. */
@@ -2240,7 +2260,12 @@ ${fileReferenceText(sentFile)}` : typed
     setNewProjectOpen(false)
     newProjectResolve.current?.(project)
     newProjectResolve.current = null
-    if (project) { setRosterAnnouncement(`Created project ${project.name}.`); void refresh() }
+    if (project) {
+      setRosterAnnouncement(`Created project ${project.name}.`)
+      // The dialog already holds the project the daemon created; the roster
+      // takes it from there, and `project.changed` carries the same row.
+      setSnapshot((current) => current ? { ...current, projects: [...(current.projects ?? []).filter((item) => item.id !== project.id), project] } : current)
+    }
   }
   const sendPromptRef = useRef<(dueAt?: string, opposite?: boolean) => Promise<unknown>>(async () => undefined)
   /** Change direction: stop the running turn, wait until it has really ended, then send the box as a new message. Never a silent fallback to the queue. */
@@ -2483,6 +2508,25 @@ ${fileReferenceText(sentFile)}` : typed
       return result.project ?? null
     } catch { return null }
   }
+  /**
+   * A project's icon shows the moment it is picked, and the daemon's reply is
+   * what stays. If the save is refused, the old icon comes back and the reason
+   * is shown: the screen never keeps a change that did not happen.
+   */
+  const setProjectIcon: NonNullable<ProjectActions['onSetProjectIcon']> = async (project, icon) => {
+    const current = snapshotRef.current?.projects?.find((item) => item.id === project.id) ?? project
+    const showIcon = (next: Project) => setSnapshot((snapshot) => snapshot ? { ...snapshot, projects: (snapshot.projects ?? []).map((item) => item.id === next.id ? next : item) } : snapshot)
+    showIcon({ ...current, overrides: { ...(current.overrides ?? {}), icon } })
+    try {
+      const result = await rpc<{ project?: Project }>('project.icon.set', { projectId: current.id, icon })
+      if (result?.project?.id) showIcon(result.project)
+      return result?.project ?? null
+    } catch (reason) {
+      showIcon(current)
+      setError(messageOf(reason))
+      return null
+    }
+  }
 
   // --- Uniform undo -----------------------------------------------------------------
   const deleteAgent = async (agent: Agent) => {
@@ -2517,8 +2561,12 @@ ${fileReferenceText(sentFile)}` : typed
   const restoreProject = async (project: Project, memberIds: string[]) => {
     const created = await projectAction('project.create', { name: project.name, path: project.path ?? null })
     if (created?.id) {
-      for (const id of memberIds) await rpc('agent.team.update', { agentId: id, projectId: created.id }).catch(() => undefined)
-      await refresh()
+      // Each bot's own row comes back from its update, so the roster is right
+      // without waiting for a full snapshot.
+      for (const id of memberIds) {
+        const result = await rpc<{ agent?: Agent }>('agent.team.update', { agentId: id, projectId: created.id }).catch(() => null)
+        if (result?.agent) mergeAgent(result.agent)
+      }
     }
   }
   const removeProject = useUndoable<[Project, string[]]>(
@@ -2529,9 +2577,9 @@ ${fileReferenceText(sentFile)}` : typed
 
   const scheduleConversationDelete = async (session: Session) => {
     await rpc<{ deadline: number }>('session.delete.schedule', { sessionId: session.id })
-    // The selection is not moved here: once the conversation leaves the snapshot the
+    // The daemon archives the row and says so with `session.changed`, which
+    // takes it out of the snapshot; the selection is not moved here, because the
     // reconcile effect chooses the next one once, deterministically.
-    await refresh()
   }
   const cancelConversationDelete = async (session: Session) => { await rpc('session.delete.cancel', { sessionId: session.id }); await refresh() }
   const deleteConversation = useUndoable<[Session]>(
@@ -2552,7 +2600,7 @@ ${fileReferenceText(sentFile)}` : typed
   const renameProject = (project: Project) => setTextPrompt({ title: 'Rename project', label: 'Project name', value: project.name, confirmLabel: 'Rename', onSubmit: async (name) => { await projectAction('project.update', { projectId: project.id, name }) } })
   const changeProjectFolder = (project: Project) => void openProjectFolder().then((path) => { if (path) void projectAction('project.update', { projectId: project.id, path }) })
   /** Phase 1A: projects are managed where their conversations are listed, inside each bot. */
-  const conversationProjectActions: ProjectActions = { onOpenProjectSettings: setProjectSettings, onCreateProject: openNewProject, onImportProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete, onSetProjectIcon: (project, icon) => void projectAction('project.icon.set', { projectId: project.id, icon }) }
+  const conversationProjectActions: ProjectActions = { onOpenProjectSettings: setProjectSettings, onCreateProject: openNewProject, onImportProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete, onSetProjectIcon: (project, icon) => void setProjectIcon(project, icon) }
   /** Opens the Manager's conversation with a starter message to edit and send; false without a Manager. */
   const planWithManager = (text: string) => {
     const manager = managerOf(agents)
@@ -2606,7 +2654,7 @@ ${fileReferenceText(sentFile)}` : typed
         const delivery = busyDelivery(busyMode, opposite, state, companionSteerAvailable, hasContext || !!command || noteList.length > 0)
         const waitingForLimit = !live ? limitWaitingUntil(sendTarget) : null
         const method = waitingForLimit ? 'session.queue.add' : live ? delivery.mode === 'steer' ? 'session.steer' : 'session.queue.add' : 'session.prompt'
-        return sendWithDelivery(method, { sessionId, text, ...(waitingForLimit ? { whenLimitResets: true } : {}), ...(noteList.length ? { annotations: noteList } : {}), ...(command ? { command: { kind: command.kind, name: command.name } } : {}), ...(method !== 'session.steer' ? { clientMessageId: newClientMessageId() } : {}) }).then(({ queued, fallback }) => { setDeliveryNotice(fallback ? 'Queued because this turn could not accept steering.' : live ? delivery.reason : null); if (queued) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined); return refresh() })
+        return sendWithDelivery(method, { sessionId, text, ...(waitingForLimit ? { whenLimitResets: true } : {}), ...(noteList.length ? { annotations: noteList } : {}), ...(command ? { command: { kind: command.kind, name: command.name } } : {}), ...(method !== 'session.steer' ? { clientMessageId: newClientMessageId() } : {}) }).then(({ queued, fallback }) => { setDeliveryNotice(fallback ? 'Queued because this turn could not accept steering.' : live ? delivery.reason : null); if (queued) void loadQueue(sessionId); void refreshTrayMenu().catch(() => undefined) })
       }} queuedCount={companionSession ? snapshot?.queues?.[companionSession.id]?.items.length ?? 0 : 0} onLoadQueue={(sessionId) => void loadQueue(sessionId)} onCancelTurn={(sessionId) => doRpc('session.cancel', { sessionId }).then(() => { void refreshTrayMenu().catch(() => undefined); return refresh() })} onSelectAgent={selectAgent} onSelectConversation={(chosen) => { setSideSessionId(null); setSelectedAgentId(String(chosen.agentId ?? '')); setSelectedSessionId(chosen.id); void setActiveSession(chosen.id) }} slashSkills={slashSkills} />
     </>
   }
@@ -4306,6 +4354,8 @@ function formatCount(value: number) { return new Intl.NumberFormat(undefined, { 
 
 /** The user-facing sentence for a message the daemon refused, never a raw code. */
 const AMBIGUOUS_SEND_COPY = 'Bitbots could not confirm the bot received this. It may already have reached it, so check the conversation before sending it again.'
+/** How long a burst of `replay.gap` events waits before it becomes one reload. */
+const GAP_RELOAD_DELAY_MS = 250
 
 function refusalText(reason: unknown) {
   return friendlyErrorText(reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : 'The local daemon request failed.')

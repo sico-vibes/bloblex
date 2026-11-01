@@ -694,11 +694,14 @@ async fn scaffold_needs_confirm_and_a_valid_name() {
     assert_eq!(dispatch(&st, "project.scaffold", relative).await.unwrap_err().1.code, "invalid_argument");
     assert!(std::fs::read_dir(&parent).unwrap().next().is_none(), "nothing was created");
     assert!(st.db.project_list().unwrap().is_empty());
-    // Status reports git and (stubbed) gh.
+    // Status reports git and (stubbed) gh, without asking GitHub who is signed
+    // in: that is a network call and has its own request.
     let _gh = GhStub::install().await;
     let status = dispatch(&st, "project.scaffold.status", json!({})).await.unwrap();
     assert_eq!(status["git"], true);
-    assert_eq!(status["gh"], json!({"available": true, "login": "stub-login"}));
+    assert_eq!(status["gh"], json!({"available": true, "login": null, "loginChecked": false}));
+    let login = dispatch(&st, "project.scaffold.login", json!({})).await.unwrap();
+    assert_eq!(login, json!({"login": "stub-login", "loginChecked": true}));
 }
 
 #[tokio::test]

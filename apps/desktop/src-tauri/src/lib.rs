@@ -48,7 +48,6 @@ struct DaemonConnection {
 
 struct DaemonProcess {
     child: Child,
-    executable_copy: PathBuf,
     connection: DaemonConnection,
 }
 
@@ -204,6 +203,59 @@ struct Point {
     monitor_name: Option<String>,
 }
 
+/// One HTTP client for every daemon call. Building a client per request (as this
+/// code did until 2026-11-01) throws away connection pooling and the TLS/DNS
+/// setup for each of the many small RPCs the window makes: the settings sheet
+/// alone makes four round trips when it opens.
+fn shared_client() -> Result<reqwest::Client, String> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(60))
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+}
+
+/// The private copy of the daemon this app runs, named by the size and
+/// modification time of the source binary, so a copy is reused for as long as the
+/// build is the same. Copying the 39 MB binary measured 333 ms warm and 600 ms
+/// cold on Windows and it runs on the main thread before the daemon starts, so
+/// making a fresh copy at every launch (as this did until 2026-11-01) charged
+/// that to every start. Copies left by older builds are removed here: one
+/// install had 18 of them, 557 MB, after a few weeks of restarts.
+fn reusable_daemon_copy(runtime_dir: &Path, executable: &Path) -> Result<PathBuf, String> {
+    let source = fs::metadata(executable)
+        .map_err(|error| format!("Could not read bitbotsd.exe: {error}"))?;
+    let stamp = source
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_secs())
+        .unwrap_or(0);
+    let copy = runtime_dir.join(format!("bitbotsd-{}-{stamp}.exe", source.len()));
+    if fs::metadata(&copy).map(|existing| existing.len() == source.len()).unwrap_or(false) {
+        return Ok(copy);
+    }
+    // A copy of anything else is an older build. A copy a running daemon is using
+    // cannot be removed on Windows, which is exactly the behaviour wanted.
+    if let Ok(entries) = fs::read_dir(runtime_dir) {
+        for path in entries.flatten().map(|entry| entry.path()) {
+            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            if name.starts_with("bitbotsd-") && name.ends_with(".exe") && path != copy {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+    fs::copy(executable, &copy).map_err(|error| {
+        format!("Could not copy the daemon to its private run location: {error}")
+    })?;
+    Ok(copy)
+}
+
 fn app_data_file(app: &AppHandle, name: &str) -> Option<PathBuf> {
     let root = app.path().app_config_dir().ok()?;
     fs::create_dir_all(&root).ok()?;
@@ -224,9 +276,10 @@ fn connection(state: &State<'_, AppState>) -> Result<DaemonConnection, String> {
         .map_err(|error| error.to_string())?
         .is_some()
     {
-        let executable_copy = daemon.executable_copy.clone();
+        // The private copy stays: it is reused for as long as the build is the
+        // same (see `reusable_daemon_copy`), so a crash does not pay for a 39 MB
+        // copy on the way back up.
         *process = None;
-        let _ = fs::remove_file(executable_copy);
         return Err("The local Bitbots daemon stopped unexpectedly.".to_string());
     }
     Ok(process
@@ -281,9 +334,9 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
             {
                 return Ok(());
             }
-            let stopped_copy = existing.executable_copy.clone();
+            // The private copy is left in place: it is reused while the build is
+            // the same (see `reusable_daemon_copy`).
             *slot = None;
-            let _ = fs::remove_file(stopped_copy);
         }
     }
     let executable = candidate_daemon_paths(app)
@@ -301,14 +354,7 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
     runtime_dir.push("runtime-processes");
     fs::create_dir_all(&runtime_dir)
         .map_err(|error| format!("Could not prepare the local daemon folder: {error}"))?;
-    let executable_copy = runtime_dir.join(format!(
-        "bitbotsd-{}-{}.exe",
-        std::process::id(),
-        Uuid::new_v4()
-    ));
-    fs::copy(&executable, &executable_copy).map_err(|error| {
-        format!("Could not copy the daemon to its private run location: {error}")
-    })?;
+    let executable_copy = reusable_daemon_copy(&runtime_dir, &executable)?;
 
     let mut command = Command::new(&executable_copy);
     command
@@ -403,7 +449,6 @@ fn start_daemon(app: &AppHandle, state: &AppState) -> Result<(), String> {
         .map_err(|_| "Daemon state is unavailable.".to_string())?;
     *slot = Some(DaemonProcess {
         child,
-        executable_copy,
         connection: DaemonConnection {
             address: ready.address,
             capability: ready.capability,
@@ -417,11 +462,7 @@ async fn rpc_call(
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = shared_client()?;
     let request_id = format!("desktop_{}", Uuid::new_v4());
     let request = RpcRequest {
         v: 1,
@@ -716,9 +757,9 @@ fn start_daemon_watcher(app: &AppHandle) {
                     None => None,
                 };
                 if status.is_some() {
-                    if let Some(process) = slot.take() {
-                        let _ = fs::remove_file(process.executable_copy);
-                    }
+                    // The copy is left in place for the next start (see
+                    // `reusable_daemon_copy`); only the record of the child goes.
+                    let _ = slot.take();
                     Some(status.and_then(|status| status.code()))
                 } else {
                     None
@@ -924,24 +965,38 @@ fn event_loop(
     });
 }
 
+/// Shows the folder picker without blocking the main thread. A synchronous
+/// `blocking_pick_folder` command froze every native operation (window drag,
+/// tray, other commands) for as long as the dialog was open; the dialog is now
+/// shown from the main thread and only the wait for the answer happens off it.
 #[tauri::command]
-fn select_project_folder(app: AppHandle) -> Option<String> {
+async fn select_project_folder(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
     app.dialog()
         .file()
         .set_title("Choose a project folder")
-        .blocking_pick_folder()
+        .pick_folder(move |path| { let _ = tx.send(path); });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
+        .await
+        .ok()
+        .flatten()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
-fn select_local_file(app: AppHandle) -> Option<String> {
+async fn select_local_file(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
     app.dialog()
         .file()
         .set_title("Choose a local file to reference")
-        .blocking_pick_file()
+        .pick_file(move |path| { let _ = tx.send(path); });
+    tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
+        .await
+        .ok()
+        .flatten()
         .and_then(|path| path.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
 }
@@ -2556,7 +2611,7 @@ fn stop_daemon(daemon_process: Arc<Mutex<Option<DaemonProcess>>>) {
                 }
                 thread::sleep(Duration::from_millis(60));
             }
-            let _ = fs::remove_file(daemon.executable_copy);
+            // The private copy is kept for the next start (`reusable_daemon_copy`).
         }
     }
 }

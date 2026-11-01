@@ -1,12 +1,15 @@
 //! Phase 4 storage, Gogo's lane: a project's repository identity (section 3) and, later, an
 //! imported conversation (section 5). Sona's `machine_links` table lives in `phase4.rs`.
 //!
+//! The two overrides only the owner may set through their own methods live here too: the trusted
+//! `.bitbots.json` hash and the project's icon, neither reachable through `project.update`.
+//!
 //! A repository identity is derived, not the owner's: it is read from the project's folder when the
 //! project is created, updated or cloned, and once at startup, so `project.list` never runs git. It
 //! holds a host and a path only — never a user, a password or a token — and it is the one project
 //! field that crosses to another machine.
 
-use super::{params, project_rows, push_team_event, Connection, SecondsFormat, Storage, StorageError, TransactionBehavior, Utc};
+use super::{params, project_rows, push_team_event, validate_project_icon, Connection, SecondsFormat, Storage, StorageError, TransactionBehavior, Utc};
 use serde_json::{json, Value};
 
 /// Additive and idempotent, like every other `ensure_*` schema.
@@ -99,6 +102,25 @@ impl Storage {
         match hash {
             Some(hash) => tx.execute("UPDATE projects SET overrides_json=json_set(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END,'$.trustedSharedHash',?2),updated_at=?3 WHERE id=?1", params![id, hash, now])?,
             None => tx.execute("UPDATE projects SET overrides_json=json_remove(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END,'$.trustedSharedHash'),updated_at=?2 WHERE id=?1", params![id, now])?,
+        };
+        let project = project_rows(&tx)?.into_iter().find(|project| project["id"] == id).ok_or(StorageError::AgentNotFound)?;
+        let event = push_team_event(&tx, "project.changed", &json!({"action":"updated","project":project}))?;
+        tx.commit()?;
+        Ok((project, vec![event]))
+    }
+    /// The project's own icon, stored in its overrides: `Some(icon)` sets it and `None` clears it. It
+    /// is not reachable through `project.update`, whose overrides validator refuses the key, so the
+    /// icon can only come from `project.icon.set`. A settings save keeps what is stored here.
+    pub fn project_set_icon(&self, id: &str, icon: Option<&Value>) -> Result<(Value, Vec<Value>), StorageError> {
+        let icon = icon.map(validate_project_icon).transpose()?;
+        let mut c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [id], |r| r.get(0))?;
+        if !exists { return Err(StorageError::AgentNotFound); }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        match icon {
+            Some(icon) => tx.execute("UPDATE projects SET overrides_json=json_set(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END,'$.icon',json(?2)),updated_at=?3 WHERE id=?1", params![id, icon.to_string(), now])?,
+            None => tx.execute("UPDATE projects SET overrides_json=json_remove(CASE WHEN json_valid(overrides_json) THEN overrides_json ELSE '{}' END,'$.icon'),updated_at=?2 WHERE id=?1", params![id, now])?,
         };
         let project = project_rows(&tx)?.into_iter().find(|project| project["id"] == id).ok_or(StorageError::AgentNotFound)?;
         let event = push_team_event(&tx, "project.changed", &json!({"action":"updated","project":project}))?;

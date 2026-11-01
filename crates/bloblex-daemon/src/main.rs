@@ -79,6 +79,7 @@ mod doctor;
 mod worktree;
 mod worktree_cleanup;
 mod project_clone;
+mod project_icon;
 mod project_search;
 mod project_setup;
 mod repo_identity;
@@ -988,6 +989,7 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
         "worktree.abandoned" | "worktree.removeAbandoned" => worktree_cleanup::rpc(st, method, &p).await,
         "project.clone" | "project.clone.cancel" | "project.clone.list" | "project.discover" => project_clone::rpc(st, method, &p).await,
         "project.files.search" | "project.content.search" => project_search::rpc(st, method, &p).await,
+        "project.icon.set" | "project.favicon" => project_icon::rpc(st, method, &p).await,
         "exec.snapshot.get" => {
             let id=p["snapshotId"].as_str().filter(|s|!s.is_empty()).ok_or_else(||derr("invalid_argument","snapshotId is required",StatusCode::BAD_REQUEST))?;
             st.db.exec_snapshot_get(id).map_err(|e|derr("internal",&e.to_string(),StatusCode::INTERNAL_SERVER_ERROR))?.ok_or_else(||derr("not_found","execution snapshot not found",StatusCode::NOT_FOUND))
@@ -13059,6 +13061,9 @@ mod phase2a_tests {
 
     // Phase 4 (Gogo's lane): taking a branch, and importing a conversation.
     include!("phase4_attach_tests.rs");
+
+    // Phase 6 (Gogo's lane): a project's icon, and the favicon in its own folder.
+    include!("project_icon_tests.rs");
 
     // Phase 5 (Sona S1): secrets in the credential store, and one-use secret requests.
     include!("secrets_tests.rs");

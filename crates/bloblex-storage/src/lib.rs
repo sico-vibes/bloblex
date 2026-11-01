@@ -2545,6 +2545,10 @@ impl Storage {
             let mut next = overrides.clone();
             let stored: Option<String> = tx.query_row("SELECT json_extract(overrides_json,'$.trustedSharedHash') FROM projects WHERE id=?1", [id], |r| r.get::<_, Option<String>>(0)).optional()?.flatten();
             if let Some(hash) = stored.filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))) { next["trustedSharedHash"] = json!(hash); }
+            // The project's icon is kept the same way: a settings save leaves it as it is stored, and
+            // only `project_set_icon` changes it. A stored value that no longer validates is dropped.
+            let stored_icon: Option<String> = tx.query_row("SELECT json_extract(overrides_json,'$.icon') FROM projects WHERE id=?1", [id], |r| r.get::<_, Option<String>>(0)).optional()?.flatten();
+            if let Some(icon) = stored_icon.and_then(|icon| serde_json::from_str::<Value>(&icon).ok()).and_then(|icon| validate_project_icon(&icon).ok()) { next["icon"] = icon; }
             tx.execute("UPDATE projects SET overrides_json=?2,updated_at=?3 WHERE id=?1", params![id, next.to_string(), now])?;
         }
         if let Some(identity) = repo_identity {
@@ -7943,6 +7947,8 @@ fn empty_project_overrides() -> Value { json!({"models": {}, "approvalMode": nul
 /// conversation's worktree, so the main folder is always the source); `initSubmodules` is a boolean.
 /// `trustedSharedHash` is the SHA-256 (64 lower-case hex) of a `.bitbots.json` the owner trusted; it
 /// is carried through only when present, so a project without trust keeps the five usual keys.
+/// `icon` is the project's own icon (see `validate_project_icon`), carried through only when present,
+/// for the same reason: `project.update` refuses it and `project_set_icon` is its only writer.
 /// The Full access confirmation for `bypass` is the caller's (it belongs to the request, not the data).
 pub fn validate_project_overrides(v: &Value) -> Result<Value, StorageError> {
     validate_overrides(v, false)
@@ -7954,9 +7960,31 @@ fn validate_stored_overrides(v: &Value) -> Result<Value, StorageError> {
     validate_overrides(v, true)
 }
 
-fn validate_overrides(v: &Value, stored_trust: bool) -> Result<Value, StorageError> {
+/// A project's own icon, validated and normalised to
+/// `{"kind": "emoji" | "lucide" | "favicon", "value": string, "color": "#rrggbb" | null}`: `kind` is
+/// one of the three, `value` is 1 to 40 characters with no control character and may be empty only
+/// for `favicon` (the file `project.favicon` then finds in the project's own folder), and `color` is a
+/// six-digit hex colour, stored in lower case, or null. Any other key, kind or shape is refused.
+/// Like the trusted `.bitbots.json` hash it is not part of a settings save: `validate_project_overrides`
+/// refuses the key, so `project_set_icon` is the only writer.
+pub fn validate_project_icon(v: &Value) -> Result<Value, StorageError> {
     let map = v.as_object().ok_or(StorageError::InvalidAgent)?;
-    let allowed: &[&str] = if stored_trust { &["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules", "trustedSharedHash"] } else { &["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules"] };
+    if map.keys().any(|key| !["kind", "value", "color"].contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
+    let kind = map.get("kind").and_then(Value::as_str).filter(|kind| ["emoji", "lucide", "favicon"].contains(kind)).ok_or(StorageError::InvalidAgent)?;
+    let value = map.get("value").and_then(Value::as_str).ok_or(StorageError::InvalidAgent)?;
+    let length = value.chars().count();
+    if length > 40 || value.chars().any(char::is_control) || (length == 0 && kind != "favicon") { return Err(StorageError::InvalidAgent); }
+    let color = match map.get("color") {
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::String(color)) if color.len() == 7 && color.starts_with('#') && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit()) => json!(color.to_ascii_lowercase()),
+        Some(_) => return Err(StorageError::InvalidAgent),
+    };
+    Ok(json!({"kind": kind, "value": value, "color": color}))
+}
+
+fn validate_overrides(v: &Value, stored: bool) -> Result<Value, StorageError> {
+    let map = v.as_object().ok_or(StorageError::InvalidAgent)?;
+    let allowed: &[&str] = if stored { &["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules", "trustedSharedHash", "icon"] } else { &["models", "approvalMode", "setupScript", "copyFiles", "initSubmodules"] };
     if map.keys().any(|key| !allowed.contains(&key.as_str())) { return Err(StorageError::InvalidAgent); }
     let mut out = empty_project_overrides();
     match map.get("models") {
@@ -8011,6 +8039,13 @@ fn validate_overrides(v: &Value, stored_trust: bool) -> Result<Value, StorageErr
     if let Some(hash) = map.get("trustedSharedHash") {
         let hash = hash.as_str().filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))).ok_or(StorageError::InvalidAgent)?;
         out["trustedSharedHash"] = json!(hash);
+    }
+    // The project's icon, stored-only like the trust hash: only `project_set_icon` writes it, so a
+    // settings save never sets, changes or clears it. Absent means no icon, and the DTO keeps the
+    // five usual keys.
+    match map.get("icon") {
+        None | Some(Value::Null) => {}
+        Some(icon) => out["icon"] = validate_project_icon(icon)?,
     }
     Ok(out)
 }

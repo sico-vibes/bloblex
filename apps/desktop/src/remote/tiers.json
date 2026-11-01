@@ -1066,6 +1066,20 @@
       "params": null
     },
     {
+      "method": "project.icon.set",
+      "class": "never",
+      "minTier": null,
+      "why": "A project's icon is a project setting, and a remote device must not edit projects.",
+      "params": null
+    },
+    {
+      "method": "project.favicon",
+      "class": "never",
+      "minTier": null,
+      "why": "It reads a file from the host's project folder, which stays on the host.",
+      "params": null
+    },
+    {
       "method": "diagnostics.issueDraft",
       "class": "never",
       "minTier": null,

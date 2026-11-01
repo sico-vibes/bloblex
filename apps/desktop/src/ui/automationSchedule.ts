@@ -118,8 +118,10 @@ export function describeNextRun(next: string | null | undefined, nowMs: number):
   if (diff < 60_000) return 'in under a minute'
   if (diff < 3_600_000) return `in ${Math.round(diff / 60_000)} min`
   if (diff < 24 * 3_600_000) {
-    const hours = Math.floor(diff / 3_600_000)
-    const minutes = Math.round((diff % 3_600_000) / 60_000)
+    const total = Math.round(diff / 60_000)
+    const hours = Math.floor(total / 60)
+    const minutes = total % 60
+    if (hours === 24) return 'in 24 h'
     return minutes ? `in ${hours} h ${minutes} min` : `in ${hours} h`
   }
   return `${at.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} ${pad(at.getHours())}:${pad(at.getMinutes())}`

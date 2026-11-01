@@ -342,7 +342,7 @@ describe('C11 mood labels and one sound source', () => {
     const sheetHost = document.createElement('div')
     document.body.append(sheetHost)
     const sheetRoot: Root = createRoot(sheetHost)
-    await act(async () => { sheetRoot.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />) })
+    await act(async () => { sheetRoot.render(<SettingsSheet snapshot={null} initialPage="Companion" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />) })
     await act(async () => { await settleMicrotasks() })
 
     const view = startApp('?companion=1')

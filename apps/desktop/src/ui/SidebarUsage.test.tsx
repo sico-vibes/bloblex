@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { mostPressingWindow, rotatingReadings } from './SidebarUsage'
-import { quotaRows } from './quotaModel'
+import { currentReadings } from './SidebarUsage'
+import { mostPressingWindow, quotaRows } from './quotaModel'
 
 const snapshot = (provider: string, used: number, label = '5-hour') => ({
   provider, fetchedAt: '2026-10-15T10:00:00Z', lastError: null,
@@ -21,14 +21,13 @@ describe('mostPressingWindow', () => {
   })
 })
 
-describe('rotatingReadings', () => {
-  it('keeps one current reading per coding agent and skips stale or failed ones', () => {
+describe('currentReadings', () => {
+  it('keeps coding agents with a current reading and skips stale or failed ones', () => {
     const rows = quotaRows([
       snapshot('claude', 31),
       { ...snapshot('codex', 82), lastError: 'timeout' },
       { provider: 'opencode', lastError: 'no_credentials', snapshot: null },
     ])
-    expect(rotatingReadings(rows).map((reading) => reading.row.provider)).toEqual(['claude'])
-    expect(rotatingReadings(quotaRows([snapshot('claude', 31), snapshot('codex', 82)])).map((reading) => reading.window.usedPercent)).toEqual([31, 82])
+    expect(currentReadings(rows).map((row) => row.provider)).toEqual(['claude'])
   })
 })

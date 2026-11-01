@@ -1,12 +1,12 @@
 /* Haze: smoky glass over a misty backdrop, one cohesive shell (flush panels
-   split by hairlines, no floating cards). Bots show a logo or pixel icon; the
-   status is the soft gradient in their row (blob/haze/). */
+   split by hairlines, no floating cards). Bots show a logo or a portrait; a
+   bot's status is a plain word at the end of its row. */
 
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) {
   --haze-base: #1a1b1d;
   /* Frosted glass for sheets, dialogs and bars: a light tint that blurs the haze behind it. */
   --haze-glass: rgb(30 31 34 / .62);
-  --haze-d1: #8794a3; --haze-d2: #b48d68; --haze-d3: #5f8196; --haze-d4: #d8c4a6;
+  --haze-d1: #8794a3; --haze-d2: #8d939b; --haze-d3: #6b7884; --haze-d4: #b4b8bd;
   --surface-app: transparent;
   --surface-sidebar: rgb(16 17 19 / .08);
   --surface-panel: rgb(34 35 38 / .97);
@@ -38,7 +38,7 @@
   color-scheme: light;
   --haze-base: #f1efeb;
   --haze-glass: rgb(250 249 247 / .64);
-  --haze-d1: #a9b4c0; --haze-d2: #d9b48f; --haze-d3: #8fb0c0; --haze-d4: #e6d3b6;
+  --haze-d1: #a9b4c0; --haze-d2: #c3c8ce; --haze-d3: #aab6c0; --haze-d4: #dcdee1;
   --surface-sidebar: rgb(255 255 255 / .08);
   --surface-panel: rgb(250 249 247 / .97);
   --surface-raised: rgb(255 255 255 / .55);
@@ -62,6 +62,21 @@
   --status-danger: #d23a52;
   --status-info: #2f6bd6;
   --shadow-pop: 0 18px 40px -16px rgb(40 40 40 / .28);
+}
+
+/* The backdrop's colour is the accent (owner, 31 October 2026): with no accent chosen the mist is neutral grey, and with one
+   every blob leans towards it, strongest in the blob at the right. The rest of the window stays monochrome. */
+:root[data-style="haze"][data-accent="custom"]:not(.companion-surface):not(.dictation-surface) {
+  --haze-d1: color-mix(in oklab, var(--user-accent) 40%, #8794a3);
+  --haze-d2: color-mix(in oklab, var(--user-accent) 75%, #8d939b);
+  --haze-d3: color-mix(in oklab, var(--user-accent) 55%, #6b7884);
+  --haze-d4: color-mix(in oklab, var(--user-accent) 35%, #b4b8bd);
+}
+:root[data-style="haze"][data-accent="custom"][data-theme="light"]:not(.companion-surface):not(.dictation-surface) {
+  --haze-d1: color-mix(in oklab, var(--user-accent) 30%, #a9b4c0);
+  --haze-d2: color-mix(in oklab, var(--user-accent) 55%, #c3c8ce);
+  --haze-d3: color-mix(in oklab, var(--user-accent) 40%, #aab6c0);
+  --haze-d4: color-mix(in oklab, var(--user-accent) 25%, #dcdee1);
 }
 
 /* The misty backdrop (owner, 26 October 2026, corrected: the background is about 80% OPAQUE, 20% transparent; blobs large and blended).
@@ -117,10 +132,10 @@
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .quick-switcher { background: var(--surface-overlay); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); }
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .primary-button { background: var(--user-accent, var(--text-1)); color: var(--user-accent-ink, var(--text-inverse, #161616)); }
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .composer-box { background: var(--surface-input); border-color: var(--line); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .composer-box:focus-within { border-color: var(--line-focus); }
 
-/* Sidebar rows: one line, the mark and the name; the status is the gradient. */
+/* Sidebar rows: one line, the mark, the name and the status in words. */
 :root[data-style="haze"] .team-row { position: relative; isolation: isolate; overflow: hidden; min-height: 36px; padding-block: 0; padding-left: 10px; gap: 11px; border-radius: 11px; }
-:root[data-style="haze"] .team-row > :not(.haze-aura) { position: relative; z-index: 1; }
 :root[data-style="haze"] .team-row.selected { box-shadow: none; }
 :root[data-style="haze"][data-theme="light"] .team-row.selected { background: var(--surface-selected); box-shadow: none; }
 :root[data-style="haze"] .team-row .bot-row-line + .bot-row-line { display: none; }
@@ -134,17 +149,11 @@
 .haze-row-state { flex: 0 0 auto; font-size: var(--fs-xs, 12px); white-space: nowrap; }
 .haze-row-state.needs { color: var(--status-working); }
 .haze-row-state.failed { color: var(--status-danger); }
+.haze-row-state.working { color: var(--text-2); }
 
-/* The sidebar's companion switch: one compact row, mark, label and toggle aligned. */
-:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card { min-height: 40px; padding: 0 10px 0 12px; gap: 11px; border-radius: 11px; background: var(--surface-raised); border-color: transparent; }
-:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card > .haze-mark { flex: 0 0 auto; width: 18px !important; height: 18px !important; }
+/* The sidebar's companion switch: a flat foot row, mark, label and toggle aligned. */
+:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card > .haze-mark { flex: 0 0 auto; width: 20px !important; height: 20px !important; }
 :root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card > span:not(.haze-mark) { text-align: left; }
-:root[data-style="haze"]:not(.companion-surface) .companion-sidebar-card strong { font-weight: 500; font-size: 13px; }
-
-/* The conversation header carries the selected bot's gradient too. */
-:root[data-style="haze"] .chat-header { position: relative; isolation: isolate; }
-/* Behind the content without repositioning it: the side-conversation pill is centred on the header itself. */
-:root[data-style="haze"] .chat-header > .haze-aura { z-index: -1; border-radius: 0; }
 
 /* ── Companion and dictation windows ─────────────────────────────────────
    Transparent Tauri windows have no native blur: keep them opaque smoke. */
@@ -205,12 +214,8 @@
 :root[data-style="haze"].companion-surface .island-card.focus,
 :root[data-style="haze"].companion-surface .companion-compact,
 :root[data-style="haze"].companion-surface .peer { position: relative; isolation: isolate; overflow: hidden; }
-/* Behind the content without repositioning it (the focus card's avatar is absolutely placed). */
-:root[data-style="haze"].companion-surface .island-card.focus > .haze-aura,
-:root[data-style="haze"].companion-surface .companion-compact > .haze-aura,
-:root[data-style="haze"].companion-surface .peer > .haze-aura { z-index: -1; }
 :root[data-style="haze"].companion-surface .island-card.wash::before { opacity: .5; }
-/* The Haze stack: teammates as one column of rows, each with its own gradient. */
+/* The Haze stack: teammates as one column of rows. */
 :root[data-style="haze"].companion-surface .peer-grid { display: flex; flex-direction: column; gap: 2px; }
 :root[data-style="haze"].companion-surface .peer { justify-content: flex-start; min-height: 30px; padding: 0 10px; border-radius: 10px; background: transparent; }
 :root[data-style="haze"].companion-surface .peer:hover { background: var(--surface-hover); }
@@ -220,11 +225,7 @@
 :root[data-style="haze"].dictation-surface .dictation-island,
 :root[data-style="haze"].companion-surface .dictation-island { color: var(--text-1); border-color: var(--line); background: var(--surface-panel); box-shadow: none; backdrop-filter: none; }
 
-/* Haze draws the bot list and the header over the status gradient: behind the content, never repositioning it. */
-.cs-bot > .haze-aura { z-index: -1; }
-.cs-head > .haze-aura { z-index: -1; border-radius: 0; }
-
-/* The compact bar: the focused bot over its gradient, teammates as small tiles. */
+/* The compact bar: the focused bot, teammates as small tiles. */
 :root[data-style="haze"].companion-surface .companion-capsule.petit { border-radius: 14px; }
 :root[data-style="haze"].companion-surface .companion-compact { gap: 10px; padding: 0 8px 0 12px; }
 :root[data-style="haze"].companion-surface .compact-bot { width: 30px; height: 30px; border-radius: 9px; background: var(--surface-raised); }
@@ -246,7 +247,7 @@
 /* Size the OUTER layout, not its already-constrained inner column. */
 :root[data-style="haze"] .blob-page-layout { width: min(880px, calc(100% - 48px)); max-width: none; }
 :root[data-style="haze"] .blob-page-layout .blob-page-column { width: 100%; max-width: none; }
-:root[data-style="haze"] .haze-look-editor { grid-template-columns: 320px minmax(0, 1fr); }
+:root[data-style="haze"] .haze-look-editor { grid-template-columns: 260px minmax(0, 1fr); }
 :root[data-style="haze"] .team-row { min-height: 36px; }
 :root[data-style="haze"] .team-row-avatar > .haze-mark.is-character { width: 26px !important; height: 26px !important; }
 :root[data-style="haze"] .chat-header .haze-mark.is-character { width: 26px !important; height: 26px !important; }
@@ -268,3 +269,29 @@
 }
 :root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .bot-savebar { border-top-color: var(--line); }
 
+/* Haze's controls (owner, 1 November 2026, after MonoCode): small squared corners, hairline borders, a flat selected state.
+   Stone keeps its own. The companion and dictation windows have their own control classes. */
+:root[data-style="haze"]:not(.dictation-surface) { --radius-pill: 7px; --radius-sm: 7px; --radius-md: 10px; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) :is(.primary-button, .secondary-button, .ghost-button) { height: 30px; padding: 0 11px; gap: 6px; border-radius: 6px; font-size: var(--fs-xs); font-weight: 500; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) :is(.primary-button, .secondary-button, .ghost-button).small { height: 26px; padding: 0 9px; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .secondary-button { color: var(--text-2); border: 1px solid var(--line-strong); background: transparent; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .secondary-button:hover:not(:disabled) { color: var(--text-1); background: var(--surface-selected); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .secondary-button.danger { color: var(--status-danger); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .secondary-button.danger:hover:not(:disabled) { color: var(--status-danger); border-color: color-mix(in srgb, var(--status-danger) 40%, transparent); background: color-mix(in srgb, var(--status-danger) 10%, transparent); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) :is(.density-control, .segmented, .analytics-switch) { padding: 2px; gap: 2px; border: 1px solid var(--line-strong); border-radius: 6px; background: transparent; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) :is(.density-control, .segmented, .analytics-switch) button { min-height: 24px; height: 24px; padding: 0 10px; color: var(--text-3); border-radius: 5px; background: transparent; font-size: var(--fs-xs); font-weight: 400; box-shadow: none; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) :is(.density-control, .segmented, .analytics-switch) button:hover { color: var(--text-1); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) :is(.density-control button.active, .segmented button.on, .analytics-switch button[aria-pressed="true"]) { color: var(--text-1); background: var(--surface-selected-strong); }
+/* The switch: a pill, as in MonoCode, with a white knob. The accent fills it when one is chosen. */
+:root[data-style="haze"]:not(.dictation-surface) .toggle { width: 36px; height: 20px; border-radius: 999px; background: color-mix(in srgb, var(--text-1) 18%, transparent); }
+:root[data-style="haze"]:not(.dictation-surface) .toggle > :is(i, b) { width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+:root[data-style="haze"]:not(.dictation-surface) .toggle.on { background: var(--user-accent, color-mix(in srgb, var(--text-1) 55%, transparent)); }
+:root[data-style="haze"]:not(.dictation-surface) .toggle.on > :is(i, b) { transform: translateX(16px); background: #fff; }
+:root[data-style="haze"]:not(.dictation-surface) .rail-remote .toggle.small { width: 28px; height: 16px; }
+:root[data-style="haze"]:not(.dictation-surface) .rail-remote .toggle.small > i { width: 12px; height: 12px; }
+:root[data-style="haze"]:not(.dictation-surface) .rail-remote .toggle.small.on > i { transform: translateX(12px); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .settings-row .select.muted .select-trigger { height: 26px; padding: 0 6px 0 9px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 6px; font-size: var(--fs-xs); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) .text-input { height: 30px; border-color: var(--line-strong); border-radius: 6px; font-size: var(--fs-xs); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) input[type="range"]:not(.look-slider input) { height: 16px; margin: 0; appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer; }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) input[type="range"]:not(.look-slider input)::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--text-1) 18%, transparent); }
+:root[data-style="haze"]:not(.companion-surface):not(.dictation-surface) input[type="range"]:not(.look-slider input)::-webkit-slider-thumb { width: 12px; height: 12px; margin-top: -4px; appearance: none; -webkit-appearance: none; border: 0; border-radius: 50%; background: #fff; }

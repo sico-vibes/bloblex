@@ -112,6 +112,9 @@
 .look-orb-choice[aria-checked="true"] { border-color: var(--text-1); }
 .look-orb-choice:focus-visible { outline: 2px solid var(--user-accent,var(--accent)); outline-offset: 3px; }
 .look-orb-choice:hover { background: var(--surface-hover); }
-.look-orb-tooltip { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); color: var(--text-1); font-size: var(--fs-xs); white-space: nowrap; opacity: 0; pointer-events: none; }
-.look-orb-choice:hover .look-orb-tooltip,.look-orb-choice:focus-visible .look-orb-tooltip { opacity: 1; }
+.look-orb-tooltip { position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%); color: var(--text-2); font-size: var(--fs-xs); white-space: nowrap; pointer-events: none; }
+.look-orb-choice[aria-checked="true"] .look-orb-tooltip { color: var(--text-1); }
+.look-orb-picker { padding-bottom: 22px; }
+.look-orb-picker.compact { padding: 0 2px 20px; }
+.look-orb-picker:not(.compact) { justify-content: center; }
 :root[data-style]:not(.companion-surface):not(.dictation-surface) button.look-orb-choice { border-radius: 50%; }

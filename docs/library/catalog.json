@@ -1,7 +1,7 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "07af609",
+  "revision": "78d4590",
   "documentCount": 370,
   "assets": [
     {
@@ -287,7 +287,7 @@
       "title": "What Bitbots is",
       "section": "Quickstart",
       "status": "Guide",
-      "sha256": "1025470a62b3623e504a2c723969a48717c91dc9fe0d22802c1aa00c9e1da6f3",
+      "sha256": "c1d4ed1f33dcb3252d0df8d34d3012208c0c9943fdeb7af0b7ca045a4052ce02",
       "headings": [
         {
           "id": "the-pieces",
@@ -671,7 +671,7 @@
       "title": "Automations, memory and skills",
       "section": "Working with Bitbots",
       "status": "Guide",
-      "sha256": "3bd1404c8f20b0fc179598c2573d60bd9446db3fc9d9dcf4697a356253e2eb70",
+      "sha256": "ec741ba89fb090388f48be59c0196ea8d6a9f5ffd50c9bfa1fd4a762bd506a35",
       "headings": [
         {
           "id": "before-you-start",
@@ -1286,7 +1286,7 @@
       "title": "Settings",
       "section": "Permissions & appearance",
       "status": "Reference",
-      "sha256": "62f71fb0c8d0ee8e1eae0a2d5cd40c56faf5c7a9ae645994d4ff0534acb5a17b",
+      "sha256": "eca80968e780924c110d353c3efa1e18539db035c4f62cc3de4392dd76b2ddf7",
       "headings": [
         {
           "id": "purpose",
@@ -1324,8 +1324,8 @@
           "level": 3
         },
         {
-          "id": "experimental-features",
-          "text": "Experimental features",
+          "id": "optional-features",
+          "text": "Optional features",
           "level": 3
         },
         {
@@ -1821,7 +1821,7 @@
       "title": "Bitbots daemon IPC contract (v1)",
       "section": "Project documentation",
       "status": "Project reference",
-      "sha256": "6d4ecb784d9e3c036b40d4aba30970c99cc51a192b99c72fd3ee795952c088b1",
+      "sha256": "ecfa3780e37dea60a71af54bac5ef741b238f91fb679096892480ea30781459f",
       "headings": [
         {
           "id": "update-commands",
@@ -1926,6 +1926,11 @@
         {
           "id": "phase-4-projects-31-october-2026",
           "text": "Phase 4: projects (31 October 2026)",
+          "level": 3
+        },
+        {
+          "id": "project-icons-1-november-2026",
+          "text": "Project icons (1 November 2026)",
           "level": 3
         },
         {
@@ -2853,7 +2858,7 @@
       "title": "Bitbots Design System",
       "section": "Design & product",
       "status": "Design rule",
-      "sha256": "9e836399313057152a778cf49fe5fbc2704a596aadfd4627e9acb684a289f785",
+      "sha256": "b7bf35b6310df910731f81f8987114c5823aa2802569a551ce84199e88802bdb",
       "headings": [
         {
           "id": "scene-and-register",
@@ -3593,7 +3598,7 @@
       "title": "Third-party notices",
       "section": "Legal",
       "status": "Legal notice",
-      "sha256": "885f2bf6673ee3ad5d09b74df081b817bcf3eee182b9239e3d2792cb5f87f976",
+      "sha256": "2388b2700b8c501d93f6969bedfdd7b257cffb7a4dfa09c7aee54f834c488169",
       "headings": [
         {
           "id": "bundled-fonts",

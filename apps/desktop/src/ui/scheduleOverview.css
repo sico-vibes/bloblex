@@ -1,6 +1,6 @@
 /* Read-only schedule list for the Manager page. Amber only while a run is in progress. */
-.schedule-overview { display: grid; gap: 8px; margin-top: 18px; }
-.schedule-overview h3 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+.schedule-overview { display: grid; gap: 6px; margin-top: 20px; }
+.schedule-overview h3 { margin: 0; padding: 0 4px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
 .schedule-overview ul { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
 .schedule-overview li { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 12px; }
 .schedule-overview li + li { border-top: 1px solid var(--line); }
@@ -21,3 +21,5 @@
 .schedule-overview.compact li { grid-template-columns: 1fr; gap: 4px; padding: 6px 0; }
 .schedule-overview.compact li + li { border-top: 1px solid var(--line); }
 .schedule-overview.compact .schedule-overview-open { justify-self: start; }
+.schedule-overview-note { margin: 0; padding: 14px 16px; color: var(--text-3); border-radius: 12px; background: var(--surface-raised); font-size: var(--fs-sm); }
+.schedule-overview.compact .schedule-overview-note { padding: 0; background: transparent; }

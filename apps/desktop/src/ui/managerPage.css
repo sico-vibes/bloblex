@@ -3,13 +3,12 @@
 .manager-identity svg { color: var(--user-accent, var(--text-2)); }
 .manager-empty { padding: 12px 16px; }
 .manager-fact-group + .manager-fact-group { border-top: 1px solid var(--line); }
-.manager-fact-group h4 { margin: 0; padding: 12px 16px 2px; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.manager-fact-group h4 { margin: 0; padding: 12px 16px 2px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 500; }
 .manager-facts { margin: 0; padding: 0 0 6px; list-style: none; }
 .manager-facts > li { padding: 8px 16px; display: flex; gap: 10px; align-items: flex-start; }
 .manager-facts > li:has(.manager-fact-form) { display: block; }
 .manager-fact-copy { min-width: 0; flex: 1; display: grid; gap: 2px; }
-.manager-fact-copy strong { font-size: var(--fs-sm); font-weight: 600; }
-.manager-fact-copy span { color: var(--text-1); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.manager-fact-copy .manager-fact-key { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 400; }.manager-fact-copy span { color: var(--text-1); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .manager-fact-copy small { color: var(--text-3); font-size: var(--fs-2xs); }
 .manager-fact-actions { flex: none; display: inline-flex; align-items: center; gap: 2px; }
 .manager-facts > li.locked .manager-fact-actions [aria-pressed="true"] { color: var(--user-accent, var(--text-1)); }

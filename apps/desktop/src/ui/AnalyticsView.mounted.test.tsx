@@ -114,51 +114,34 @@ afterEach(() => {
 })
 
 describe('analytics view', () => {
-  it('renders three provider weekly orbs with real zero, full, and unknown states', async () => {
+  it('shows plan limits as meters for every provider, with real zero, full and unknown states', async () => {
     const quotas = [
       { provider:'claude', fetchedAt:stamp, snapshot:{ limits:[{ label:'Claude Code', primary:{ usedPercent:0, windowDurationMins:10080, resetsAt:null } }] } },
       { provider:'codex', fetchedAt:stamp, snapshot:{ limits:[{ label:'Codex', secondary:{ usedPercent:100, windowDurationMins:10080, resetsAt:null } }] } },
     ]
     const view = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} quotas={quotas} connected now={now} />)
     await view.flush()
-    const orbs = [...view.host.querySelectorAll<HTMLElement>('.analytics-orb-item')]
-    expect(orbs).toHaveLength(3)
-    expect(orbs[0]?.textContent).toContain('0% used')
-    expect(orbs[0]?.querySelector('.analytics-orb')?.classList.contains('empty')).toBe(true)
-    expect(orbs[1]?.textContent).toContain('100% used')
-    expect(orbs[1]?.querySelector<HTMLElement>('.analytics-orb')?.style.getPropertyValue('--orb-fill')).toBe('100%')
-    expect(orbs[2]?.textContent).toContain('Unknown')
-    expect(orbs[2]?.querySelector('.analytics-orb')?.classList.contains('unknown')).toBe(true)
-    expect(orbs[2]?.getAttribute('aria-label')).toContain('unknown')
-    const partialQuotas = [
-      { provider:'claude', fetchedAt:stamp, snapshot:{ limits:[{ label:'Claude Code', primary:{ usedPercent:25, windowDurationMins:10080, resetsAt:'not-a-date' } }] } },
-      { provider:'codex', fetchedAt:stamp, snapshot:{ limits:[{ label:'Codex', secondary:{ usedPercent:50, windowDurationMins:10080, resetsAt:null } }] } },
-      { provider:'opencode', fetchedAt:stamp, snapshot:{ limits:[{ label:'Weekly', primary:{ usedPercent:75, windowDurationMins:10080, resetsAt:null } }] } },
-    ]
+    const providers = [...view.host.querySelectorAll<HTMLElement>('.analytics-limits .usage-provider')]
+    expect(providers.map((item) => item.dataset.provider)).toEqual(['claude', 'codex', 'opencode'])
+    expect(providers[0]?.querySelector('.limit-value')?.textContent).toBe('0%')
+    expect(providers[1]?.querySelector('.limit-value')?.textContent).toBe('100%')
+    expect(providers[1]?.querySelector('.quota-meter')?.classList.contains('tone-critical')).toBe(true)
+    expect(providers[2]?.querySelector('.limit-value')).toBeNull()
+    expect(providers[2]?.textContent).toContain('Unavailable')
+    const partialQuotas = [{ provider:'claude', fetchedAt:stamp, snapshot:{ limits:[{ label:'Claude Code', primary:{ usedPercent:25, windowDurationMins:10080, resetsAt:'not-a-date' } }] } }]
     const partial = mount(<AnalyticsView sessions={sessions} agents={[claude, codex]} quotas={partialQuotas} connected now={now} />)
     await partial.flush()
-    const fills = [...partial.host.querySelectorAll<HTMLElement>('.analytics-orb')].map((orb) => orb.style.getPropertyValue('--orb-fill'))
-    expect(fills).toEqual(['25%', '50%', '75%'])
     expect(partial.host.textContent).not.toContain('Invalid Date')
-    expect(partial.host.textContent).toContain('Weekly reset unavailable')
+    expect(partial.host.querySelector('.analytics-limits .quota-meter > u')).toBeNull()
   })
 
-  it('pauses weekly orb motion while offscreen and resumes it when visible', async () => {
-    let notify: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined
-    vi.stubGlobal('IntersectionObserver', class {
-      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) { notify = callback }
-      observe() { notify?.([{ isIntersecting:false }]) }
-      disconnect() {}
-    })
-    const quotas = [{ provider:'claude', snapshot:{ limits:[{ label:'Claude Code', secondary:{ usedPercent:50, windowDurationMins:10080, resetsAt:null } }] } }]
-    const view = mount(<AnalyticsView sessions={sessions} agents={[claude]} quotas={quotas} connected now={now} />)
+  it('offers to turn on usage reading where that is the only thing missing', async () => {
+    const onTurnOn = vi.fn()
+    const quotas = [{ provider:'claude', lastError:'read_off', snapshot:null }]
+    const view = mount(<AnalyticsView sessions={sessions} agents={[claude]} quotas={quotas} connected now={now} onTurnOnUsage={onTurnOn} />)
     await view.flush()
-    const section = view.host.querySelector('.analytics-provider-usage')!
-    expect(section.getAttribute('data-orb-visible')).toBe('false')
-    await act(async () => { notify?.([{ isIntersecting:true }]) })
-    expect(section.getAttribute('data-orb-visible')).toBe('true')
-    await act(async () => { notify?.([{ isIntersecting:false }]) })
-    expect(section.getAttribute('data-orb-visible')).toBe('false')
+    await click(buttonNamed(view.host, 'Turn on'))
+    expect(onTurnOn).toHaveBeenCalledOnce()
   })
 
   it('keeps monetary valuation and budget controls out of analytics', async () => {
@@ -187,8 +170,8 @@ describe('analytics view', () => {
     const partial = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
     await partial.flush()
     expect(figure(partial.host, 'tokens')).toBe('≥ 100')
-    expect(partial.host.querySelector('[data-analytics-card="tokens"]')?.textContent).toContain('Output Unknown')
-    expect(partial.host.querySelector('[data-analytics-card="tokens"]')?.textContent).not.toContain('Output 0')
+    expect(partial.host.querySelector('[data-analytics-breakdown]')?.textContent).toContain('Output Unknown')
+    expect(partial.host.querySelector('[data-analytics-breakdown]')?.textContent).not.toContain('Output 0')
     expect(partial.host.textContent).toContain('7 runs did not report usage')
     expect(partial.host.querySelector('.analytics-leader-row')?.textContent).toContain('≥')
     partial.unmount()
@@ -221,7 +204,6 @@ describe('analytics view', () => {
     expect(gap?.getAttribute('data-gap')).toBe('true')
     expect(gap?.getAttribute('data-value')).toBe('null')
     expect(gap?.getAttribute('aria-label')).toMatch(/no data$/)
-    expect(gap?.querySelector('title')?.textContent).toMatch(/no data$/)
     const summary = view.host.querySelector('p[role="img"]')
     expect(summary?.textContent).toContain('Tokens')
     expect(summary?.textContent).toContain('no data')
@@ -229,14 +211,14 @@ describe('analytics view', () => {
     const short = view.host.querySelector('[data-value="100"]')
     expect(Number(tall?.getAttribute('height'))).toBeGreaterThan(Number(short?.getAttribute('height')))
     const callsBefore = fetchUsageAnalytics.mock.calls.length
-    await click(buttonNamed(view.host.querySelector('[aria-label="Chart metric"]') ?? view.host, 'Runs'))
+    await click(view.host.querySelector<HTMLButtonElement>('[data-analytics-card="runs"]'))
     const zero = view.host.querySelector('[data-bucket-start="2026-09-30T23:00:00.000Z"]')
     expect(zero?.getAttribute('data-gap')).toBe('false')
     expect(zero?.getAttribute('data-value')).toBe('0')
     expect(zero?.getAttribute('aria-label')).not.toContain('no data')
     expect(view.host.querySelector('p[role="img"]')?.textContent).toContain('Runs')
     expect(fetchUsageAnalytics.mock.calls.length).toBe(callsBefore)
-    await click(buttonNamed(view.host.querySelector('[aria-label="Chart metric"]') ?? view.host, 'Time'))
+    await click(view.host.querySelector<HTMLButtonElement>('[data-analytics-card="runtime"]'))
     expect(view.host.querySelector('[data-bucket-start="2026-09-30T23:00:00.000Z"]')?.getAttribute('data-value')).toBe('0')
   })
 
@@ -374,7 +356,7 @@ describe('analytics view', () => {
     })
     const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
     await view.flush()
-    await click(buttonNamed(view.host, 'Errors'))
+    await click(buttonNamed(view.host, 'Failures'))
     const mix = view.host.querySelector('[data-analytics-mix]')
     expect(mix?.getAttribute('aria-label')).toContain('Provider error 3')
     expect(mix?.getAttribute('aria-label')).toContain('Other 2')
@@ -400,7 +382,7 @@ describe('analytics view', () => {
     expect(view.host.textContent).not.toContain('Ghost')
   })
 
-  it('shows the time zone and update clock, a skeleton, and a refresh', async () => {
+  it('keeps the time zone and update clock on the refresh button, with a skeleton while loading', async () => {
     let resolveLoad: ((value: unknown) => void) | undefined
     fetchUsageAnalytics.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve }))
     const view = mount(<AnalyticsView sessions={sessions} agents={[codex]} connected now={now} />)
@@ -409,13 +391,14 @@ describe('analytics view', () => {
     await act(async () => { resolveLoad?.(analyticsFixtures.full) })
     await view.flush()
     expect(view.host.querySelector('[data-analytics-skeleton="true"]')).toBeNull()
-    expect(view.host.textContent).toContain('Time zone Europe/London')
-    expect(view.host.textContent).toContain('Updated 13:00')
+    const refresh = () => view.host.querySelector<HTMLButtonElement>('.analytics-controls .analytics-icon-button')
+    expect(refresh()?.title).toContain('Europe/London')
+    expect(refresh()?.title).toContain('Updated 13:00')
     const calls = fetchUsageAnalytics.mock.calls.length
-    await click(buttonNamed(view.host, 'Refresh usage and provider quotas'))
+    await click(refresh())
     await view.flush()
     expect(fetchUsageAnalytics.mock.calls.length).toBe(calls + 1)
-    expect(view.host.textContent).toContain('Updated 13:00')
+    expect(refresh()?.title).toContain('Updated 13:00')
   })
 
   it('persists range, bucket, metric, and tab, and resets a missing project to All', async () => {
@@ -430,12 +413,12 @@ describe('analytics view', () => {
     const offered = (await selectOptions(view.host, 'Project')).map((option) => option.value)
     expect(offered).toEqual(['', ...analyticsProjectChoices(sessions).map((option) => option.key)])
     expect(offered).not.toContain('c:\\missing-project')
-    await click(buttonNamed(view.host, 'Overview'))
-    expect(view.host.querySelector('[aria-label="Chart metric"] [aria-pressed="true"]')?.textContent).toBe('Tokens')
+    await click(buttonNamed(view.host, 'By bot'))
+    expect(view.host.querySelector('[aria-label="Chart metric"] [aria-pressed="true"]')?.textContent).toContain('Tokens')
     await click(buttonNamed(view.host, '30 days'))
     await view.flush()
     expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}')).toMatchObject({ days: 30, bucket: 'week', metric: 'tokens', panel: 'overview' })
-    await click(buttonNamed(view.host, 'Errors'))
+    await click(buttonNamed(view.host, 'Failures'))
     expect(JSON.parse(localStorage.getItem(ANALYTICS_STORAGE_KEY) ?? '{}').panel).toBe('errors')
     view.unmount()
 
@@ -482,7 +465,7 @@ describe('analytics view', () => {
     overview?.focus()
     await act(async () => { overview?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })) })
     expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-selected')).toBe('true')
-    expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-label') ?? view.host.querySelector('#analytics-tab-errors')?.textContent).toBe('Errors')
+    expect(view.host.querySelector('#analytics-tab-errors')?.getAttribute('aria-label') ?? view.host.querySelector('#analytics-tab-errors')?.textContent).toBe('Failures')
     view.unmount()
   })
 })

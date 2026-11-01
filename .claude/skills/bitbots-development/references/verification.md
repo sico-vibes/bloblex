@@ -72,6 +72,8 @@ The app plays a launch intro and fades the shell in; screenshots taken in the fi
 - **Check all** opens every state in a hidden frame, runs its steps and looks for its text. Run `window.__inspector.run()` and read `window.__inspector.checks` from a script. A state with no `expect` only proves the page didn't go blank.
 - **`&clean`** (added by the index for the main window) turns off first-run hints, the tour and What's New. Mark a scenario `raw` to keep them.
 - It runs on the Vite dev server, so it doesn't prove the production bundle or WebView2.
+- **Reviewing many screens:** drive the system Chrome headless with Playwright (`chromium.launch({ channel: 'chrome' })`, `reducedMotion: 'reduce'`, URL plus `&no-intro&clean`) and save PNGs. It's far faster than a hidden pane, and it renders what a person would see.
+- **Driving it from an agent's hidden browser pane:** transitions and the launch fade crawl, so a column looks too narrow and the shell looks dim. It isn't the app. Inject `*{transition:none!important;animation-duration:1ms!important} .app-shell{opacity:1!important}` before a screenshot.
 
 ## Checking the installed app (read-only)
 

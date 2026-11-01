@@ -56,7 +56,7 @@
 /* Delegation chips and relayed replies. */
 .team-chip-row { margin: 6px 0 2px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .team-chip { --chip-accent: var(--text-1); height: 26px; padding: 0 6px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; font-size: var(--fs-xs); cursor: pointer; transition: color 120ms ease, background 120ms ease; }
-.team-chip b { color: var(--chip-accent); font-weight: 600; }
+.team-chip b { color: var(--text-1); font-weight: 500; }
 .team-chip:hover:not(:disabled) { color: var(--text-2); background: var(--surface-hover); }
 .team-chip:disabled { cursor: default; }
 .team-chip.failed { color: var(--danger-ink); }
@@ -72,7 +72,7 @@
 .team-chip-more { color: var(--text-3); }
 .team-chip-more:hover, .team-chip-link:hover { text-decoration: underline; }
 .team-chip-more:focus-visible, .team-chip-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.team-notice { padding: 4px 10px; color: var(--text-3); border-radius: var(--radius-pill); background: var(--surface-subtle); font-size: var(--fs-xs); }
+.team-notice { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; color: var(--text-3); border-radius: var(--radius-pill); background: var(--surface-subtle); font-size: var(--fs-xs); }
 /* A usage limit: the reset time, and the owner's way to hand the work on (wave 13). */
 .usage-limit .team-notice { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .usage-limit-continue { margin-left: 2px; }
@@ -124,8 +124,8 @@
 
 /* Plans and plan mode. */
 .plan-pill.on { color: var(--meter-blue); border-color: color-mix(in srgb, var(--meter-blue) 40%, transparent); background: color-mix(in srgb, var(--meter-blue) 10%, transparent); }
-.plan-card { width: min(44rem, 100%); margin: 12px 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--meter-blue) 32%, var(--line)); border-radius: 16px; background: var(--surface-raised); }
-.plan-card > header { padding: 10px 14px; display: flex; align-items: center; gap: 8px; color: var(--meter-blue); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--meter-blue) 6%, transparent); font-size: var(--fs-sm); }
+.plan-card { width: min(44rem, 100%); margin: 12px 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface-raised); }
+.plan-card > header { padding: 10px 14px; display: flex; align-items: center; gap: 8px; color: var(--text-2); border-bottom: 1px solid var(--line); font-size: var(--fs-sm); }
 .plan-card > header strong { color: var(--text-1); font-weight: 600; }
 .plan-card-body { padding: 4px 16px 6px; color: var(--text-1); font-size: var(--fs-sm); }
 .plan-card > footer { padding: 10px 14px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
@@ -141,7 +141,7 @@
 .question-options { overflow: hidden; display: grid; border: 1px solid var(--line); border-radius: 12px; }
 .question-option { min-height: 42px; padding: 9px 12px; display: flex; align-items: center; gap: 12px; color: var(--text-1); border: 0; border-bottom: 1px solid var(--line); background: transparent; font-size: var(--fs-sm); text-align: left; cursor: pointer; }
 .question-option:last-child { border-bottom: 0; }
-.question-option:hover, .question-option:focus-visible { outline: none; background: var(--surface-hover); }
+.question-option:hover, .question-option:focus-visible { outline: none; box-shadow: none; background: var(--surface-hover); }
 .question-option.selected { background: var(--surface-selected); }
 .question-option kbd { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-subtle); font: 600 var(--fs-2xs) var(--font-ui, inherit); }
 .question-option.selected kbd { color: var(--text-inverse); border-color: var(--text-1); background: var(--text-1); }
@@ -214,7 +214,7 @@
 @media (prefers-reduced-motion: reduce) { .plan-card-meter > b { transition: none; } }
 
 /* The Manager: pinned above every project, set apart by a hairline. */
-.manager-group { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.manager-group { margin-bottom: 2px; }
 
 /* FIX39 item 21: tags. Small, monochrome, tertiary — the routing vocabulary the
    Manager matches a job to. Shown as chips on a project row and edited in a
@@ -238,3 +238,4 @@
 
 .mention { color: color-mix(in srgb, var(--mention) 25%, var(--text-1)); }
 .side-header-pair b { color: color-mix(in srgb, var(--chip-accent, var(--text-1)) 25%, var(--text-1)); }
+.team-row .role-chip { display: none; }

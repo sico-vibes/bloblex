@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { rpc } from '../tauri'
 import { setThemeStyle, useThemeStyle } from '../blob/bitbots'
 import { applyFonts, FONT_CATALOGUE, FONT_DEFAULTS } from './fonts'
 import { THEME_LOOKS } from './appearance'
 import { AccentPicker } from './AccentPicker'
+import { ChatBackgroundSettings } from './ChatBackground'
 import { useAccentColor, setAccentColor } from '../blob/bitbots'
 import { SettingsGroup, SettingsRow } from './SettingsParts'
 import { LookPicker } from './LookPicker'
@@ -23,6 +25,7 @@ export function AppearancePage() {
   const [textSize, setTextSize] = useState<TextSizeChoice>(() => { const size = document.documentElement.dataset.textSize; return ['small','default','large','larger'].includes(size ?? '') ? size as TextSizeChoice : 'default' })
   const density = useDensity()
   const [query, setQuery] = useState('')
+  const [fontOpen, setFontOpen] = useState<'ui' | 'mono' | null>(null)
   const textSection = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const element = textSection.current
@@ -43,6 +46,15 @@ export function AppearancePage() {
     if (selectedDefault) return FONT_CATALOGUE.find((font) => font.id === selectedDefault)?.label ?? selectedDefault
     return mono ? 'Cascadia Mono' : 'System'
   }
+  const fontRow = (mono: boolean) => {
+    const id = mono ? 'mono' : 'ui'
+    const label = mono ? 'Code font' : 'Interface font'
+    const selected = FONT_CATALOGUE.find((font) => font.id === (mono ? monoFont : uiFont))?.label ?? fontDefaultLabel(mono)
+    return <>
+      <SettingsRow label={label}><button type="button" className="font-toggle" aria-expanded={fontOpen === id} aria-label={`${label}: ${selected}`} onClick={() => { setQuery(''); setFontOpen(fontOpen === id ? null : id) }}>{selected}<ChevronDown size={14} aria-hidden="true" /></button></SettingsRow>
+      {fontOpen === id && <div className="settings-row stacked font-panel">{fontPicker(mono)}</div>}
+    </>
+  }
   const fontPicker = (mono: boolean) => {
     const selectedId = mono ? monoFont : uiFont
     const selectedLabel = FONT_CATALOGUE.find((font) => font.id === selectedId)?.label ?? `Default (${fontDefaultLabel(mono)})`
@@ -60,8 +72,9 @@ export function AppearancePage() {
     </div>
   }
   return <div className="appearance-page">
-    <SettingsGroup title="Look"><SettingsRow label="Choose a look" hint="Select a visual style for Bitbots." stacked><LookPicker value={style} onChange={(id) => void pickLook(id)} compact /></SettingsRow></SettingsGroup>
-    <SettingsGroup title="Colour"><SettingsRow label="Theme"><SegmentedControl label="Theme" value={themeChoice} options={(['system','dark','light'] as const).map((id) => ({ value: id, label: id[0]!.toUpperCase()+id.slice(1) }))} onChange={async (id) => { await save('appearance.theme', id); setThemeChoice(id); document.documentElement.dataset.themeChoice=id; try { localStorage.setItem('bloblex.appearance', JSON.stringify({ ...savedAppearance(), theme: id })) } catch { /* The daemon remains the persisted source. */ } applyAppearance(document.documentElement, id, textSize) }} /></SettingsRow><SettingsRow label="Accent" stacked><AccentPicker value={accent} onChange={(next) => { void save('appearance.accent', next).then(() => setAccentColor(next)) }} /></SettingsRow></SettingsGroup>
-    <div ref={textSection} className="appearance-text-section"><SettingsGroup title="Text"><SettingsRow label="Interface font" stacked>{fontPicker(false)}</SettingsRow><SettingsRow label="Code font" stacked>{fontPicker(true)}</SettingsRow><SettingsRow label="Text size"><SegmentedControl label="Text size" value={textSize} options={([{ value:'small',label:'Small' },{ value:'default',label:'Default' },{ value:'large',label:'Large' },{ value:'larger',label:'Larger' }] as const)} onChange={async (id) => { await save('appearance.textSize',id); setTextSize(id); try { localStorage.setItem('bloblex.appearance', JSON.stringify({ ...savedAppearance(), textSize:id })) } catch { /* The daemon remains the persisted source. */ } applyAppearance(document.documentElement, themeChoice, id) }} /></SettingsRow><SettingsRow label="Density"><SegmentedControl label="Density" value={density} options={([{value:'compact',label:'Compact'},{value:'default',label:'Default'},{value:'roomy',label:'Roomy'}] as const)} onChange={async (id) => { await save('appearance.density',id); updateDensity(id) }} /></SettingsRow></SettingsGroup></div>
+    <SettingsGroup title="Look"><div className="settings-row stacked"><LookPicker value={style} onChange={(id) => void pickLook(id)} compact /></div></SettingsGroup>
+    <SettingsGroup title="Colour"><SettingsRow label="Theme"><SegmentedControl label="Theme" value={themeChoice} options={(['system','dark','light'] as const).map((id) => ({ value: id, label: id[0]!.toUpperCase()+id.slice(1) }))} onChange={async (id) => { await save('appearance.theme', id); setThemeChoice(id); document.documentElement.dataset.themeChoice=id; try { localStorage.setItem('bloblex.appearance', JSON.stringify({ ...savedAppearance(), theme: id })) } catch { /* The daemon remains the persisted source. */ } applyAppearance(document.documentElement, id, textSize) }} /></SettingsRow><SettingsRow label="Accent" hint={style === 'haze' ? 'Also colours the Haze background.' : undefined}><AccentPicker value={accent} onChange={(next) => { void save('appearance.accent', next).then(() => setAccentColor(next)) }} /></SettingsRow></SettingsGroup>
+    {style === 'haze' && <ChatBackgroundSettings />}
+    <div ref={textSection} className="appearance-text-section"><SettingsGroup title="Text and spacing">{fontRow(false)}{fontRow(true)}<SettingsRow label="Text size"><SegmentedControl label="Text size" value={textSize} options={([{ value:'small',label:'Small' },{ value:'default',label:'Default' },{ value:'large',label:'Large' },{ value:'larger',label:'Larger' }] as const)} onChange={async (id) => { await save('appearance.textSize',id); setTextSize(id); try { localStorage.setItem('bloblex.appearance', JSON.stringify({ ...savedAppearance(), textSize:id })) } catch { /* The daemon remains the persisted source. */ } applyAppearance(document.documentElement, themeChoice, id) }} /></SettingsRow><SettingsRow label="Density"><SegmentedControl label="Density" value={density} options={([{value:'compact',label:'Compact'},{value:'default',label:'Default'},{value:'roomy',label:'Roomy'}] as const)} onChange={async (id) => { await save('appearance.density',id); updateDensity(id) }} /></SettingsRow></SettingsGroup></div>
   </div>
 }

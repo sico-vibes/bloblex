@@ -103,7 +103,7 @@ export function MemoryPage({ agents, projects, enabled, sharedWrites, about, con
   </li>
 
   return <div className="memory-page">
-    <p className="settings-intro">Memory lets {nouns} save short notes, like preferences and decisions, and recall them in later conversations. Notes a {noun} saves for a project or for everyone stay unused until you approve them. Don’t keep passwords or keys here.</p>
+    <p className="settings-intro">Short notes {nouns} recall later. Shared notes wait for your approval. Don’t keep passwords or keys here.</p>
     <section className="settings-group memory-switches" aria-label="Memory">
       <div className="settings-card">
       <div className="settings-row">

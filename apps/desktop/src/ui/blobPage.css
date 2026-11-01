@@ -336,3 +336,12 @@ fieldset.blob-settings-body + .settings-group { border-top: 1px solid var(--line
   .preset-chip, .approval-choice { transition: none; }
 }
 
+/* The bot page's head: one row. The big preview lives in the Look section. */
+.blob-hero { padding: 4px 4px 0; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 12px; text-align: left; }
+.blob-hero-copy { min-width: 0; display: grid; gap: 1px; }
+.blob-hero-name { justify-content: flex-start; }
+.blob-hero-name h2 { font-size: var(--fs-md); font-weight: 600; }
+.blob-hero-facts { margin: 0; color: var(--text-3); font-size: var(--fs-xs); }
+.look-section-label { font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0; text-transform: none; }
+.haze-look-editor .look-moods { display: none; }
+.catalog-refresh-action small { display: none; }

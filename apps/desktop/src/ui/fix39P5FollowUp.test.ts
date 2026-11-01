@@ -57,9 +57,7 @@ describe('FIX39 P5 follow-up: the locked settings fieldset', () => {
   })
 
   it('keeps the divider on the first group after the fieldset', () => {
-    // `.settings-group ~ .settings-group` no longer reaches it.
     expect(rule(blob, 'fieldset.blob-settings-body + .settings-group')).toMatch(/border-top: 1px solid var\(--line\)/)
-    expect(rule(css('settings.css'), '.settings-group ~ .settings-group')).toMatch(/border-top: 1px solid var\(--line\)/)
   })
 })
 

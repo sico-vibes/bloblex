@@ -33,7 +33,7 @@ describe('searchSettings', () => {
     const remote = SETTINGS_INDEX.filter((entry) => entry.page === 'Remote')
     expect(remote.some((entry) => entry.group === 'Devices' && entry.label === 'Devices')).toBe(true)
     expect(remote.some((entry) => entry.group === 'Recent activity')).toBe(true)
-    expect(remote.map((entry) => entry.group)).toEqual(expect.arrayContaining(['Remote access', 'Add a device', 'Safety']))
+    expect(remote.map((entry) => entry.group)).toEqual(expect.arrayContaining(['Turn on', 'Add a device', 'Safety']))
   })
 
   it('points every entry at a known page', () => {

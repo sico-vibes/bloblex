@@ -172,7 +172,7 @@ export function SkillsPage({ connected }: { connected: boolean }) {
   }
 
   return <div className="skills-page">
-    <p className="settings-intro">Skills are folders of instructions, and sometimes scripts, that every {noun} can load when a task matches. {Nouns} see a short list and load a skill only when they need it, so a large pool costs little.</p>
+    <p className="settings-intro">Instructions every {noun} can load when a task matches.</p>
     <section className="settings-group" aria-label="Skills switch">
       <div className="settings-card">
         <div className="settings-row">

@@ -50,8 +50,8 @@ export function HealthPage() {
     </SettingsGroup>)}
     <AbandonedWorktrees />
     <SettingsGroup title="Something still wrong?">
-      <SettingsRow label="Report a problem" hint="Drafts a GitHub issue with your versions and these results. You read and edit it first, and nothing is sent until you choose.">
-        <button type="button" className="secondary-button small" onClick={() => setReporting(true)}>Report a problem</button>
+      <SettingsRow label="Report a problem" hint="Drafts a GitHub issue you read before anything is sent.">
+        <button type="button" className="secondary-button small" onClick={() => setReporting(true)}>Report</button>
       </SettingsRow>
     </SettingsGroup>
     {reporting && <ReportProblemDialog onClose={() => setReporting(false)} />}

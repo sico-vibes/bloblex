@@ -809,7 +809,7 @@ describe('blob roster and editor', () => {
     configure(snapshot({ projects: [board], agents: [claude, codex, manager], sessions: [...sessions, session({ id: 'session-manager', runtimeId: opencode.runtimeId, agentId: 'agent-manager', title: 'Planning' })] }))
     const view = startApp()
     await view.settle()
-    await click(view.host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"][aria-label$=" actions"][title^="Import"]')!)
+    await click(view.host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"][aria-label$=" actions"][title="More ways to create"]')!)
     expect(menuItem(view.host, 'Import project folder…')).toBeTruthy()
     await click(menuItem(view.host, 'New project with Max'))
     await view.settle()
@@ -911,7 +911,7 @@ describe('blob roster and editor', () => {
     withRpc((method) => method === 'agent.conversation.create' ? { session: fresh } : undefined)
     const view = startApp()
     await view.settle()
-    await click(view.host.querySelector('.chat-header [aria-label="New conversation"]'))
+    await click(view.host.querySelector('.convo-new'))
     await view.settle()
     expect(view.host.querySelector('[role="dialog"]')).toBeNull()
     expect(h.rpc).toHaveBeenCalledWith('agent.conversation.create', { agentId: 'agent-claude' })
@@ -1190,8 +1190,8 @@ describe('blob roster and editor', () => {
     await act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })) })
     await view.settle()
     expect(h.rpc).toHaveBeenCalledWith(mode === 'steer' ? 'session.queue.add' : 'session.steer', mode === 'steer' ? { clientMessageId: expect.stringMatching(/^m-/), sessionId: working.id, text: 'Other way' } : { sessionId: working.id, text: 'Other way' })
-    // The composer's Steer / Queue choice (beside the send button since 28 October 2026) shows the preference.
-    expect(view.host.querySelector('.composer-status-modes [role="radio"][aria-checked="true"]')?.textContent).toBe(mode === 'steer' ? 'Steer' : 'Queue')
+    // The preference lives in Settings (owner, 1 November 2026): the composer has no second control for it.
+    expect(view.host.querySelector('.composer-status-modes')).toBeNull()
   }, 15_000)
 
   it('shows live side-conversation activity and messages with Agent activity off', async () => {
@@ -1260,7 +1260,7 @@ describe('blob roster and editor', () => {
     withRpc((method, params) => method === 'session.model.update' ? { session: { ...planned, modelLock: { model: null, thinking: null } } } : method === 'session.prompt' ? { accepted: true, params } : undefined)
     const view = startApp()
     await view.settle()
-    expect(view.host.querySelector('.plan-pill')?.getAttribute('aria-pressed')).toBe('true')
+    expect(view.host.querySelector('.permission-pill.mode-plan')?.textContent).toContain('Plan')
     expect(view.host.querySelector('.plan-card')?.textContent).toContain('Do it.')
     await click(buttonNamed(view.host, 'Approve & build'))
     await view.settle()
@@ -1532,6 +1532,6 @@ describe('FIX39 P5 follow-up', () => {
     expect(effort.disabled || effort.getAttribute('aria-disabled') === 'true').toBe(true)
     await click(permission)
     expect(view.host.querySelector('.permission-menu')).not.toBeNull()
-    expect(view.host.querySelector('.composer-menu-note')?.textContent).toContain('Applies to this bot from now on')
+    expect(view.host.querySelector('.composer-menu-note')?.textContent).toContain('Applies to this bot from the next message')
   })
 })

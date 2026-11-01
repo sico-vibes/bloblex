@@ -33,7 +33,7 @@ export function useDialogAccessibility(onClose: () => void, canClose: () => bool
     const focusables = () => Array.from(root.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')).filter((node) => !node.hasAttribute('aria-hidden'))
     const initial = root.querySelector<HTMLElement>('[data-dialog-initial-focus]') ?? focusables()[0]
     const frame = wasDismissed ? null : requestAnimationFrame(() => {
-      if (!dismissed.current && root.isConnected) initial?.focus()
+      if (!dismissed.current && root.isConnected) initial?.focus({ focusVisible: false } as FocusOptions)
     })
     const keydown = (event: KeyboardEvent) => {
       if (dialogStack[dialogStack.length - 1] !== close) return

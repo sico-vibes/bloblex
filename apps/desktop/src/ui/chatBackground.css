@@ -1,0 +1,22 @@
+/* The chat background. The fade masks are adapted from MonoCode (MIT): the image fades out before it reaches the text. */
+.chat-bg { position: absolute; inset: 0; z-index: -1; overflow: hidden; background-image: var(--chat-bg-image); background-position: center; background-size: cover; background-repeat: no-repeat; pointer-events: none; transition: opacity 200ms ease;
+  --chat-bg-mask: linear-gradient(to bottom, #000 0 18%, rgb(0 0 0 / 61%) 32%, rgb(0 0 0 / 32%) 47%, rgb(0 0 0 / 11%) 62%, transparent 72%);
+  -webkit-mask-image: var(--chat-bg-mask); mask-image: var(--chat-bg-mask); }
+.chat-bg.empty { --chat-bg-mask: linear-gradient(to bottom, #000 0 19%, rgb(0 0 0 / 79%) 30%, rgb(0 0 0 / 50%) 42%, rgb(0 0 0 / 20%) 54%, rgb(0 0 0 / 5%) 64%, transparent 72%); }
+.chat-bg.effect-haze { --chat-bg-soft: 7px; --chat-bg-strong: 18px; --chat-bg-mask: linear-gradient(to bottom, #000 0 19%, rgb(0 0 0 / 94%) 30%, rgb(0 0 0 / 72%) 42%, rgb(0 0 0 / 42%) 54%, rgb(0 0 0 / 16%) 66%, rgb(0 0 0 / 4%) 78%, transparent 90%); }
+.chat-bg.effect-haze.preview { --chat-bg-soft: 2px; --chat-bg-strong: 5px; }
+.chat-bg > span { position: absolute; inset: 0; background-image: var(--chat-bg-image); background-position: center; background-size: cover; background-repeat: no-repeat; }
+.chat-bg-soft { filter: blur(var(--chat-bg-soft)); -webkit-mask-image: linear-gradient(to bottom, transparent 18%, #000 60%); mask-image: linear-gradient(to bottom, transparent 18%, #000 60%); }
+.chat-bg-strong { filter: blur(var(--chat-bg-strong)); -webkit-mask-image: linear-gradient(to bottom, transparent 28%, #000 76%); mask-image: linear-gradient(to bottom, transparent 28%, #000 76%); }
+
+.chat-bg-source { gap: 10px; }
+.chat-bg-preview, .chat-bg-choose { position: relative; isolation: isolate; width: 100%; height: 128px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; }
+.chat-bg-preview > span { position: absolute; left: 9px; bottom: 7px; color: var(--text-3); font-size: var(--fs-2xs); }
+.chat-bg-choose { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-3); background: transparent; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.chat-bg-choose:hover:not(:disabled) { color: var(--text-1); background: var(--surface-hover); }
+.chat-bg-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.chat-bg-problem { margin: 0; color: var(--status-danger-text, var(--status-danger)); font-size: var(--fs-xs); }
+.chat-bg-strength { width: 210px; display: flex; align-items: center; gap: 10px; }
+.chat-bg-strength input { min-width: 0; flex: 1; }
+.chat-bg-strength output { width: 34px; color: var(--text-2); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; text-align: right; }
+@media (prefers-reduced-motion: reduce) { .chat-bg { transition: none; } }

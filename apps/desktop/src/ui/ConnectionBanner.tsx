@@ -38,7 +38,7 @@ export function ConnectionBanner({ state, attempts = 0, failed = false, onRetry 
     const was = previous.current
     previous.current = state
     if (state !== 'connected') { setBackOnline(false); return }
-    if (was === 'connected') return
+    if (was !== 'disconnected') return
     setBackOnline(true)
     const timer = window.setTimeout(() => setBackOnline(false), 1500)
     return () => window.clearTimeout(timer)

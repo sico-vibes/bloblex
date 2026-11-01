@@ -138,7 +138,7 @@ export function ProfileMenu({ connection, usageActive, schedulesActive = false, 
       {onShortcuts && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onShortcuts)}><Keyboard size={15} />Keyboard shortcuts</button>}
       <span className="menu-separator" role="separator" />
       <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onUsage)}><Gauge size={15} />Usage</button>
-      {onSchedules && <button type="button" role="menuitem" className="menu-item" aria-current={schedulesActive ? "page" : undefined} disabled={!connected} onClick={() => run(onSchedules)}><CalendarClock size={15} />Automations</button>}
+      {onSchedules && <button type="button" role="menuitem" className="menu-item" aria-current={schedulesActive ? "page" : undefined} disabled={!connected} onClick={() => run(onSchedules)}><CalendarClock size={15} />Schedules</button>}
       {remoteAvailable === true && onRemote && <button type="button" role="menuitem" className="menu-item" onClick={() => run(onRemote)}><Smartphone size={15} />Remote</button>}
       {onBackup && <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onBackup)}><ArchiveRestore size={15} />Backup</button>}
       {onArchivedBots && <button type="button" role="menuitem" className="menu-item" disabled={!connected} onClick={() => run(onArchivedBots)}><ArchiveRestore size={15} />Archived bots</button>}

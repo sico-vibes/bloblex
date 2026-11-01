@@ -29,8 +29,10 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
   const [showFinished, setShowFinished] = useState(false)
-  const [dragPoint, setDragPoint] = useState<{ x: number; y: number } | null>(null)
-  const gesture = useRef<{ taskId: string; pointerId: number; x: number; y: number; dragging: boolean } | null>(null)
+  /** The card under the pointer: where it is, and whether it's following, flying home or landing. */
+  const [card, setCard] = useState<{ x: number; y: number; width: number; phase: 'follow' | 'home' | 'land' } | null>(null)
+  const gesture = useRef<{ taskId: string; pointerId: number; x: number; y: number; dragging: boolean; offsetX: number; offsetY: number; left: number; top: number; width: number } | null>(null)
+  const settle = useRef<number | null>(null)
   const suppressClick = useRef(false)
   const bots = assignableAgents(agents).slice().sort((a, b) => a.sortOrder - b.sortOrder)
   const drafts = draftTasks(tasks)
@@ -41,11 +43,16 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
   const assignOptions = bots.map((agent) => ({ value: agent.id, label: agent.name }))
 
   const botAt = (x: number, y: number) => document.elementFromPoint(x, y)?.closest<HTMLElement>('.delegate-lane[data-agent-id]')?.dataset.agentId ?? null
-  const clearDrag = () => { gesture.current = null; setDragId(null); setOverId(null); setDragPoint(null) }
+  const stopSettle = () => { if (settle.current !== null) window.clearTimeout(settle.current); settle.current = null }
+  const clearDrag = () => { stopSettle(); gesture.current = null; setDragId(null); setOverId(null); setCard(null) }
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>, task: BoardTask) => {
     if (event.button !== 0 || !connected || busy.has(task.id)) return
     suppressClick.current = false
-    gesture.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, dragging: false }
+    stopSettle()
+    setDragId(null)
+    setCard(null)
+    const rect = event.currentTarget.closest('.delegate-draft')?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect()
+    gesture.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, dragging: false, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, left: rect.left, top: rect.top, width: rect.width }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
   const moveDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -56,7 +63,7 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
     suppressClick.current = true
     event.preventDefault()
     setDragId(current.taskId)
-    setDragPoint({ x: event.clientX, y: event.clientY })
+    setCard({ x: event.clientX - current.offsetX, y: event.clientY - current.offsetY, width: current.width, phase: 'follow' })
     setOverId(botAt(event.clientX, event.clientY))
   }
   const finishDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -66,19 +73,29 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
     const task = tasks.find((item) => item.id === current.taskId && item.state === 'unassigned')
     const agent = bots.find((item) => item.id === agentId)
     suppressClick.current = current.dragging
-    clearDrag()
+    const dropping = !!(current.dragging && connected && task && agent && !busy.has(task.id))
+    gesture.current = null
+    setOverId(null)
+    // A card that lands shrinks away over its bot; one dropped anywhere else flies back to its place.
+    if (current.dragging) {
+      setCard((value) => value && (dropping ? { ...value, phase: 'land' } : { ...value, x: current.left, y: current.top, phase: 'home' }))
+      settle.current = window.setTimeout(() => { settle.current = null; setDragId(null); setCard(null) }, dropping ? 140 : 200)
+    } else clearDrag()
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
     if (current.dragging) {
       event.preventDefault()
       window.setTimeout(() => { suppressClick.current = false }, 0)
-      if (connected && task && agent && !busy.has(task.id)) onAssign(task, agent)
+      if (dropping && task && agent) onAssign(task, agent)
     }
   }
 
   const meta = (task: BoardTask) => [projectName(task.projectId), task.estimateMinutes ? `about ${task.estimateMinutes} min` : null, task.images?.length ? `${task.images.length} image${task.images.length === 1 ? '' : 's'}` : null, task.scheduleState === 'missed' ? 'Missed its time' : null].filter(Boolean).join(' · ')
 
   return <div className="delegate-board">
-    {dragging && dragPoint && <div className="delegate-drag-ghost" style={{ left: dragPoint.x + 14, top: dragPoint.y + 14 }} aria-hidden="true">{dragging.title}</div>}
+    {dragging && card && <div className={`delegate-draft delegate-drag-card ${card.phase}`} style={{ width: card.width, transform: `translate3d(${card.x}px, ${card.y}px, 0)` }} aria-hidden="true">
+      <span className="delegate-draft-main"><GripVertical size={14} className="delegate-grip" aria-hidden="true" /><span className="delegate-draft-text"><strong>{dragging.title}</strong>{meta(dragging) && <small>{meta(dragging)}</small>}</span></span>
+      <span className="delegate-drag-assign">Assign<ChevronDown size={13} aria-hidden="true" /></span>
+    </div>}
     <section className="delegate-backlog" aria-labelledby="delegate-backlog-title">
       <header className="delegate-head"><h2 id="delegate-backlog-title">Unassigned</h2><span className="delegate-count">{drafts.length}</span></header>
       {drafts.length === 0
@@ -120,13 +137,13 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
         const availability = laneAvailability(lane, nowMs)
         const over = overId === agent.id
         return <li key={agent.id}>
-          <section className={`delegate-lane${dragging ? ' drop-ready' : ''}${over ? ' over' : ''}`} data-agent-id={agent.id} aria-label={`${agent.name}, ${availability.label}`}
+          <section className={`delegate-lane${over ? ' over' : ''}`} data-agent-id={agent.id} aria-label={`${agent.name}, ${availability.label}`}
             onDragOver={(event) => { if (!dragging) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (overId !== agent.id) setOverId(agent.id) }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && overId === agent.id) setOverId(null) }}
             onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || dragId; setDragId(null); setOverId(null); const task = tasks.find((item) => item.id === id && item.state === 'unassigned'); if (task) onAssign(task, agent) }}>
             <header className="delegate-lane-head">
               <span className="delegate-face" aria-hidden="true"><BlobCanvas decorative color={agentColorHex(agent.color)} size={28} mood={lane.some((task) => task.state === 'running') ? 'working' : 'idle'} look={agentLook(agent)} label={agent.name} /></span>
-              <span className="delegate-lane-name"><strong>{agent.name}</strong><small>{runtimeName(agent)}</small></span>
+              <span className="delegate-lane-name"><strong>{agent.name}</strong>{runtimeName(agent).toLowerCase() !== agent.name.trim().toLowerCase() && <small>{runtimeName(agent)}</small>}</span>
               <span className="delegate-badges"><span className={`delegate-availability tone-${availability.tone}`}>{availability.label}</span>{availability.queued > 0 && <span className="delegate-availability">{availability.queued} queued</span>}</span>
             </header>
             {lane.length > 0 && <ul className="delegate-chips">{lane.map((task) => <li key={task.id}><button type="button" className={`delegate-chip tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-chip-title">{task.title}</span><small>{task.state === 'queued' && task.queuePosition != null ? `Queued ${task.queuePosition + 1}` : TASK_STATE_LABEL[task.state]}</small></button></li>)}</ul>}

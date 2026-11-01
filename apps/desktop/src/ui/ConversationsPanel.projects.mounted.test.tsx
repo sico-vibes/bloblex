@@ -98,7 +98,7 @@ describe('conversations by project (Phase 1A)', () => {
     await act(async () => { menuItem(view, 'No project')!.click() })
     expect(onNew).toHaveBeenLastCalledWith(null)
     // The plain button starts where the bot's next conversation goes (its default project).
-    expect(view.querySelector('.convo-new-where')?.textContent).toBe('Korus')
+    expect(view.querySelector('.convo-new')?.getAttribute('title')).toBe('Start a conversation in Korus')
     await act(async () => { view.querySelector<HTMLButtonElement>('button.convo-new')!.click() })
     expect(onNew).toHaveBeenLastCalledWith()
   })

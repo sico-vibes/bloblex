@@ -56,7 +56,7 @@ describe('Settings → Approvals', () => {
   it('says when nothing is saved, and when the list cannot be read', async () => {
     h.rpc.mockResolvedValue({ rules: [] })
     await mount(<ApprovalRulesPage agents={agents} />)
-    expect(host.textContent).toContain('Nothing is always allowed yet.')
+    expect(host.textContent).toContain('Nothing yet. Choose Always allow')
     act(() => root!.unmount()); root = null
     h.rpc.mockRejectedValue(new Error('not_found'))
     await mount(<ApprovalRulesPage agents={agents} />)

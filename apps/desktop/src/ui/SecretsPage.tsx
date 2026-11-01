@@ -23,7 +23,6 @@ export function secretNameProblem(name: string): string | null {
 }
 
 export function SecretsPage() {
-  const noun = useEntityNoun()
   const nouns = useEntityNoun({ plural: true })
   const [secrets, setSecrets] = useState<SecretRow[]>([])
   const [name, setName] = useState('')
@@ -40,8 +39,8 @@ export function SecretsPage() {
     try { await rpc('secret.set', { name, value, confirm: true }); setName(''); setValue(''); load() } catch (reason) { setProblem(messageOf(reason, 'That secret could not be saved.')) } finally { setBusy(false) }
   }
   return <>
-    <p className="settings-intro">Keep environment values in the Windows Credential Manager instead of plain text. A {noun} gets one by name in its settings. This protects the value on disk. A coding agent can still read its own environment, so only give a secret to {nouns} you trust with it.</p>
-    <SettingsGroup title="Secrets">
+    <p className="settings-intro">Values stay in Windows Credential Manager, not plain text. A coding agent can read its own environment, so only give a secret to {nouns} you trust.</p>
+    <SettingsGroup title="Saved">
       {!secrets.length && <p className="settings-empty">No secrets yet.</p>}
       {secrets.map((secret) => <div key={secret.name} className="secret-row">
         <KeyRound size={14} aria-hidden="true" />

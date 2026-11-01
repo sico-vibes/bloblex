@@ -1,5 +1,6 @@
 // Tasks: durable work you hand to a bot. The daemon owns every state; this page shows the board and sends the owner's actions.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { providerBrand } from './providerBrand'
 import { ArrowLeft, Plus } from 'lucide-react'
 import type { Agent, BoardTask, BoardTaskRun, Project, Runtime } from '../types'
 import { TaskTimeline } from './TaskTimeline'
@@ -42,10 +43,10 @@ export function TasksView({ agents, projects, runtimes, connected, onBack, onOpe
     return () => { live = false }
   }, [view, runsKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const backRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { backRef.current?.focus() }, [])
+  useEffect(() => { backRef.current?.focus({ focusVisible: false } as FocusOptions) }, [])
   useEffect(() => { const timer = window.setInterval(() => setNowMs(Date.now()), 30_000); return () => window.clearInterval(timer) }, [])
   const mark = (id: string, on: boolean) => setBusy((current) => { const next = new Set(current); if (on) next.add(id); else next.delete(id); return next })
-  const runtimeName = (agent: Agent) => { const runtime = runtimes.find((item) => item.id === agent.runtimeId); return [runtime?.displayName ?? runtime?.provider ?? agent.runtimeId, agent.model].filter(Boolean).join(' · ') }
+  const runtimeName = (agent: Agent) => { const runtime = runtimes.find((item) => item.id === agent.runtimeId); return [runtime?.displayName ?? (runtime?.provider ? providerBrand(runtime.provider).name : agent.runtimeId), agent.model].filter(Boolean).join(' · ') }
 
   const assign = async (task: BoardTask, agent: Agent) => {
     mark(task.id, true)
@@ -65,14 +66,11 @@ export function TasksView({ agents, projects, runtimes, connected, onBack, onOpe
     <header className="blob-page-header">
       <button ref={backRef} type="button" className="analytics-icon-button" aria-label="Back" title="Back" onClick={onBack}><ArrowLeft size={16} /></button>
       <strong className="blob-page-heading">Tasks</strong>
+      <div className="segmented" role="radiogroup" aria-label="View">{(['board', 'tree', 'timeline'] as const).map((item) => <button key={item} type="button" role="radio" aria-checked={view === item} className={view === item ? 'on' : undefined} onClick={() => setView(item)}>{item === 'board' ? 'Board' : item === 'tree' ? 'Tree' : 'Timeline'}</button>)}</div>
       <button type="button" className="primary-button small tasks-new" disabled={!connected} onClick={() => setCreating(true)}><Plus size={14} aria-hidden="true" />New task</button>
     </header>
     <div className="tasks-scroll">
       <div className="tasks-column">
-        <div className="tasks-bar">
-          <p className="tasks-lead">{view === 'board' ? "Your Manager drafts tasks here. Drag one onto a bot to start it, or queue it behind the bot's current work." : view === 'tree' ? 'Each card is a task, placed under the task it was split from.' : 'When each bot worked, and what it waited on.'}</p>
-          <div className="segmented" role="radiogroup" aria-label="View">{(['board', 'tree', 'timeline'] as const).map((item) => <button key={item} type="button" role="radio" aria-checked={view === item} className={view === item ? 'on' : undefined} onClick={() => setView(item)}>{item === 'board' ? 'Board' : item === 'tree' ? 'Tree' : 'Timeline'}</button>)}</div>
-        </div>
         {board.error && <p className="tasks-problem" role="alert">{board.error}</p>}
         <div className="tasks-notice" role="status" aria-live="polite">{notice && <span className={`tasks-notice-text ${notice.tone}`}>{notice.text}</span>}</div>
         {!board.loaded && !board.error ? <p className="tasks-loading">Loading tasks…</p> : view === 'tree' ? <TaskTree tasks={board.tasks} agents={agents} nowMs={nowMs} onOpen={(task) => setOpenId(task.id)} /> : view === 'timeline' ? <TaskTimeline tasks={board.tasks} runsByTask={runsByTask} agents={agents} nowMs={nowMs} onOpen={(task) => setOpenId(task.id)} /> : <DelegateBoard tasks={board.tasks} agents={agents} projects={projects} nowMs={nowMs} connected={connected} busy={busy} runtimeName={runtimeName} onAssign={(task, agent) => void assign(task, agent)} onOpen={(task) => setOpenId(task.id)} />}

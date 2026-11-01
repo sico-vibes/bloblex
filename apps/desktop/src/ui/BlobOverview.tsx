@@ -35,13 +35,15 @@ export function BlobOverview({ draft, runtime, session, connected, model, mode, 
     model?.trim() ? model : 'Default model',
     mode === 'create' ? 'Not created yet' : derived.label,
   ]
+  const name = draft.name.trim().toLowerCase()
   return <section className="blob-hero" aria-label={`${Noun} preview`}>
-    <BlobCanvas color={paint} size={104} mood={mood} look={draftLook(draft, agentId)} label={draft.name.trim() || `New ${noun}`} />
-    <div className="blob-hero-name">
-      <h2>{draft.name.trim() || `New ${noun}`}</h2>
-      <ApprovalPill mode={approvalMode} />
+    <BlobCanvas color={paint} size={40} mood={mood} look={draftLook(draft, agentId)} label={draft.name.trim() || `New ${noun}`} />
+    <div className="blob-hero-copy">
+      <div className="blob-hero-name">
+        {mode === 'create' && <h2>{draft.name.trim() || `New ${noun}`}</h2>}
+        <ApprovalPill mode={approvalMode} />
+      </div>
+      <p className="blob-hero-facts">{facts.filter((fact) => fact.toLowerCase() !== name).join(' · ')}</p>
     </div>
-    {draft.description.trim() && <p className="blob-hero-description">{draft.description}</p>}
-    <p className="blob-hero-facts">{facts.join(' · ')}</p>
   </section>
 }

@@ -18,7 +18,7 @@ export interface BackupImportResult { imported?: Partial<BackupStats>; skipped?:
 const OPTIONAL: Array<{ key: keyof BackupInclude; label: string }> = [
   { key: 'memory', label: 'Memory notes' },
   { key: 'skills', label: 'Skills' },
-  { key: 'automations', label: 'Automations' },
+  { key: 'automations', label: 'Schedules' },
   { key: 'settings', label: 'App settings' },
 ]
 
@@ -135,7 +135,7 @@ export function BackupPage({ connected }: { connected: boolean }) {
   const settingChanges = preview?.conflicts.settings ?? []
 
   return <div className="backup-page">
-    <p className="settings-intro">A backup keeps your {nouns}, what they remember, your skills, automations and app settings in one file. Conversations, projects and sign-ins are not included, and restored {nouns} start without a project.</p>
+    <p className="settings-intro">One file with your {nouns} and settings. Conversations, projects and sign-ins aren’t included.</p>
 
     <SettingsGroup title="Export">
       <div className="backup-section">
@@ -146,7 +146,7 @@ export function BackupPage({ connected }: { connected: boolean }) {
             <span>{item.label}</span>
           </label></li>)}
         </ul>
-        <p className="backup-note">Environment values, passwords and keys are never written to the file. Automations come back paused.</p>
+        <p className="backup-note">Passwords and keys are never written. Automations come back paused.</p>
         <div className="backup-actions">
           <button type="button" className="primary-button small" disabled={!connected || exporting || templating} onClick={() => void exportNow()}><FileDown size={13} aria-hidden="true" />{exporting ? 'Saving…' : 'Export a backup…'}</button>
           <button type="button" className="secondary-button small" disabled={!connected || exporting || templating} title={`Every ${noun}, its approved notes, skills and schedules. No settings, and nothing secret.`} onClick={() => void exportTemplate()}><FileDown size={13} aria-hidden="true" />{templating ? 'Saving…' : 'Export a template for another machine…'}</button>
@@ -159,7 +159,7 @@ export function BackupPage({ connected }: { connected: boolean }) {
     <SettingsGroup title="Restore">
       <div className="backup-section">
         {!preview && <>
-          <p className="backup-note">Choose a <code>.bitbots-backup.json</code> file, including one a {noun} was shared as. You will see what it holds before anything changes.</p>
+          <p className="backup-note">Choose a <code>.bitbots-backup.json</code> file. You’ll see what it holds first.</p>
           <div className="backup-actions">
             <button type="button" className="secondary-button small" disabled={!connected || reading} onClick={() => void chooseFile()}><FileUp size={13} aria-hidden="true" />{reading ? 'Reading…' : 'Choose a backup…'}</button>
           </div>

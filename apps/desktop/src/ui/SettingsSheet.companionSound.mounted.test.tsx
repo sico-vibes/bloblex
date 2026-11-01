@@ -34,7 +34,8 @@ beforeEach(() => {
 })
 afterEach(() => { if (root) act(() => root.unmount()); host?.remove() })
 
-async function openGeneral(settings: Record<string, unknown> = {}, failSave = false) {
+async function openCompanion(extra: Record<string, unknown> = {}, failSave = false) {
+  const settings = { 'companion.soundsEnabled': true, ...extra }
   mocks.rpc.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
     if (method === 'settings.get') return { settings }
     if (method === 'settings.set' && failSave && params?.key === 'companion.soundVolume') throw new Error('The daemon refused the volume.')
@@ -42,7 +43,7 @@ async function openGeneral(settings: Record<string, unknown> = {}, failSave = fa
   })
   mocks.invoke.mockImplementation(async () => true)
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={mocks.onError} onOpenAgent={vi.fn()} />))
+  await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Companion" onClose={vi.fn()} onRefresh={vi.fn()} onError={mocks.onError} onOpenAgent={vi.fn()} />))
   await tick()
 }
 
@@ -53,19 +54,19 @@ function drag(percent: number) {
 }
 const saves = () => mocks.rpc.mock.calls.filter(([method, params]) => method === 'settings.set' && params.key === 'companion.soundVolume')
 
-describe('General settings: companion sound volume', () => {
+describe('Companion settings: sound volume', () => {
   it('sits beside the Sounds switch and shows the saved volume, 80% when none is saved', async () => {
-    await openGeneral()
+    await openCompanion()
     expect(host.querySelector('[role="switch"][aria-label="Companion sounds"]')).not.toBeNull()
     expect(slider().value).toBe('80')
     expect(host.textContent).toContain('80%')
     act(() => root.unmount()); host.remove()
-    await openGeneral({ 'companion.soundVolume': 0.45 })
+    await openCompanion({ 'companion.soundVolume': 0.45 })
     expect(slider().value).toBe('45')
   })
 
   it('saves once on release under companion.soundVolume and tells the companion to play a preview', async () => {
-    await openGeneral()
+    await openCompanion()
     act(() => { slider().dispatchEvent(new Event('pointerdown', { bubbles: true })) })
     for (const percent of [70, 50, 25]) drag(percent)
     expect(saves()).toHaveLength(0)
@@ -78,7 +79,7 @@ describe('General settings: companion sound volume', () => {
   })
 
   it('plays a sample at the current volume without saving again', async () => {
-    await openGeneral({ 'companion.soundVolume': 0.45 })
+    await openCompanion({ 'companion.soundVolume': 0.45 })
     const button = [...host.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === 'Play sample')!
     expect(button).not.toBeNull()
     await act(async () => { button.click() })
@@ -88,7 +89,7 @@ describe('General settings: companion sound volume', () => {
   })
 
   it('does not touch the sounds-enabled setting when the volume goes to 0', async () => {
-    await openGeneral({ 'companion.soundsEnabled': true })
+    await openCompanion({ 'companion.soundsEnabled': true })
     drag(0)
     await act(async () => { slider().dispatchEvent(new KeyboardEvent('keyup', { key: 'Home', bubbles: true })) })
     await tick()
@@ -98,7 +99,7 @@ describe('General settings: companion sound volume', () => {
   })
 
   it('puts the slider back and reports the failure when the daemon refuses the save', async () => {
-    await openGeneral({ 'companion.soundVolume': 0.6 }, true)
+    await openCompanion({ 'companion.soundVolume': 0.6 }, true)
     drag(15)
     await act(async () => { slider().dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowLeft', bubbles: true })) })
     await tick()

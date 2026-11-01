@@ -560,7 +560,6 @@ function ModelMenu({ provider, models, model, label, ariaLabel, fastTier, fastOn
             }} /></label>
         : <div className="composer-menu-heading">{brand} models</div>}
       <div className="composer-menu-scroll">
-        {!model && <p className="composer-menu-note" role="status">Choose an explicit model for this conversation.</p>}
         {model && !models.some((item) => item.id === model) && <p className="composer-menu-note" role="status">Saved model {model} is not currently offered. Choose an available model to continue.</p>}
         {visible.length === 0 && <p className="composer-menu-note" role="status">No models match “{query.trim()}”.</p>}
         {visible.map((item, index) => <div key={item.id} role="none">

@@ -84,15 +84,15 @@ No audio or transcript is stored in settings. Validation is by the UI and the sp
 
 Validation: all of these are in the daemon validator except `composer.busySendMode`, which the UI validates. The storage validator repeats the ones a backup can restore.
 
-### Experimental features
+### Optional features
 
-Each is a boolean stored as `experimental.<name>`:
+Each is a boolean stored as `experimental.<name>`. The key keeps its old name; the switches now sit on the Settings tab they belong to:
 
 `changeReview`, `messageActions`, `search`, `autoTitles`, `undo`, `shortcuts`, `resumeAfterUsageLimits` (default on), `autoRetry`, `memory`, `approvalBadge`, `sidebarModel`, `botLock`.
 
 Since 30 October 2026 the daemon reads `autoTitles`, `undo`, `autoRetry` and `memory` through one rule (`experiments::on` in `crates/bloblex-daemon/src/experiments.rs`): absent means on, and only an explicit `false` turns one off, so a fresh install has the useful experiments and a switch the owner turned off stays off. `resumeAfterUsageLimits` already worked that way. `changeReview`, `messageActions` and `search` are read only by the interface, which sets its own defaults.
 
-Additional experimental keys used by the interface: `experimental.usageTips`, `experimental.usageTipDismissals`, `experimental.activityDetails`, `experimental.runtimeLogos`, `experimental.usageBar`, `experimental.bitbots`. The first two are validated in storage; the rest are UI preferences.
+Additional keys used by the interface: `experimental.usageTips`, `experimental.usageTipDismissals`, `experimental.activityDetails`, `experimental.runtimeLogos`, `experimental.usageBar`, `experimental.bitbots`. The first two are validated in storage; the rest are UI preferences.
 
 ### Shortcuts and the usage bars (30 October 2026)
 

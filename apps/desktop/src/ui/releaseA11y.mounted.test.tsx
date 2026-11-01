@@ -55,7 +55,7 @@ function focusables(root: ParentNode) {
 }
 
 describe('settings and blob dialog accessibility', () => {
-  it('shows a read-only about group and traps focus until Escape restores it', async () => {
+  it('traps focus until Escape restores it', async () => {
     rpc.mockResolvedValue({ settings: { showCompanion: true, closeToTray: true } })
     policy.mockResolvedValue({ defaultMode: 'ask', perAgent: [] })
     function Harness() {
@@ -72,11 +72,7 @@ describe('settings and blob dialog accessibility', () => {
     await act(async () => { opener?.click() })
     await view.settle()
     await view.settle()
-    const about = view.host.querySelector('[data-settings-about]')
-    expect(about?.textContent).toContain('Code signing')
-    expect(about?.textContent).toContain('Not configured')
-    expect(about?.textContent).not.toContain('Updates: not configured')
-    expect(about?.querySelector('button, input, select, textarea')).toBeNull()
+    expect(view.host.textContent).not.toContain('Code signing')
     expect(view.host.querySelector('[aria-label="Close settings"] svg')?.getAttribute('aria-hidden')).toBe('true')
     const dialog = view.host.querySelector('.settings-sheet')
     if (!dialog) throw new Error('settings dialog missing')

@@ -83,6 +83,8 @@ export function StashMenu({ disabled, canStash, textOnly = false, onStash, onRes
   const restore = (item: StashItem) => attempt(async () => { onRestored(await restoreStashItem(item)); await load(); close(true) }, 'That draft could not be restored.')
   const remove = (item: StashItem) => attempt(async () => { await rpc('stash.delete', { id: item.id }); setItems((current) => current.filter((row) => row.id !== item.id)) }, 'That draft could not be removed.')
 
+  // Nothing to keep and nothing kept: the button has no job yet.
+  if (!canStash && items.length === 0 && !open) return null
   return <div ref={rootRef} className="composer-popover-anchor stash-anchor">
     <button ref={triggerRef} type="button" className={`composer-icon-button stash-trigger${items.length ? ' has-items' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-label={items.length ? `Stash, ${items.length} saved` : 'Stash'} title="Save this draft for later, or pick up a saved one" disabled={disabled} onClick={() => setOpen((value) => !value)}>
       <Archive size={15} aria-hidden="true" />{items.length > 0 && <span className="stash-count" aria-hidden="true">{items.length}</span>}

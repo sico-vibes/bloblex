@@ -65,7 +65,7 @@ export function WorkingBotsPanel({ sessions, agents, selectedId, onOpen }: { ses
     </button></li>
   }
   return <section className="working-bots" aria-label="Working bots">
-    <button type="button" className="working-bots-heading" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}><ChevronRight size={12} className={expanded ? 'open' : ''} aria-hidden="true" /><strong>Working bots</strong><span>{active.length}</span></button>
-    {expanded && <><ul>{active.map(row)}</ul>{finished.length > 0 && <details><summary><ChevronRight size={12} aria-hidden="true" /><span>{finished.length} finished</span></summary><ul>{finished.map(row)}</ul></details>}</>}
+    {active.length > 0 && <button type="button" className="working-bots-heading" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}><ChevronRight size={12} className={expanded ? 'open' : ''} aria-hidden="true" /><strong>Working bots</strong><span>{active.length}</span></button>}
+    {(expanded || !active.length) && <>{active.length > 0 && <ul>{active.map(row)}</ul>}{finished.length > 0 && <details><summary><ChevronRight size={12} aria-hidden="true" /><span>{finished.length} finished</span></summary><ul>{finished.map(row)}</ul></details>}</>}
   </section>
 }

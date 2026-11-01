@@ -109,7 +109,7 @@ describe('updates settings', () => {
     expect(updates?.querySelector('[data-update-version]')?.textContent).toBe('0.1.0')
     expect(updates?.querySelector('[data-update-last-checked]')?.textContent).toBe('Not checked yet')
     expect(updates?.querySelector('[role="status"]')?.getAttribute('aria-live')).toBe('polite')
-    expect(view.host.querySelector('.settings-nav')?.textContent).toContain('Updates')
+    expect(view.host.querySelector('.settings-subtabs')?.textContent).toContain('Updates')
 
     const check = view.host.querySelector<HTMLButtonElement>('[data-update-check]')!
     await act(async () => { check.click() })

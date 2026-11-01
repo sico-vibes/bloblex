@@ -2,14 +2,14 @@
 // bots, the Manager pinned on top. Bots work in every project; a bot's
 // conversations are grouped by project in its conversations panel.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Archive, ArrowDownUp, Check, ChevronRight, Copy, Eye, EyeOff, Folder, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
+import { ProjectIcon } from './ProjectIcon'
+import { Archive, ArrowDownUp, Check, ChevronRight, Copy, Eye, EyeOff, FolderInput, FolderOpen, FolderPlus, Lock, LockOpen, MailOpen, Mail, Pencil, Pin, PinOff, Plus, Settings2, Tag, Trash2, X, Copy as Duplicate, Download, Star } from 'lucide-react'
 import type { Agent, Project, Runtime, Session } from '../types'
 import { rpc } from '../tauri'
 import { agentLook } from '../blob/look'
 import { RuntimeMark } from './providerBrand'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { useThemeStyle } from '../blob/bitbots'
-import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
 import { agentColorHex } from './agentColor'
 import { deriveCompanionStatus } from './companionStatus'
 import { RuntimeProblemMarker, runtimeProblem } from './RuntimeProblemMarker'
@@ -175,25 +175,23 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, needsYou, machines, onOpenSubbot, selectedSessionId }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, machines, onOpenSubbot, selectedSessionId }: {
   /** Phase 8: opens a sub-bot's conversation. */
   onOpenSubbot?: (sessionId: string) => void
   selectedSessionId?: string | null
   /** Phase 4: other machines' bots, under their names. */
   machines?: ReactNode
-  /** Waiting approvals and questions across every bot (see NeedsYou). */
-  needsYou?: ReactNode
   /** A card shown between the search box and the bots (Manager setup). */
   banner?: ReactNode
   agents: Agent[]
   projects: Project[]
   sessions: Session[]
   runtimes: Runtime[]
-  /** Experimental: show each blob's runtime logo before its name. */
+  /** Show each blob's runtime logo before its name. */
   runtimeLogos?: boolean
-  /** Experimental: show the bot's model and effort instead of the preview when idle. */
+  /** Show the bot's model and effort instead of the preview when idle. */
   sidebarModel?: boolean
-  /** Experimental: offer Lock bot in the context menu (Unlock is always offered). */
+  /** Offer Lock bot in the context menu (Unlock is always offered). */
   botLock?: boolean
   connected: boolean
   now: number
@@ -257,7 +255,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
     return [
       { label: isPinned ? 'Unpin' : 'Pin', icon: isPinned ? <PinOff size={15} /> : <Pin size={15} />, onSelect: () => actions.onTogglePin(agent.id) },
       { label: 'Default project', icon: <FolderInput size={15} />, disabled: locked, submenu: [
-        ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => actions.onMove(agent, project.id) })),
+        ...projects.map((project) => ({ label: project.name, icon: <ProjectIcon project={project} size={15} />, checked: agent.projectId === project.id, onSelect: () => actions.onMove(agent, project.id) })),
         { label: 'No project', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => actions.onMove(agent, null) },
         'separator',
         { label: 'New project…', icon: <FolderPlus size={15} />, onSelect: actions.onCreateProject },
@@ -283,7 +281,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   }
   /** The keyboard "Default project" menu: where this bot's new conversations start. */
   const moveMenu = (agent: Agent): MenuItem[] => [
-    ...projects.map((project) => ({ label: project.name, icon: <Folder size={15} />, checked: agent.projectId === project.id, onSelect: () => { actions.onMove(agent, project.id); setAnnouncement(`${agent.name}'s new conversations start in ${project.name}.`) } })),
+    ...projects.map((project) => ({ label: project.name, icon: <ProjectIcon project={project} size={15} />, checked: agent.projectId === project.id, onSelect: () => { actions.onMove(agent, project.id); setAnnouncement(`${agent.name}'s new conversations start in ${project.name}.`) } })),
     { label: 'No project', icon: <FolderOpen size={15} />, checked: !agent.projectId, onSelect: () => { actions.onMove(agent, null); setAnnouncement(`${agent.name}'s new conversations start with no project.`) } },
   ]
   /** What sits under the pointer during a drag: a row edge, or nothing. */
@@ -379,7 +377,6 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
           if (next) document.querySelector<HTMLButtonElement>(`.team-row[data-agent-id="${CSS.escape(next.id)}"]`)?.focus()
         }
       }}>
-      <HazeAura status={waiting ? 'needs' : auraStatusFor(status.mood)} color={agentColorHex(agent.color)} selected={selected} manager={isManager(agent)} />
       <span className="team-row-avatar">
         <BlobCanvas color={agentColorHex(agent.color)} size={haze ? 20 : 50} mood={status.mood} look={agentLook(agent)} label={agent.name} track={selected} />
         {isManager(agent) && <span className="leader-badge" title="Manager" aria-hidden="true"><Star size={10} fill="currentColor" strokeWidth={0} /></span>}
@@ -389,7 +386,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
         <span className="bot-row-line">
           <span className="team-row-name">{runtimeLogos && !haze && <RuntimeMark provider={runtime?.provider} />}<strong>{agent.name}</strong><RuntimeProblemMarker runtime={runtime} inline idSuffix={agent.id} showTooltip={runtimeTooltipAgentId === agent.id} />{agent.role?.trim() && <span className="role-chip">{agent.role.trim()}</span>}</span>
           {(unread || approval) && <i className={`unread-dot ${approval ? 'approval' : ''}`} aria-hidden="true" />}
-          {haze && (waiting || failed) ? <span className={`haze-row-state ${waiting ? 'needs' : 'failed'}`}>{waiting ? 'Needs you' : 'Failed'}</span> : session?.updatedAt && <time>{shortTime(session.updatedAt)}</time>}
+          {haze && (waiting || failed || working) ? <span className={`haze-row-state ${waiting ? 'needs' : failed ? 'failed' : 'working'}`}>{waiting ? 'Needs you' : failed ? 'Failed' : 'Working'}</span> : session?.updatedAt && <time>{shortTime(session.updatedAt)}</time>}
         </span>
         <span className="bot-row-line"><span className={`bot-row-preview ${waiting ? 'waiting' : working ? 'active' : ''}`}>{preview}</span></span>
       </span>
@@ -402,7 +399,6 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
       <span>Search</span><kbd aria-hidden="true">Ctrl K</kbd>
     </button>
     {banner}
-    {needsYou}
     <nav className="sidebar-scroll" aria-label={Nouns} data-tour="roster"><div role="tree" aria-label={Nouns}>
       {manager && <section className="team-group manager-group" aria-label="Manager">
         <div className="team-group-rows">{withSubbots(manager)}</div>

@@ -51,9 +51,9 @@ describe('message action toolbar', () => {
     expect([...toolbar.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Copy message text'])
   })
 
-  it('reveals on keyboard focus with the beta.28 26 px targets', () => {
+  it('reveals on keyboard focus, under the message, with 24 px targets', () => {
     expect(experimentsCss).toMatch(/\.message-action-shell:focus-within \.message-actions\s*\{[^}]*opacity:\s*1/)
-    expect(experimentsCss).toMatch(/\.message-action-button\s*\{[^}]*width:\s*26px;[^}]*height:\s*26px/)
+    expect(experimentsCss).toMatch(/\.message-action-button\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px/)
   })
 
   it('supports keyboard opening, arrow navigation, Escape restoration and exact-text copy', async () => {

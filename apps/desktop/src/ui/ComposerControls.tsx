@@ -1,7 +1,7 @@
 // Composer footer controls: permission mode, attachment tray and the shared
 // popover behaviour used by the model, effort and context controls.
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { Check, ChevronDown, FilePenLine, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, Sparkles, X, CircleAlert } from 'lucide-react'
+import { ClipboardList, Check, ChevronDown, FilePenLine, FileText, Hand, ImageIcon, ImageOff, LoaderCircle, Paperclip, Plus, ShieldCheck, Sparkles, X, CircleAlert } from 'lucide-react'
 import type { Agent, ApprovalMode, Session } from '../types'
 import { parseApprovalMode } from '../approvalContract'
 import { rpc } from '../tauri'
@@ -66,6 +66,8 @@ export function permissionWrite(next: ApprovalMode, botMode: ApprovalMode): Appr
   return next === botMode ? null : next
 }
 
+const PLAN_DETAIL = 'Proposes a plan before changing anything.'
+
 function ModeIcon({ mode, size = 14 }: { mode: ApprovalMode; size?: number }) {
   if (mode === 'bypass') return <CircleAlert size={size} aria-hidden="true" />
   if (mode === 'accept_edits') return <FilePenLine size={size} aria-hidden="true" />
@@ -73,7 +75,11 @@ function ModeIcon({ mode, size = 14 }: { mode: ApprovalMode; size?: number }) {
   return <Hand size={size} aria-hidden="true" />
 }
 
-export function PermissionModeControl({ session, agent, disabled, locked = false, note, onSessionUpdated, onAgentUpdated, onError }: {
+export function PermissionModeControl({ session, agent, disabled, locked = false, note, planOn = false, planDisabled = false, onPlanChange, onSessionUpdated, onAgentUpdated, onError }: {
+  /** Plan mode sits in this menu beside the permission modes. Absent: the menu offers only the modes. */
+  planOn?: boolean
+  planDisabled?: boolean
+  onPlanChange?: (enabled: boolean) => void
   session: Session
   agent: Agent | null
   disabled: boolean
@@ -126,9 +132,11 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
       }
     } catch (reason) { onSessionUpdated(before); onError(reason) } finally { setSaving(false) }
   }
+  const choosePlan = () => { close(true); if (!planOn) onPlanChange?.(true) }
   const choose = (next: ApprovalMode) => {
     close(true)
-    if (next === mode && pinned) return
+    if (planOn) onPlanChange?.(false)
+    if (next === mode && (pinned || planOn)) return
     if (next === 'bypass') { setConfirmBypass(true); return }
     void apply(permissionWrite(next, blobMode))
   }
@@ -137,20 +145,24 @@ export function PermissionModeControl({ session, agent, disabled, locked = false
   // so the side-conversation pill says who set it.
   const managerSet = session.modelLock?.approvalModeSource === 'manager' && pinned
   return <div ref={rootRef} className="composer-popover-anchor">
-    <button ref={triggerRef} type="button" className={`composer-pill permission-pill mode-${mode}`} aria-haspopup="menu" aria-expanded={open} aria-label={`Permissions: ${copy.title}${pinned ? ', set for this conversation' : `, ${noun} default`}${managerSet ? ', set by the Manager' : ''}`} title={locked ? LOCKED_CONTROL_TOOLTIP : copy.detail} disabled={disabled || saving} onClick={() => setOpen((value) => !value)}>
-      {saving ? <LoaderCircle size={14} className="spinning" aria-hidden="true" /> : <ModeIcon mode={mode} />}
-      <span>{copy.label}</span>
+    <button ref={triggerRef} type="button" className={`composer-pill permission-pill mode-${planOn ? 'plan' : mode}`} data-tour="plan" aria-haspopup="menu" aria-expanded={open} aria-label={`${planOn ? 'Mode: Plan. ' : ''}Permissions: ${copy.title}${pinned ? ', set for this conversation' : `, ${noun} default`}${managerSet ? ', set by the Manager' : ''}`} title={locked ? LOCKED_CONTROL_TOOLTIP : planOn ? PLAN_DETAIL : copy.detail} disabled={disabled || saving} onClick={() => setOpen((value) => !value)}>
+      {saving ? <LoaderCircle size={14} className="spinning" aria-hidden="true" /> : planOn ? <ClipboardList size={14} aria-hidden="true" /> : <ModeIcon mode={mode} />}
+      <span>{planOn ? 'Plan' : copy.label}</span>
       {managerSet && <small className="permission-pill-source">set by the Manager</small>}
       <ChevronDown size={12} aria-hidden="true" className="composer-pill-chevron" />
     </button>
-    {open && <div ref={menuRef} className="composer-menu permission-menu align-left" role="menu" aria-label="Permissions for this conversation" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
-      <div className="composer-menu-heading">Permissions</div>
-      {(['ask', 'accept_edits', 'auto', 'bypass'] as const).map((item) => <button key={item} type="button" role="menuitemradio" aria-checked={item === mode} className={`composer-menu-item rich mode-${item}`} onClick={() => choose(item)}>
+    {open && <div ref={menuRef} className="composer-menu permission-menu align-left" role="menu" aria-label="Mode for this conversation" onKeyDown={(event) => { if (moveMenuFocus(menuRef.current, event.key)) event.preventDefault() }}>
+      <div className="composer-menu-heading">Mode</div>
+      {(['ask', 'accept_edits', 'auto', ...(onPlanChange ? ['plan'] as const : []), 'bypass'] as const).map((item) => item === 'plan' ? <button key={item} type="button" role="menuitemradio" aria-checked={planOn} disabled={planDisabled && !planOn} title={planDisabled && !planOn ? 'Plan mode can change once this turn ends.' : undefined} className="composer-menu-item rich mode-plan" onClick={choosePlan}>
+        <span className="composer-menu-icon"><ClipboardList size={15} aria-hidden="true" /></span>
+        <span className="composer-menu-text"><strong>Plan</strong><small>{PLAN_DETAIL}</small></span>
+        {planOn && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
+      </button> : <button key={item} type="button" role="menuitemradio" aria-checked={item === mode && !planOn} className={`composer-menu-item rich mode-${item}`} onClick={() => choose(item)}>
         <span className="composer-menu-icon"><ModeIcon mode={item} size={15} /></span>
         <span className="composer-menu-text"><strong>{APPROVAL_MODE_COPY[item].title}{item === blobMode && <small className="composer-menu-tag">{Noun} default</small>}</strong><small>{APPROVAL_MODE_COPY[item].detail}</small></span>
-        {item === mode && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
+        {item === mode && !planOn && <Check size={14} className="composer-menu-check" aria-hidden="true" />}
       </button>)}
-      <p className="composer-menu-note">{note ?? (session.projectApprovalMode ? 'This project sets its own approvals, so this changes only this conversation.' : `Applies to this ${noun} from now on, starting with the next message. A turn already running keeps the mode it started with.`)}</p>
+      <p className="composer-menu-note">{note ?? (session.projectApprovalMode ? 'This project sets its own approvals, so this changes only this conversation.' : `Applies to this ${noun} from the next message.`)}</p>
     </div>}
     {confirmBypass && <ConfirmDialog title="Give this conversation full access?" body={`The agent will run commands and change files without asking you. Cancel and Pause all still stop it. This is the ${noun}'s own setting, so every conversation is affected.`} confirmLabel="Allow full access" cancelLabel="Keep asking" onConfirm={() => { setConfirmBypass(false); void apply(permissionWrite('bypass', blobMode)) }} onCancel={() => setConfirmBypass(false)} />}
   </div>

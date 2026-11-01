@@ -61,8 +61,10 @@ describe('browser platform', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 
     // The page itself still renders.
-    expect(host.textContent).toContain('Run setup again')
-    expect(host.textContent).toContain('Experimental')
+    expect(host.textContent).toContain('Bots working at once')
+    expect(host.textContent).not.toContain('Experimental')
+    // Nowhere to go for a companion that can't exist here.
+    expect(host.querySelector('.settings-nav')?.textContent).not.toContain('Companion')
     // Autostart, tray and companion rows are gone.
     expect(host.querySelector('[aria-label="Start with Windows"]')).toBeNull()
     expect(host.querySelector('[aria-label="Close to tray"]')).toBeNull()
@@ -73,7 +75,6 @@ describe('browser platform', () => {
     expect(host.querySelector('[aria-label="Companion start position"]')).toBeNull()
     // The editor group is gone.
     expect(host.querySelector('[aria-label="Editor executable"]')).toBeNull()
-    expect(groupTitles()).not.toContain('Companion')
     expect(groupTitles()).not.toContain('Editor')
 
     // The profile menu holds no Quit.
@@ -86,7 +87,7 @@ describe('browser platform', () => {
     await act(async () => { setPlatform(PREVIEW_PLATFORM) })
     expect(host.querySelector('[aria-label="Start with Windows"]')).not.toBeNull()
     expect(host.querySelector('[aria-label="Editor executable"]')).not.toBeNull()
-    expect(groupTitles()).toContain('Companion')
+    expect(host.querySelector('.settings-nav')?.textContent).toContain('Companion')
     expect(groupTitles()).toContain('Editor')
     expect(host.querySelector('[role="menu"]')!.textContent).toContain('Quit')
   })

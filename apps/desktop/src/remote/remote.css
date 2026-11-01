@@ -93,7 +93,7 @@ button, input, textarea { font: inherit; }
 .rm-msg.assistant { align-self: flex-start; background: var(--surface-raised); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
 .rm-approval { margin: 0 12px 8px; }
 .rm-approval .permission-card { margin: 0; max-width: none; }
-.rm-approval.locked { padding: 12px; display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--permission-line); border-radius: 14px; background: var(--surface-permission); color: var(--status-working-text); }
+.rm-approval.locked { padding: 12px; display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); color: var(--status-working-text); }
 .rm-approval.locked div { display: grid; gap: 3px; }
 .rm-approval.locked strong { color: var(--text-1); font-size: 14px; }
 .rm-approval.locked small { color: var(--text-2); font-size: 12.5px; line-height: 1.5; }
@@ -195,3 +195,5 @@ button, input, textarea { font: inherit; }
 [data-layout="wide"] .rm-connect, [data-layout="wide"] .rm-waiting { width: min(420px, 100%); align-self: center; box-sizing: border-box; }
 [data-layout="wide"] .rm-msg { max-width: min(80%, 800px); }
 [data-layout="wide"] .rm-log { padding: 24px; }
+/* Amber is a word, not a glowing box. */
+.rm-need { border: 0 !important; background: transparent !important; padding-inline: 4px !important; color: var(--status-working-text, var(--status-working)); }

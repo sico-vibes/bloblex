@@ -27,7 +27,7 @@ Work for the bots can also be tracked on the **Tasks** board, opened from the si
 
 ## What you see
 
-The main window is three columns: bots and projects, conversations, and the conversation itself. A details panel can show the coding agent, files and conversation facts. Settings holds general preferences, appearance, experimental features, remote, agents, the Manager, memory, skills, speech, backup and updates.
+The main window is three columns: bots and projects, conversations, and the conversation itself. A details panel can show the coding agent, files and conversation facts. Settings has ten tabs in four groups: App, Bots, Connections and System.
 
 The two **looks** change the whole app: Bitbots (Frost) and Blobots. A bot's **art** is separate: 3D robot, 2D robot, Glossy or Hand-painted. The look decides the default art for a bot that has not chosen one; an explicit choice always wins.
 

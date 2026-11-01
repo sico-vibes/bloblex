@@ -133,7 +133,7 @@ export function ProjectSettingsDialog({ project, runtimes, onClose, onSaved }: {
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className="blob-dialog new-project project-settings" role="dialog" aria-modal="true" aria-labelledby="project-settings-title" tabIndex={-1}>
       <h2 id="project-settings-title">{project.name} settings</h2>
-      <p>These apply to every bot working in this project. A conversation you set yourself still keeps its own choice.</p>
+      <p>For every bot in this project. A conversation you set yourself keeps its own choice.</p>
       <label className="new-project-field"><span>Approvals</span>
         <Select ariaLabel="Approvals in this project" variant="muted" value={mode} onChange={(value) => { setMode(value); setAccepted(false) }} options={MODE_OPTIONS} />
       </label>
@@ -145,11 +145,11 @@ export function ProjectSettingsDialog({ project, runtimes, onClose, onSaved }: {
       </div>
       <label className="new-project-field"><span>Setup script</span>
         <textarea className="project-setup-script" rows={3} value={script} maxLength={MAX_SETUP_SCRIPT_CHARS} spellCheck={false} placeholder="npm install" onChange={(event) => setScript(event.target.value)} />
-        <small className="project-settings-note">Runs with cmd on this computer each time a conversation gets its own copy of this repository, before its first turn. If it fails, the bot is told and carries on.</small>
+        <small className="project-settings-note">Runs when a conversation gets its own copy, before its first turn.</small>
       </label>
       <label className="new-project-field"><span>Files to copy into each new copy</span>
         <textarea className="project-setup-script" rows={2} value={copyText} spellCheck={false} placeholder=".env.local" aria-invalid={!!copy.problem} onChange={(event) => setCopyText(event.target.value)} />
-        <small className="project-settings-note">One path per line, inside the project. Git doesn't copy ignored files like these. An existing file is never overwritten.</small>
+        <small className="project-settings-note">One path per line. An existing file is never overwritten.</small>
         {copy.problem && <small className="new-project-error" role="alert">{copy.problem}</small>}
       </label>
       <label className="new-project-check"><input type="checkbox" checked={submodules} onChange={(event) => setSubmodules(event.target.checked)} /><span>Set up git submodules in each new copy</span></label>

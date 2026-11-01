@@ -306,7 +306,7 @@ export function RemoteApp({ device: deviceProp, pollMs = PAIR_POLL_MS }: { devic
         <main className="rm-main">
           {wide && screen === 'bots' && <section className="rm-empty-chat"><h2>Choose a {noun}</h2><p>Open a conversation from the list.</p></section>}
           {screen === 'chat' && activeAgent && <ChatScreen key={activeSession?.id ?? 'none'} agent={activeAgent} session={activeSession} permissions={snapshot?.permissions ?? []} hostName={hostName} online={online} tier={tier}
-            canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} nouns={nouns} agents={agents} />}
+            canApprove={tier === 'operator' && me?.approvalsFromRemote === true} quiet={me?.quietHoursActive === true} agents={agents} />}
           {screen === 'device' && me && <DeviceScreen me={me} noun={noun} onLogout={() => void logout()} layoutOverride={override} onLayoutChange={changeOverride} />}
         </main>
         </div>
@@ -453,8 +453,8 @@ function BotsScreen({ hostName, agents, sessions, runtimes, online, loaded, wait
   </section>
 }
 
-function ChatScreen({ agent, session, permissions, hostName, online, tier, canApprove, quiet, nouns, agents = [] }: {
-  agent: Agent; session: Session | null; permissions: PermissionRequest[]; hostName: string; online: boolean; tier: RemoteTier; canApprove: boolean; quiet: boolean; nouns: string; agents?: readonly Agent[]
+function ChatScreen({ agent, session, permissions, hostName, online, tier, canApprove, quiet, agents = [] }: {
+  agent: Agent; session: Session | null; permissions: PermissionRequest[]; hostName: string; online: boolean; tier: RemoteTier; canApprove: boolean; quiet: boolean; agents?: readonly Agent[]
 }) {
   const [draft, setDraft] = useState('')
   const [sent, setSent] = useState<Array<{ id: string; text: string }>>([])
@@ -501,7 +501,7 @@ function ChatScreen({ agent, session, permissions, hostName, online, tier, canAp
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
       <button type="submit" className="rm-send" aria-label="Send" disabled={!canSend || !draft.trim()}><Send size={17} aria-hidden="true" /></button>
     </form>
-    <p className="rm-tier">{TIER_WORD[tier]} · a message here runs on {hostName}, within its approval mode. Your {nouns} never leave it.</p>
+    <p className="rm-tier">{TIER_WORD[tier]} · runs on {hostName}</p>
   </section>
 }
 

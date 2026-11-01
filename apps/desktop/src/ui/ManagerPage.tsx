@@ -3,7 +3,7 @@
 // stay when the Manager's model changes. The Manager can only propose changes
 // to a locked fact or to the playbook; edits made here apply at once.
 import { useCallback, useEffect, useState } from 'react'
-import { Lock, LockOpen, Pencil, Plus, RotateCcw, Trash2, BriefcaseBusiness } from 'lucide-react'
+import { AtSign, BadgeCheck, BriefcaseBusiness, Clock, Hash, Languages, Lock, LockOpen, MessageCircle, Pencil, Plus, RotateCcw, Trash2, UserRound, Wrench } from 'lucide-react'
 import type { Agent, ManagerFact, PlaybookVersion } from '../types'
 import { listenForDaemonEvents, rpc } from '../tauri'
 import { rpcFailure } from '../executionContract'
@@ -62,6 +62,13 @@ function FactForm({ draft, busy, onSave, onCancel }: { draft: FactDraft; busy: b
   </form>
 }
 
+/** A small picture for the things the Manager commonly knows, so a label never reads like its value. */
+function FactIcon({ name }: { name: string }) {
+  const key = name.toLowerCase()
+  const Icon = /name/.test(key) ? UserRound : /role|job|work|title/.test(key) ? BriefcaseBusiness : /tone|voice|style|talk/.test(key) ? MessageCircle : /lang/.test(key) ? Languages : /time|zone|hour/.test(key) ? Clock : /mail|handle|contact/.test(key) ? AtSign : /tool|stack|editor/.test(key) ? Wrench : /prefer|like|value/.test(key) ? BadgeCheck : Hash
+  return <Icon size={12} aria-hidden="true" />
+}
+
 export function ManagerPage({ manager, connected = true, onOpenManager, agents = [], onOpenSession }: { manager: Agent | null; connected?: boolean; onOpenManager: (agentId: string) => void; agents?: readonly Agent[]; onOpenSession?: (sessionId: string) => void }) {
   const [facts, setFacts] = useState<ManagerFact[] | null>(null)
   const [versions, setVersions] = useState<PlaybookVersion[]>([])
@@ -113,12 +120,11 @@ export function ManagerPage({ manager, connected = true, onOpenManager, agents =
 
   const groups = groupFacts(facts ?? [])
   return <>
-    <p className="settings-intro">Your Manager keeps notes about you and a playbook for how it works. They stay when you change its model, so a new model picks up where the old one left off.</p>
     {problem && <p className="settings-banner error" role="alert">{problem}</p>}
 
-    <SettingsGroup title="Manager">
+    <SettingsGroup title="Profile">
       {manager
-        ? <SettingsRow label={<span className="manager-identity"><BriefcaseBusiness size={14} aria-hidden="true" />{manager.name}</span>} hint={`${manager.model ? `${manager.model} · ` : ''}Name, look, model and personality are set on its page. Changing the model starts a fresh conversation; it keeps everything below.`}>
+        ? <SettingsRow label={<span className="manager-identity"><BriefcaseBusiness size={14} aria-hidden="true" />{manager.name}</span>} hint={`${manager.model ? `${manager.model}. ` : ''}Name, look, model and personality are on its page. Changing the model keeps everything below.`}>
           <button type="button" className="secondary-button small" onClick={() => onOpenManager(manager.id)}>Open</button>
         </SettingsRow>
         : <SettingsRow label="No Manager yet" hint="Set one up from the card at the top of the sidebar. It plans the work with you and asks before it creates anything." />}
@@ -140,7 +146,7 @@ export function ManagerPage({ manager, connected = true, onOpenManager, agents =
               ? <FactForm draft={editingFact} busy={busy} onSave={(draft) => void saveFact(draft)} onCancel={() => setEditingFact(null)} />
               : <>
                 <span className="manager-fact-copy">
-                  <strong>{fact.key}</strong>
+                  <strong className="manager-fact-key"><FactIcon name={fact.key} />{fact.key}</strong>
                   <span>{fact.value}</span>
                   <small>{SOURCE_WORD[fact.source] ?? fact.source}{fact.updatedAt ? ` · ${when(fact.updatedAt)}` : ''}</small>
                 </span>

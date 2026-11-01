@@ -351,11 +351,10 @@ button.compact-copy:active { transform: none; }
 .companion-elapsed { flex: 0 0 auto; color: var(--c-dim-3); font: 500 var(--fs-2xs) var(--c-font); font-style: normal; font-variant-numeric: tabular-nums; }
 
 /* ── C10: chat copy, Load earlier and the New messages pill ───────────── */
-.chat-row { align-items: center; gap: 4px; }
+.chat-row { flex-direction: column; align-items: flex-start; gap: 1px; }
+.chat-row.user { align-items: flex-end; }
 .chat-row:hover .message-actions, .chat-row:focus-within .message-actions, .chat-row .message-actions.open { opacity: 1; }
 .chat-row .message-actions.compact .message-action-time { position: static; margin: 0 0 0 4px; }
-.chat-row.user .message-actions.compact { order: -1; flex-direction: row-reverse; }
-.chat-row.user .message-actions.compact .message-action-time { margin: 0 4px 0 0; }
 .chat-row .message-actions .message-action-button { color: var(--c-dim-3); }
 .chat-row .message-actions .message-action-button:hover:not(:disabled) { color: var(--c-ink); }
 .chat-row.peer-message { flex-direction: column; align-items: flex-start; gap: 3px; }

@@ -1,5 +1,5 @@
 /* The Manager's assignments: one flat card per run of messages sent in a turn (DelegationGroup.tsx). Status colour only while something is happening. */
-.delegation-group { width: min(640px, 100%); margin: 6px auto 4px; color: var(--text-1); }
+.delegation-group { width: min(680px, 100%); margin: 6px auto 4px; color: var(--text-1); }
 .delegation-chip-row { margin: 0; }
 .delegation-head { max-width: 100%; height: 28px; gap: 7px; }
 .delegation-head:focus-visible, .delegation-row-toggle:focus-visible, .delegation-open:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -14,8 +14,6 @@
 .delegation-art-fallback { display: inline-grid; place-items: center; border-radius: var(--radius-sm); background: var(--surface-selected-strong); color: var(--text-1); font-size: 11px; font-weight: 700; }
 .delegation-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .delegation-summary { flex: 0 0 auto; color: var(--text-3); font-style: normal; font-variant-numeric: tabular-nums; }
-.delegation-group.attention .delegation-summary { color: var(--warning); }
-.delegation-group.failed:not(.attention) .delegation-summary { color: var(--danger-ink); }
 .delegation-list { margin: 6px 0 0; padding: 4px 0; list-style: none; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .delegation-row { padding: 2px 0; }
 .delegation-row + .delegation-row { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }

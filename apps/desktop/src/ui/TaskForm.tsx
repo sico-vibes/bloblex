@@ -138,7 +138,7 @@ export function TaskForm({ task, agents, projects, connected, heading, headingId
         <button type="button" className="secondary-button small task-add-image" disabled={images.length >= MAX_COMPOSER_ATTACHMENTS} onClick={() => fileInput.current?.click()}><ImagePlus size={14} aria-hidden="true" />Add image</button>
         <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden tabIndex={-1} aria-hidden="true" onChange={(event) => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; if (files.length) addFiles(files) }} />
       </div>
-      <small className="task-hint">Choose, paste or drop up to {MAX_COMPOSER_ATTACHMENTS} images. They go to the bot with the task.</small>
+      <small className="task-hint">Choose, paste or drop up to {MAX_COMPOSER_ATTACHMENTS} images.</small>
     </div>
     <div className="task-field-row">
       <div className="blob-field"><span>Project</span><Select ariaLabel="Project" variant="field" value={projectId} placeholder="No project" onChange={setProjectId} options={[{ value: '', label: 'No project' }, ...projects.map((project) => ({ value: project.id, label: project.name }))]} /></div>

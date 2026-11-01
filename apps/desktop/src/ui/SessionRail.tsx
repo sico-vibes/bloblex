@@ -5,7 +5,7 @@
 // says differs from HEAD now, whoever made the change, with what the conversation's
 // own coding agent reported kept alongside for anything Git no longer lists.
 import { useEffect, useState, type ReactNode } from 'react'
-import { Bot, ChevronDown, ChevronRight, CircleAlert, Code2, Copy, FileText, FolderOpen, GitBranch, Monitor, Smartphone } from 'lucide-react'
+import { Bot, ChevronDown, ChevronRight, CircleAlert, Code2, Copy, FileText, FolderOpen, GitBranch, Smartphone } from 'lucide-react'
 import type { Agent, JsonRecord, Session } from '../types'
 import { rpc } from '../tauri'
 import { HelpTip } from './SettingsParts'
@@ -177,32 +177,29 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
     const note = fileNote(file)
     // Anything Git lists opens in the review screen, which reads the whole diff itself.
     const reviewable = !!onReview && file.source === 'repository' && !!file.relative
-    return <li key={file.key} className="rail-file" data-source={file.source}>
+    return <li key={file.key} className="rail-file" data-source={file.source} data-change={file.change ?? undefined}>
       <button type="button" className="rail-file-open" title={reviewable ? `Review ${file.relative}` : reason ?? (file.truncated ? `View the shortened diff for ${file.relative ?? file.path}` : `View the diff for ${file.relative ?? file.path}`)} aria-disabled={reason && !reviewable ? true : undefined} disabled={!!reason && !reviewable} onClick={() => { if (reviewable && file.relative) onReview?.(file.relative); else if (file.diff) onDiff(file.path, file.diff) }}>
-        <FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.relative ?? file.path}>{file.name}</span>{note && <span className="rail-tag" title={reason ?? undefined}>{note}</span>}
+        <FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.relative ?? file.path}>{file.name}</span>{note && <span className={note === 'deleted' ? 'sr-only' : 'rail-tag'}>{note}</span>}
       </button>
-      {!file.binary && file.added !== null && <em className="rail-add">+{lines(file.added)}</em>}
-      {!file.binary && file.removed !== null && <i className="rail-del">−{lines(file.removed)}</i>}
+      {!file.binary && !!file.added && <em className="rail-add">+{lines(file.added)}</em>}
+      {!file.binary && !!file.removed && <i className="rail-del">−{lines(file.removed)}</i>}
       {fileButtons(file)}
     </li>
   }
-  const changesAside = total > 0 || canPr || !!onCreatePr && view.fromRepository
+  const changesAside = total > 0
     ? <span className="rail-card-aside">
       {view.fromRepository && total > 0 && <span className="rail-diffstat" aria-label={`${lines(view.added)} lines added, ${lines(view.removed)} removed`}><em>+{lines(view.added)}</em> <i>−{lines(view.removed)}</i></span>}
       {!view.fromRepository && view.earlier.length > 0 && <span className="rail-diffstat"><em>+{lines(view.added)}</em> <i>−{lines(view.removed)}</i></span>}
-      {onReview && view.fromRepository && view.repository.length > 0 && <button type="button" className="rail-pr" title="Review these changes, stage them and comment for the bot" onClick={() => onReview(null)}>Review</button>}
-      {onCreatePr && view.fromRepository && <button type="button" className="rail-pr" disabled={!canPr} title={prTitle} onClick={() => repo && onCreatePr(repo)}>Create PR</button>}
     </span>
     : undefined
 
   return <div className="session-rail">
     {workingBots}
     <Card id="environment" title="Environment" aside={runtimeFacts ? <HelpTip text={runtimeFacts} align="end" placement="bottom" /> : undefined}>
-      <div className="rail-row"><Monitor size={13} aria-hidden="true" /><span className="rail-row-main">{environment?.host ?? 'This computer'}</span></div>
       {folderName && <div className="rail-row"><FolderOpen size={13} aria-hidden="true" /><span className="rail-row-main" title={projectPath ?? undefined}>{folderName}</span>{projectPath && platform.editor && <button type="button" className="rail-link" onClick={() => onOpenFolder(projectPath)}>Open</button>}</div>}
       {appliedModel && <div className="rail-row"><Bot size={13} aria-hidden="true" /><span className="rail-row-main" title="The model the coding agent reported using">{appliedModel}</span></div>}
       {branch && <div className="rail-row"><GitBranch size={13} aria-hidden="true" /><span className="rail-row-main" title="The branch the repository has checked out now">{branch}</span>{detached && <span className="rail-tag">detached</span>}</div>}
-      {remote.available === true && remote.status && <div className="rail-row rail-remote">
+      {remote.available === true && remote.status?.enabled && <div className="rail-row rail-remote">
         <Smartphone size={13} aria-hidden="true" />
         <span className="rail-row-main" title={remote.status.enabled && remote.status.url ? remote.status.url : undefined}>Remote{remote.status.enabled ? ` · ${remote.status.connectedCount} of ${remote.status.deviceCount} connected` : ' · off'}</span>
         <button type="button" role="switch" aria-checked={remote.status.enabled} aria-label="Remote" title={remote.status.enabled ? 'Turn Remote off' : 'Turn Remote on in Settings › Remote'} className={`toggle small ${remote.status.enabled ? 'on' : ''}`} disabled={remoteBusy || remote.status.link === 'starting'}
@@ -234,16 +231,20 @@ export function SessionRail({ session, usage, appliedModel, onOpenFile, onReveal
       </dl>}
     </Card>
 
-    <Card id="outputs" title="Outputs">
-      {outputs.length === 0 ? <p className="rail-note">{repository.loading ? 'Looking for new files…' : 'New files in this repository, and files this conversation creates, appear here.'}</p> : <>
+    {outputs.length > 0 && <Card id="outputs" title="Outputs">
+      <>
         <ul className="rail-files">{visibleOutputs.map((file) => <li key={file.key} className="rail-file"><FileText size={13} aria-hidden="true" /><span className="rail-file-name" title={file.relative ?? file.path}>{file.name}</span>{fileButtons(file)}</li>)}</ul>
         {outputs.length > 5 && <button type="button" className="rail-link" onClick={() => setShowAllOutputs((value) => !value)}>{showAllOutputs ? 'Show less' : `Show ${outputs.length - 5} more`}</button>}
-      </>}
-    </Card>
+      </>
+    </Card>}
 
     <Card id="changes" title="Changes" aside={changesAside}>
       {repository.loading && !repo && <div className="rail-loading" role="status" aria-busy="true"><span className="sr-only">Reading the repository…</span><Skeleton lines={3} variant="row" /></div>}
-      {view.fromRepository && repo && <p className="rail-context" title={repo.repoRoot ?? undefined}><GitBranch size={12} aria-hidden="true" /><span><b>{repo.detached ? 'Detached HEAD' : repo.branch ?? 'No branch'}</b>{repoName ? ` · ${repoName}` : ''}. Every uncommitted change in this repository, not only this conversation's.</span></p>}
+      {view.fromRepository && repo && repo.files.length > 0 && <p className="rail-scope" title={repo.repoRoot ?? undefined}>All uncommitted changes in {repoName ?? 'this repository'}, not only this conversation's.</p>}
+      {view.fromRepository && (onReview || onCreatePr) && <div className="rail-changes-actions">
+        {onReview && <button type="button" className="rail-pr" disabled={view.repository.length === 0} title="Review these changes, stage them and comment for the bot" onClick={() => onReview(null)}>Review</button>}
+        {onCreatePr && <button type="button" className="rail-pr" disabled={!canPr} title={prTitle} onClick={() => repo && onCreatePr(repo)}>Create PR</button>}
+      </div>}
       {notRepo && !readFailed && (isManager
         ? <p className="rail-note">The Manager works in its own folder, not in a project, so it has no code changes of its own. The bots it assigns show their changes in their conversations.</p>
         : <p className="rail-note">{folderName ? `${folderName} is not` : 'This folder is not'} a Git repository, so changes cannot be tracked. {view.earlier.length ? 'These are the files the coding agent reported.' : 'Files the coding agent edits appear here with their diff.'}</p>)}

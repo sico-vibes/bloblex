@@ -1,7 +1,7 @@
 // What a blob actually did during a turn: one quiet summary line under the
 // reply that opens into each step, and each step opens into its details
 // (command and output, tool input and result, search query, file and diff).
-// Shown only when Settings → Experimental → "Agent activity" is on.
+// Shown only when Settings → Chat → "Agent activity" is on.
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileText, Globe, ShieldAlert, Terminal, Wrench } from 'lucide-react'
 import type { JsonRecord } from '../types'

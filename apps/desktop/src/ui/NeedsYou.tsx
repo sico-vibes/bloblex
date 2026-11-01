@@ -1,8 +1,9 @@
-// "Needs you": every approval, question and proposal that is waiting for the owner, across all bots, in one place.
+// The bell: every approval, question and proposal that is waiting for the owner, across all bots, in one place.
 // A row only navigates to the conversation that asked. The decision itself stays on the original request there,
 // with the authority and choices that request carried; nothing here can approve, answer or decline for anyone.
-import { useMemo } from 'react'
-import { ArrowUpRight } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { ArrowUpRight, Bell } from 'lucide-react'
+import { usePopoverDismiss } from './ComposerControls'
 import type { Agent, PermissionRequest, Session } from '../types'
 import { isPendingPermissionLive } from './permissionSelection'
 import './needsYou.css'
@@ -35,22 +36,33 @@ function waited(since: number | null, now: number) {
   return minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)} h`
 }
 
-export function NeedsYou({ permissions, sessions, agents, now, onOpen }: { permissions: readonly PermissionRequest[]; sessions: readonly Session[]; agents: readonly Agent[]; now: number; onOpen: (sessionId: string) => void }) {
+/** A bell beside the sidebar's buttons. Its count says something is waiting; opening it lists what, oldest first. */
+export function NeedsYouBell({ permissions, sessions, agents, now, onOpen }: { permissions: readonly PermissionRequest[]; sessions: readonly Session[]; agents: readonly Agent[]; now: number; onOpen: (sessionId: string) => void }) {
   const items = useMemo(() => needsYouItems(permissions, sessions, agents, now), [permissions, sessions, agents, now])
-  if (!items.length) return null
-  const label = items.length === 1 ? '1 request is waiting for you' : `${items.length} requests are waiting for you`
-  return <section className="sidebar-attention" aria-label={label}>
-    <h3 className="sidebar-attention-head"><span>Needs you</span><b aria-hidden="true">{items.length}</b></h3>
-    <ul>{items.map((item) => {
-      const name = item.agent?.name ?? 'A bot'
-      const age = waited(item.since, now)
-      return <li key={item.permission.id}>
-        <button type="button" className="sidebar-attention-row" onClick={() => onOpen(item.sessionId)} aria-label={`${name}: ${item.kind === 'question' ? 'question' : item.kind === 'proposal' ? 'proposal' : 'approval'}, ${item.summary || 'open to read it'}. Open the request.`}>
-          <span className="sidebar-attention-copy"><strong title={item.summary}>{item.summary || 'Open request'}</strong><span>{name} · {item.kind === 'question' ? 'Question' : item.kind === 'proposal' ? 'Proposal' : 'Approval'}</span></span>
-          {age && <time>{age}</time>}
-          <ArrowUpRight size={12} aria-hidden="true" />
-        </button>
-      </li>
-    })}</ul>
-  </section>
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const close = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus()) }
+  usePopoverDismiss(open, rootRef, close)
+  const label = items.length === 0 ? 'Nothing needs you' : items.length === 1 ? '1 request is waiting for you' : `${items.length} requests are waiting for you`
+  return <div ref={rootRef} className="needs-bell">
+    <button ref={triggerRef} type="button" className={`icon-button${open ? ' active' : ''}`} aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+      <Bell size={16} aria-hidden="true" />
+      {items.length > 0 && <b className="needs-bell-count" aria-hidden="true">{items.length > 9 ? '9+' : items.length}</b>}
+    </button>
+    {open && <section className="menu-surface needs-bell-panel" role="dialog" aria-label={label}>
+      {items.length === 0 ? <p className="needs-bell-empty">Nothing needs you.</p> : <ul>{items.map((item) => {
+        const name = item.agent?.name ?? 'A bot'
+        const kind = item.kind === 'question' ? 'Question' : item.kind === 'proposal' ? 'Proposal' : 'Approval'
+        const age = waited(item.since, now)
+        return <li key={item.permission.id}>
+          <button type="button" className="needs-bell-row" onClick={() => { close(false); onOpen(item.sessionId) }} aria-label={`${name}: ${kind.toLowerCase()}, ${item.summary || 'open to read it'}. Open the request.`}>
+            <span className="needs-bell-copy"><strong title={item.summary}>{item.summary || 'Open request'}</strong><span>{name} · {kind}</span></span>
+            {age && <time>{age}</time>}
+            <ArrowUpRight size={12} aria-hidden="true" />
+          </button>
+        </li>
+      })}</ul>}
+    </section>}
+  </div>
 }

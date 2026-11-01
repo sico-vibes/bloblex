@@ -6,7 +6,7 @@
 
 ## Before you start
 
-Automations and skills are on by default. Memory is behind an experimental switch (Settings › Experimental, **Memory**) because it changes what a bot sees in a prompt. Skills need a folder with a `SKILL.md`, or a skill folder from a coding agent.
+Automations and skills are on by default. Memory has its own switch (Settings › Memory and skills, **Memory**) because it changes what a bot sees in a prompt. Skills need a folder with a `SKILL.md`, or a skill folder from a coding agent.
 
 All three are stored by Bitbots on this computer. None of them needs an account beyond the bot's normal coding agent, and none of their writes are available to a remote device.
 
@@ -53,7 +53,7 @@ Memory is a set of durable notes with a scope:
 
 A note has a kind (fact, preference, decision, procedure or reference), a title, a body up to 2,000 characters, up to 8 tags, an importance from 0 to 100, and a pinned flag. There are limits of 300 live notes per scope and 1,000 overall.
 
-Turn the feature on in Settings › Experimental. With it off, no memory tools are listed and nothing is added to prompts, but you can still read and write notes for review on the Memory page.
+Turn the feature on in Settings › Memory and skills. With it off, no memory tools are listed and nothing is added to prompts, but you can still read and write notes for review on the Memory page.
 
 ### Who writes what
 

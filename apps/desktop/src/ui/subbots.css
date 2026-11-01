@@ -35,3 +35,4 @@
 .subbot-count { flex: none; color: var(--text-3); font-size: var(--fs-2xs); }
 .companion-fleet button { padding: 0; color: inherit; font: inherit; border: 0; background: transparent; cursor: pointer; }
 .companion-fleet button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.fleet-row-name small { font-family: inherit; }

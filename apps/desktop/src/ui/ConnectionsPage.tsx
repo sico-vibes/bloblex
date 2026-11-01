@@ -119,8 +119,8 @@ export function ConnectionsPage({ connected }: { connected: boolean }) {
   const on = !!status?.enabled
   const ago = usedAgo(status?.lastCallAt ?? null)
   return <>
-    <p className="settings-intro">Let a Claude Code session in a terminal or editor see and work with your bots, through the Bitbots MCP. It uses its own key, never your coding agents’ sign-ins, and only while this is on.</p>
-    <SettingsGroup title="Bitbots MCP">
+    <p className="settings-intro">Let a Claude Code session work with your bots. It uses its own key, never your sign-ins.</p>
+    <SettingsGroup title="Access">
       <SettingsRow label="Let outside sessions use Bitbots" hint="Sessions you connect can do what the level below allows. Turning this off cuts them off at once.">
         <button type="button" className={`toggle ${on ? 'on' : ''}`} role="switch" aria-label="Let outside sessions use Bitbots" aria-checked={on} disabled={!connected || busy || !status} onClick={() => on ? void run('external.disable', {}, 'Off. Connected sessions can no longer reach Bitbots.') : setConsent(status?.tier ?? 'chat')}><i /></button>
       </SettingsRow>

@@ -166,7 +166,7 @@ export function BlobSettings({ draft, runtimes, projects = [], errors, execution
     return () => { cancelled = true }
   }, [sessionId])
 
-  // Memory is experimental: the group only renders when the daemon says it is on.
+  // The group only renders when the daemon says Memory is on.
   useEffect(() => {
     if (memoryEnabled !== undefined) { setMemoryOn(memoryEnabled); return }
     if (!agentId) { setMemoryOn(false); return }

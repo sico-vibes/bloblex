@@ -8,7 +8,7 @@
 :root[data-density="compact"] .team-group-rows { gap: 1px; }
 :root[data-density="compact"] .chat-column { gap: 8px; }
 :root[data-density="compact"] .message-row,
-:root[data-density="compact"] .message-action-shell { margin-bottom: 2px; }
+:root[data-density="compact"] .message-action-shell { margin-bottom: 0; }
 :root[data-density="compact"] .message-row.group-start,
 :root[data-density="compact"] .message-row.user,
 :root[data-density="compact"] .message-action-shell.group-start,

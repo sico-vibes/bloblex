@@ -19,7 +19,6 @@ import { useEntityNoun } from './vocabulary'
 import { HAZE_ICONS, ICON_LABELS, LOGO_ICONS, type HazeIcon } from '../blob/haze/icons'
 import { CHARACTER_ASSETS, HAZE_CHARACTERS, isHazeCharacter } from '../blob/haze/characters'
 import { rememberLookRuntime, useLookProvider } from '../blob/haze/runtimeRegistry'
-import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
 
 type LookTab = 'style' | 'tune'
 
@@ -123,8 +122,8 @@ export function LookEditor({ look, color, colorHex, name, locked = false, runtim
     }
     return <div className="look-editor haze-look-editor" style={{ ['--look-accent' as string]: colorHex }}>
       <div className="look-stage">
-        <div className="look-stage-hero haze-look-hero"><BlobCanvas color={colorHex} size={120} mood={mood} look={look} label={`${name} preview`} /></div>
-        <div className="haze-look-row" aria-hidden="true"><HazeAura status={auraStatusFor(mood)} color={colorHex} selected /><BlobCanvas decorative color={colorHex} size={18} look={look} label={name} /><span>{name}</span></div>
+        <div className="look-stage-hero haze-look-hero"><BlobCanvas color={colorHex} size={96} mood={mood} look={look} label={`${name} preview`} /></div>
+        <div className="haze-look-row" aria-hidden="true"><BlobCanvas decorative color={colorHex} size={18} look={look} label={name} /><span>{name}</span></div>
         <div className="look-moods" role="radiogroup" aria-label="Preview status">
           {PREVIEW_MOODS.filter((item) => item.mood !== 'sleeping').map((item) => <button key={item.mood} type="button" role="radio" aria-checked={mood === item.mood} disabled={locked} className={mood === item.mood ? 'active' : undefined} onClick={() => setMood(item.mood)}>{item.label}</button>)}
         </div>

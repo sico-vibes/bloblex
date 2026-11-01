@@ -1,12 +1,12 @@
 /* Settings > Remote */
 .remote-preview-note { margin: 0 0 14px; padding: 8px 12px; color: var(--text-2); font-size: var(--fs-xs); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
-.remote-hero { margin: 0 0 20px; padding: 18px; display: flex; gap: 16px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-raised); }
+.remote-hero { margin: 0 4px; display: flex; gap: 12px; align-items: center; }
 .remote-hero h3 { margin: 0 0 6px; font-size: var(--fs-md); font-weight: 600; }
-.remote-hero p { margin: 0; color: var(--text-2); font-size: var(--fs-sm); line-height: 1.55; text-wrap: pretty; }
-.remote-hero-art { flex: 0 0 auto; height: 44px; display: flex; align-items: center; gap: 6px; color: var(--text-1); }
+.remote-hero p { margin: 0; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; text-wrap: pretty; }
+.remote-hero-art { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; color: var(--text-3); }
 .remote-hero-art svg { flex: 0 0 auto; }
 /* One even dashed link between the two devices; it moves only while Remote is on. */
-.remote-hero-art i { width: 26px; height: 2px; flex: 0 0 auto; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--text-3) 0 4px, transparent 4px 7px); }
+.remote-hero-art i { width: 16px; height: 2px; flex: 0 0 auto; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--text-3) 0 4px, transparent 4px 7px); }
 .remote-hero-art.live i { background-image: repeating-linear-gradient(90deg, var(--status-ok, var(--text-1)) 0 4px, transparent 4px 7px); animation: remote-link 1.2s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .remote-hero-art.live i { animation: none; } }
 @keyframes remote-link { to { background-position-x: 6px; } }
@@ -77,7 +77,7 @@
 .remote-method { padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .remote-method-option { min-width: 0; padding: 12px; display: flex; align-items: flex-start; gap: 10px; color: var(--text-2); text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md); background: transparent; cursor: pointer; }
 .remote-method-option:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-hover); }
-.remote-method-option.on { color: var(--text-1); border-color: var(--user-accent, var(--text-1)); background: var(--surface-selected); }
+.remote-method-option.on { color: var(--text-1); border-color: var(--line-strong); background: var(--surface-selected); }
 .remote-method-option:disabled { opacity: .5; cursor: default; }
 .remote-method-option:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .remote-method-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; background: var(--surface-raised); }

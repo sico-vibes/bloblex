@@ -31,13 +31,12 @@ describe.each([
 ])('shell CSS in $theme, Bitbots $look', ({ theme, look }) => {
   beforeEach(() => { root.setAttribute('data-theme', theme); root.setAttribute('data-bitbots', look) })
 
-  it('separates later settings groups without putting a line below a page header or above the wizard first group', () => {
+  it('separates settings groups with space alone: no line above any group', () => {
     host.innerHTML = '<div class="settings-content"><h2>Page title</h2><section class="settings-group"></section><section class="settings-group"></section></div><div class="bot-wizard-body"><section class="settings-group"></section><section class="settings-group"></section></div>'
     for (const page of host.children) {
       const groups = page.querySelectorAll('.settings-group')
       expect(getComputedStyle(groups[0]).borderTopWidth).not.toBe('1px')
-      expect(getComputedStyle(groups[1]).borderTopWidth).toBe('1px')
-      expect(getComputedStyle(groups[1]).paddingTop).toBe('20px')
+      expect(getComputedStyle(groups[1]).borderTopWidth).not.toBe('1px')
     }
   })
 

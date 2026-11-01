@@ -6,9 +6,9 @@
 .whats-new-body { min-height: 0; padding: 6px 20px 20px; overflow-y: auto; }
 .whats-new-release { padding: 16px 0; border-bottom: 1px solid var(--line); }
 .whats-new-release:last-of-type { border-bottom: 0; }
-.whats-new-release h3 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; }
+.whats-new-release h3 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); font-weight: 600; }
 .whats-new-current { padding: 1px 8px; color: var(--text-2); border-radius: var(--radius-pill); background: var(--surface-selected); font-family: inherit; font-size: var(--fs-2xs); font-weight: 500; }
 .whats-new-text { color: var(--text-2); font-size: var(--fs-sm); line-height: 1.6; }
-.whats-new-text h2 { margin: 14px 0 6px; color: var(--text-1); font-size: var(--fs-sm); }
+.whats-new-text h2, .whats-new-text h3 { margin: 14px 0 6px; color: var(--text-1); font-family: inherit; font-size: var(--fs-sm); font-weight: 600; }
 .whats-new-text ul { margin: 4px 0 8px; padding-left: 18px; }
 .whats-new-more { margin-top: 12px; }

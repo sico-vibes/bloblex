@@ -55,7 +55,7 @@ afterEach(() => { if (root) act(() => root.unmount()); host?.remove() })
 describe('MemoryPage', () => {
   it('starts empty, off, and explains that unreviewed notes stay unused', async () => {
     await mount()
-    expect(host.textContent).toContain('stay unused until you approve them')
+    expect(host.textContent).toContain('Shared notes wait for your approval')
     expect(q('.memory-empty')?.textContent).toContain('No notes yet')
     expect(q('[aria-label="Let bots use memory"]')?.getAttribute('aria-checked')).toBe('false')
   })

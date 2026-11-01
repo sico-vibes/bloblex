@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, CircleHelp, ClipboardCopy, ClipboardList, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, GitCompare, GitPullRequest, Info, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Sparkles, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
+import { Activity, Cable, Clock, Split, SquareTerminal, ListChecks, ListPlus, ArrowUp, ArrowUpRight, ChevronDown, ChevronLeft, ChevronUp, CircleAlert, ClipboardCopy, Code2, FileDown, FileText, FolderOpen, FolderInput, FolderPlus, Hash, Import, Gauge, GitCompare, GitPullRequest, LoaderCircle, MessageCircle, Maximize2, Minimize2, MoreHorizontal, PanelLeft, PanelLeftClose, PanelRight, Paperclip, Plus, RefreshCw, RotateCw, Settings2, ShieldAlert, Sparkles, Square, SquarePen, Terminal, Volume2, VolumeX, X, BriefcaseBusiness } from 'lucide-react'
 import { outsideSender } from './messageOrigin'
 import { agentLook, SHAPE_LABELS, type BlobLook } from '../blob/look'
 import { MAX_COMPANION_PEERS } from '../blob/companionLayout'
@@ -18,8 +18,6 @@ import { SchedulesView, type AutomationInput } from './SchedulesView'
 import { TasksView } from './TasksView'
 import type { DaemonSchedule } from './automationSchedule'
 import { previewSchedule } from './schedulePreview'
-import { usageTokenBuckets } from './usagePresentation'
-import { Tip } from './Tip'
 import { isPendingPermissionLive, nextPermissionDeadline, selectPendingPermission } from './permissionSelection'
 import { ApprovalCard, type PermissionReplyOptions } from './ApprovalCard'
 import bloblexLogo from '../assets/bloblex-128.png'
@@ -114,7 +112,6 @@ import { appVersion } from '../appRelease'
 import { ConnectionBanner } from './ConnectionBanner'
 import { removeUndoToast, useUndoToasts, useUndoable } from './undo'
 import { messageExcerpt, MessageActions, MessageContextMenu, MessageReactionBadges, originalMessageText, ReplyContextStrip, type ReplyTarget } from './MessageActions'
-import { Skeleton } from './Skeleton'
 import { UsageTip } from './UsageTip'
 import { appendUsageTipDismissal, parseUsageTipDismissals, selectUsageTip, type UsageTip as UsageTipModel, type UsageTipDismissal } from './usageTips'
 import { setApprovalBadge } from '../tauri'
@@ -139,8 +136,7 @@ import { RemoteChip } from './RemoteChip'
 import { TourHost } from './tour/TourHost'
 import { ContextualHints } from './tour/ContextualHints'
 import { startTour } from './tour/startTour'
-import { quotaRows, quotaTone, resetIn, updatedAgo } from './quotaModel'
-import { ComposerStatus, DeliveryModeToggle } from './PromptQueue'
+import { ComposerStatus } from './PromptQueue'
 import { AttachMenu, AttachmentTray, MAX_COMPOSER_ATTACHMENTS, MessageAttachments, PermissionModeControl, prepareImageBytes, sessionApprovalMode, type ComposerAttachment } from './ComposerControls'
 import { GeneratedImage, generatedImageMeta, imagePromptFrom } from './GeneratedImage'
 import { ConversationOutline, outlineItemsFromMessages } from './ConversationOutline'
@@ -150,14 +146,14 @@ import { SafeMarkdown, SafeMarkdownInline } from './SafeMarkdown'
 import { MediaPreview, isPreviewablePath, setMediaScope } from './MediaPreview'
 import { setActivityProvider } from './liveOutput'
 import { TerminalDock } from './TerminalDock'
-import { NeedsYou } from './NeedsYou'
+import { NeedsYouBell } from './NeedsYou'
+import { ChatBackgroundLayer } from './ChatBackground'
 import { FileReferenceChip } from './FileReferenceChip'
 import { fileReferenceText, splitFileReference, type LocalFileRef } from './fileReference'
 import { parseUnifiedDiff } from './diffParser'
 import type { QuickSwitcherItem } from './quickSwitcherModel'
 import { entityNoun, useEntityNoun } from './vocabulary'
 import { setRuntimeProviders } from '../blob/haze/runtimeRegistry'
-import { HazeAura, auraStatusFor } from '../blob/haze/HazeAura'
 import { ensureDaemon, selectBackupExportPath, writeBackupExport, fetchSnapshot, getActiveRuntime, getActiveSession, inDesktop, inspectLocalFile, listenForActiveRuntime, listenForActiveSession, listenForDaemonConnection, listenForDaemonEvents, listenForOpenSettings, openInEditor, openProjectFolder, previewMode, quitBloblex, readBlobImport, readClipboardImage, refreshTrayMenu, resolveProjectFile, revealInExplorer, rpc, selectBlobImportPath, selectLocalFile, selectMarkdownExportPath, setActiveRuntime, setActiveSession, setCompanionMode, setCompanionMonitor, setCompanionSizePreset, setCompanionVisibility, showMainSettings, showMainWindow, stagePromptAttachment, startDaemonEventStream, writeMarkdownExport, currentCompanionMonitor } from '../tauri'
 
 type AppliedModelState = { sessionId: string; model: string | null; hasSnapshot: boolean; loading: boolean }
@@ -177,15 +173,15 @@ export function App() {
   }, [companion])
   useEffect(() => () => { if (companion) disposeCompanionAudio() }, [companion])
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
-  /** Experimental, off by default: the plan-usage bar along the bottom. */
+  /** Off by default: the plan-usage bar along the bottom. */
   const [usageBarEnabled, setUsageBarEnabled] = useState(false)
   const [claudeWorkflowsEnabled, setClaudeWorkflowsEnabled] = useState(true)
-  /** Experimental and separate from the bottom usage bar. */
+  /** Separate from the bottom usage bar. */
   const [usageTipsEnabled, setUsageTipsEnabled] = useState(false)
   const [usageTipDismissals, setUsageTipDismissals] = useState<UsageTipDismissal[]>([])
   const usageTipDismissalsRef = useRef(usageTipDismissals)
   usageTipDismissalsRef.current = usageTipDismissals
-  /** Experimental, off by default: each turn's commands, tools and edits as one expandable line. */
+  /** Off by default: each turn's commands, tools and edits as one expandable line. */
   const [activityDetails, setActivityDetails] = useState(false)
   const [busyMode, setBusyMode] = useState<BusySendMode>('steer')
   const [sendShortcut, setSendShortcut] = useState<SendShortcut>('enter')
@@ -199,7 +195,7 @@ export function App() {
   const [speechEnabled, setSpeechEnabled] = useState(true)
   const [speechModel, setSpeechModel] = useState(DEFAULT_SPEECH_MODEL_ID)
   const [windowSettingsLoaded, setWindowSettingsLoaded] = useState(false)
-  /** Experimental, off by default: each blob's runtime logo beside its name. */
+  /** Off by default: each blob's runtime logo beside its name. */
   const [runtimeLogos, setRuntimeLogos] = useState(false)
   const [experiments, setExperiments] = useState(DEFAULT_EXPERIMENTS)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -356,11 +352,10 @@ export function App() {
   /** The composer's queue rows stay folded until the owner asks for them. */
   const [queueExpanded, setQueueExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [usageSheet, setUsageSheet] = useState(false)
-  const [usagePeriod, setUsagePeriod] = useState<'today' | 'month'>('today')
   const [settingsSheet, setSettingsSheet] = useState(false)
   const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>('General')
   const [settingsFocus, setSettingsFocus] = useState<null | 'updates'>(null)
+  const [settingsGroup, setSettingsGroup] = useState<string | null>(null)
   const now = useClock(10_000)
   const executionGate = useRef<ExecutionSendGate>({ model: false, thinking: false, serviceTier: false })
   const [diffViewer, setDiffViewer] = useState<{ path: string; content: string } | null>(null)
@@ -371,7 +366,6 @@ export function App() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [createMenuOpen, setCreateMenuOpen] = useState(false)
   const [pendingBlobImport, setPendingBlobImport] = useState<SharedBlob | null>(null)
-  const [usageSummary, setUsageSummary] = useState<Record<string, unknown> | null>(null)
   const [quotaRefreshing, setQuotaRefreshing] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const { status: discoveryStatus, scan: scanRuntimes } = useRuntimeDiscovery((runtimes) => setSnapshot((current) => current ? { ...current, runtimes } : current))
@@ -629,10 +623,6 @@ export function App() {
       ?? sessions.find((session) => session.id === activeSessionId && (!selectedRuntime || session.runtimeId === selectedRuntime.id))
       ?? sessions.filter((session) => session.runtimeId === selectedRuntime?.id && !isSideSession(session)).sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0]
       ?? null)
-  /** How the next message reaches a running turn, for the rest of this turn: set from the composer's Steer / After this turn choice, cleared when the turn ends or the conversation changes. */
-  const [busyOverride, setBusyOverride] = useState<BusySendMode | null>(null)
-  const selectedLive = ['working', 'starting', 'waiting_permission'].includes(selectedSession?.state ?? '')
-  useEffect(() => { setBusyOverride(null) }, [selectedSession?.id, selectedLive])
   const selectedSessionIdRef = useRef<string | null>(selectedSession?.id ?? null)
   selectedSessionIdRef.current = selectedSession?.id ?? null
   // The unsent text belongs to the conversation (or to a bot's new-chat draft) it was typed in, and survives navigation, restarts and the companion (draftStore.ts).
@@ -646,7 +636,7 @@ export function App() {
   for (const session of sessions) sessionOwnersRef.current.set(session.id, session.agentId ?? null)
   const sessionMessages = selectedSession?.messages ?? selectedSession?.turns?.flatMap((turn) => Array.isArray(turn.messages) ? turn.messages : []) ?? selectedSession?.events ?? []
   const conversationItems = selectedSession ? buildConversationItems(selectedSession) : []
-  // The app's rebindable shortcuts (Settings › General). Ctrl+` for the terminal is the same key as in editors.
+  // The app's rebindable shortcuts (Settings › Chat › Keyboard). Ctrl+` for the terminal is the same key as in editors.
   const shortcutHandlers = useRef<Parameters<typeof useShortcutActions>[2]>({})
   const stableShortcutHandlers = useMemo(() => ({
     'app.terminal': () => setTerminalDockOpen((open) => !open),
@@ -774,7 +764,7 @@ export function App() {
     ...sessions.filter((session) => unreadNeedsApproval(session, seenSessions)).map((session) => session.id),
     ...(snapshot?.permissions ?? []).filter((permission) => typeof permission.sessionId === 'string' && isPendingPermissionLive(permission, permissionClock)).map((permission) => permission.sessionId!),
   ].filter((id) => !(mainAttention && id === selectedSession?.id)))
-  // Without the experimental activity setting only failed turns and sub-agents stay visible; the working indicator shows progress.
+  // Without the Agent activity setting only failed turns and sub-agents stay visible; the working indicator shows progress.
   const groupedConversationItems = groupConversationActivity(activityDetails || sideSession ? conversationItems : conversationItems.filter((item) => item.kind === 'message' || item.activityKind === 'turn' || isSubagentItem(item)))
   // Messages this conversation's bot sent to teammates read as one assignment card per turn, with the daemon's recorded status.
   const delegationLedger = useDelegations(selectedSession && !isDraftSession(selectedSession) ? selectedSession.id : null, connection === 'connected')
@@ -1001,9 +991,8 @@ export function App() {
       await runSteps([{ id: 'usage', label: 'Loading usage and limits', timeoutMs: LAUNCH_TIMEOUTS.usage, run: async (stageSignal) => {
         const now = new Date()
         const from = new Date(now.getFullYear(), now.getMonth(), 1)
-        const summary = await rpc<Record<string, unknown>>('usage.summary', { from: from.toISOString(), to: now.toISOString() })
+        await rpc<Record<string, unknown>>('usage.summary', { from: from.toISOString(), to: now.toISOString() })
         throwIfLaunchAborted(stageSignal)
-        setUsageSummary(summary)
         return 'Usage and limits are ready'
       } }])
     }
@@ -2028,7 +2017,7 @@ ${fileReferenceText(sentFile)}` : typed
     const sessionId = target.id
     // Only plain messages can steer. Scheduled messages and pending sends keep
     // their durable ordering, and richer messages keep their context in Queue.
-    const delivery = busyDelivery(busyOverride ?? busyMode, opposite, target.state, steerAvailable, !!(ready.length || sentCommand || conversationRefs.length || replyTarget || sentFile || annotations.length))
+    const delivery = busyDelivery(busyMode, opposite, target.state, steerAvailable, !!(ready.length || sentCommand || conversationRefs.length || replyTarget || sentFile || annotations.length))
     const live = ['working', 'starting', 'waiting_permission', 'cancelling'].includes(target.state ?? '')
     // A conversation waiting for its usage limit keeps the message until the limit resets (the daemon owns the timer).
     const waitingForLimit = !dueAt && !live ? limitWaitingUntil(target) : null
@@ -2354,16 +2343,8 @@ ${fileReferenceText(sentFile)}` : typed
     try { await scanRuntimes() } catch { /* Scan status carries the safe error. */ }
   }
 
-  const showUsage = async (period: 'today' | 'month' = usagePeriod) => {
-    setUsageSheet(true)
-    setUsagePeriod(period)
-    const today = new Date()
-    const from = period === 'today' ? new Date(today.getFullYear(), today.getMonth(), today.getDate()) : new Date(today.getFullYear(), today.getMonth(), 1)
-    try {
-      const summary = await doRpc<Record<string, unknown>>('usage.summary', { from: from.toISOString(), to: new Date().toISOString() })
-      setUsageSummary(summary)
-    } catch { setUsageSummary(null) }
-  }
+  const showUsage = () => { setSchedulesOpen(false); setTasksOpen(false); setCompareOpen(false); setAnalyticsOpen(true) }
+  const openUsageSetting = () => { setSettingsInitialPage('General'); setSettingsGroup('Usage'); setSettingsFocus(null); setSettingsSheet(true) }
 
   const refreshQuota = () => {
     setQuotaRefreshing(true)
@@ -2555,7 +2536,7 @@ ${fileReferenceText(sentFile)}` : typed
   const renameProject = (project: Project) => setTextPrompt({ title: 'Rename project', label: 'Project name', value: project.name, confirmLabel: 'Rename', onSubmit: async (name) => { await projectAction('project.update', { projectId: project.id, name }) } })
   const changeProjectFolder = (project: Project) => void openProjectFolder().then((path) => { if (path) void projectAction('project.update', { projectId: project.id, path }) })
   /** Phase 1A: projects are managed where their conversations are listed, inside each bot. */
-  const conversationProjectActions: ProjectActions = { onOpenProjectSettings: setProjectSettings, onCreateProject: openNewProject, onImportProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete }
+  const conversationProjectActions: ProjectActions = { onOpenProjectSettings: setProjectSettings, onCreateProject: openNewProject, onImportProject: createProject, onRenameProject: renameProject, onChangeProjectFolder: changeProjectFolder, onDeleteProject: setProjectDelete, onSetProjectIcon: (project, icon) => void projectAction('project.icon.set', { projectId: project.id, icon }) }
   /** Opens the Manager's conversation with a starter message to edit and send; false without a Manager. */
   const planWithManager = (text: string) => {
     const manager = managerOf(agents)
@@ -2625,7 +2606,7 @@ ${fileReferenceText(sentFile)}` : typed
     'conversation.togglePanel': () => setConvosVisible(!convosOpen),
   }
   const turnLive = ['working', 'waiting_permission'].includes(selectedSession?.state ?? '')
-  const composerDelivery = busyDelivery(busyOverride ?? busyMode, false, selectedSession?.state, steerAvailable, !!(attachments.length || slashCommand || leadingCommand(composer, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) || conversationRefs.length || replyTarget))
+  const composerDelivery = busyDelivery(busyMode, false, selectedSession?.state, steerAvailable, !!(attachments.length || slashCommand || leadingCommand(composer, { skills: slashSkills, isManager: activeSelectedAgent?.systemRole === 'manager' }) || conversationRefs.length || replyTarget))
   const promptQueue = selectedSession ? snapshot?.queues?.[selectedSession.id] : undefined
   const hasScheduledPrompt = !!promptQueue?.items.some((item) => item.kind === 'send_later')
   const [queueNowMs, setQueueNowMs] = useState(() => Date.now())
@@ -2746,7 +2727,7 @@ ${fileReferenceText(sentFile)}` : typed
     } else {
       if (item.id === 'new-session' && activeSelectedAgent) newSession(activeSelectedAgent.id)
       else if (item.id === 'new-blob') openCreate()
-      else if (item.id === 'usage') void showUsage()
+      else if (item.id === 'usage') showUsage()
       else if (item.id === 'settings') { setSettingsInitialPage('General'); setSettingsFocus(null); setSettingsSheet(true) }
       else if (item.id === 'find-agents') { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true); void refreshRuntimes() }
       else if (item.id === 'toggle-details') toggleInspector()
@@ -2807,10 +2788,11 @@ ${fileReferenceText(sentFile)}` : typed
         <div className="sidebar-top">
           <div className="brand-lockup"><img className="brand-logo" src={bloblexLogo} alt="Bitbots logo" /><strong>Bitbots</strong></div>
           <div className="sidebar-create-actions">
+            <NeedsYouBell permissions={snapshot?.permissions ?? []} sessions={sessions} agents={agents} now={permissionClock} onOpen={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />
             <button type="button" className={`icon-button${tasksOpen ? ' active' : ''}`} title="Tasks" aria-label="Tasks" aria-pressed={tasksOpen} disabled={connection !== 'connected'} onClick={() => { setTasksOpen((open) => !open); setSchedulesOpen(false); setAnalyticsOpen(false); setBlobPage(null) }}><ListChecks size={16} /></button>
             <button data-testid="create-blob" className="icon-button" title={`Create ${noun}`} aria-label={`Create ${noun}`} disabled={connection !== 'connected' || busy || runtimes.length === 0} onClick={() => openCreate()}><Plus size={17} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setCreateMenuOpen(false); restoreCreateFocus() } }}>
-              <button type="button" className="icon-button small" title={`Import a ${noun} setup`} aria-label={`${Noun} actions`} aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
+              <button type="button" className="icon-button small" title="More ways to create" aria-label={`${Noun} actions`} aria-haspopup="menu" aria-expanded={createMenuOpen} disabled={connection !== 'connected' || busy} onClick={() => setCreateMenuOpen((open) => !open)}><ChevronDown size={14} /></button>
               {createMenuOpen && <div className="menu-surface more-menu" role="menu">
                 {managerOf(agents)
                   ? <><button className="menu-item" role="menuitem" onClick={startProjectWithManager}><BriefcaseBusiness size={15} />New project with {managerOf(agents)?.name ?? 'the Manager'}</button>
@@ -2826,7 +2808,7 @@ ${fileReferenceText(sentFile)}` : typed
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar selectedSessionId={sideSessionId ?? selectedSession?.id ?? null} onOpenSubbot={openSideConversation} machines={machines.length ? <MachineGroups machines={machines} selected={machineView} onOpen={(machine, bot) => setMachineView({ machineId: machine.id, botId: bot.id })} /> : null} needsYou={<NeedsYou permissions={snapshot?.permissions ?? []} sessions={sessions} agents={agents} now={permissionClock} onOpen={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
+        <TeamSidebar selectedSessionId={sideSessionId ?? selectedSession?.id ?? null} onOpenSubbot={openSideConversation} machines={machines.length ? <MachineGroups machines={machines} selected={machineView} onOpen={(machine, bot) => setMachineView({ machineId: machine.id, botId: bot.id })} /> : null} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void openNewProject(),
@@ -2852,8 +2834,8 @@ ${fileReferenceText(sentFile)}` : typed
           onOpenRuntimeSettings: () => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) },
         }} />
         <RemoteChip onOpen={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} />
-        <SidebarUsage quotas={snapshot?.quotas ?? []} onOpen={() => void showUsage()} />
-        {platform.companion && <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" title={`Keep your ${noun} on screen while you work`} onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={30} mini mood="idle" label="Companion" /><span><strong>Companion</strong></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>}
+        {!usageBarEnabled && <SidebarUsage quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={showUsage} onTurnOn={openUsageSetting} />}
+        {platform.companion && <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" title={`Keep your ${noun} on screen while you work`} onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={20} mini mood="idle" label="Companion" /><span><strong>Companion</strong></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>}
         {platform.updater && <UpdateBadge sidebar />}
         <ProfileMenu
           connection={connection}
@@ -2879,27 +2861,27 @@ ${fileReferenceText(sentFile)}` : typed
       <section className="conversation-pane">
         {(launchWarnings.length > 0 || discoveryStatus.retrying) && !agentWarningDismissed && <LaunchWarnings warnings={launchWarnings} details={launchChecks.filter((check) => check.state === 'warning' || check.state === 'failed').map((check) => check.detail.startsWith(`${check.label}:`) ? check.detail : `${check.label}: ${check.detail}`).join('\n')} retrying={discoveryStatus.retrying} onSettings={() => { setSettingsInitialPage('Agents'); setSettingsSheet(true) }} onDismiss={() => setAgentWarningDismissed(true)} />}
         {discoveryConfirmation && <aside className="launch-scan-confirmation" role="status">{discoveryConfirmation}</aside>}
-        {compareOpen ? <CompareView initialId={compareId} agents={agents} connected={connection === 'connected'} onBack={() => setCompareOpen(false)} onStartNew={() => setFanoutOpen(true)} onOpenSession={(sessionId) => { setCompareOpen(false); const session = sessions.find((item) => item.id === sessionId); if (session) { setSelectedAgentId(session.agentId || null); setSelectedSessionId(session.id) } }} /> : tasksOpen ? <TasksView agents={agents} projects={projects} runtimes={runtimes} connected={connection === 'connected'} onBack={() => setTasksOpen(false)} onOpenSession={(sessionId) => { setTasksOpen(false); const session = sessions.find((item) => item.id === sessionId); if (session) { setSelectedAgentId(session.agentId || null); setSelectedSessionId(session.id) } }} /> : schedulesOpen ? <SchedulesView automations={snapshot?.automations ?? []} agents={agents} connected={connection === 'connected'} paused={schedulesPaused} nowMs={schedulesNowMs} agentId={schedulesAgentId} loadError={schedulesError} onBack={() => setSchedulesOpen(false)} onCreate={createAutomation} onUpdate={updateAutomation} onSetEnabled={setAutomationEnabled} onRunNow={runAutomationNow} onDelete={deleteAutomation} onLoadRuns={loadAutomationRuns} onPreview={previewAutomation} onSetPaused={setAutomationsPaused} onOpenSession={openAutomationSession} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} onOpenMemory={() => { setSettingsInitialPage('Memory'); setSettingsFocus(null); setSettingsSheet(true) }} onOpenSkills={() => { setSettingsInitialPage('Skills'); setSettingsFocus(null); setSettingsSheet(true) }} changes={draft && baseline ? changedFields(draft, baseline) : []} onDuplicate={editingAgent ? () => void duplicateAgent(editingAgent) : undefined} onExport={editingAgent ? () => void exportBlob(editingAgent) : undefined} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        {compareOpen ? <CompareView initialId={compareId} agents={agents} connected={connection === 'connected'} onBack={() => setCompareOpen(false)} onStartNew={() => setFanoutOpen(true)} onOpenSession={(sessionId) => { setCompareOpen(false); const session = sessions.find((item) => item.id === sessionId); if (session) { setSelectedAgentId(session.agentId || null); setSelectedSessionId(session.id) } }} /> : tasksOpen ? <TasksView agents={agents} projects={projects} runtimes={runtimes} connected={connection === 'connected'} onBack={() => setTasksOpen(false)} onOpenSession={(sessionId) => { setTasksOpen(false); const session = sessions.find((item) => item.id === sessionId); if (session) { setSelectedAgentId(session.agentId || null); setSelectedSessionId(session.id) } }} /> : schedulesOpen ? <SchedulesView automations={snapshot?.automations ?? []} agents={agents} connected={connection === 'connected'} paused={schedulesPaused} nowMs={schedulesNowMs} agentId={schedulesAgentId} loadError={schedulesError} onBack={() => setSchedulesOpen(false)} onCreate={createAutomation} onUpdate={updateAutomation} onSetEnabled={setAutomationEnabled} onRunNow={runAutomationNow} onDelete={deleteAutomation} onLoadRuns={loadAutomationRuns} onPreview={previewAutomation} onSetPaused={setAutomationsPaused} onOpenSession={openAutomationSession} /> : analyticsOpen ? <AnalyticsView sessions={sessions} agents={agents} quotas={snapshot?.quotas ?? []} connected={connection === 'connected'} onRefreshQuota={refreshQuota} onTurnOnUsage={openUsageSetting} onBack={closeAnalytics} /> : blobPage && draft ? <BlobPage mode={blobPage.mode} agent={editingAgent} onOpenMemory={() => { setSettingsInitialPage('Memory'); setSettingsFocus(null); setSettingsSheet(true) }} onOpenSkills={() => { setSettingsInitialPage('Skills'); setSettingsFocus(null); setSettingsSheet(true) }} changes={draft && baseline ? changedFields(draft, baseline) : []} onDuplicate={editingAgent ? () => void duplicateAgent(editingAgent) : undefined} onExport={editingAgent ? () => void exportBlob(editingAgent) : undefined} draft={draft} runtime={draftRuntime} session={blobPage.mode === 'edit' ? selectedSession : null} runtimes={runtimes} projects={projects} sessions={pageSessions} legacyCount={pageLegacy.length} connected={connection === 'connected'} saving={busy} dirty={draftDirty} ready={draftReady} canStartSession={connection === 'connected' && !busy && runtimeUsable(draftRuntime)} error={formError} remoteNotice={remoteNotice} errors={fieldErrors} execution={executionFromAgent(editingAgent)} autoApprovals={snapshot?.autoApprovals ?? []} bypassNotices={snapshot?.bypassNotices ?? []} onDraftChange={(next) => { setDraft(next); setFormError(null) }} onExecutionGate={(gate) => { executionGate.current = gate }} onBack={() => closeBlobPage(editingAgent?.id ?? activeSelectedAgent?.id ?? null)} onSave={() => void saveBlob()} onCancel={() => { const source = remoteNotice && editingAgent ? draftFromAgent(editingAgent) : baseline; if (!source) return; setDraft(source); setBaseline(source); setRemoteNotice(null); setFormError(null) }} onArchive={() => { if (editingAgent) setArchiveTarget(editingAgent) }} onNewSession={() => { if (editingAgent) newSession(editingAgent.id) }} onOpenSession={(session) => { setSelectedSessionId(session.id); closeBlobPage(editingAgent?.id ?? null) }} /> : <>
+        <ChatBackgroundLayer empty={conversationEmpty} />
         <header className="chat-header">
-          {activeSelectedAgent && <HazeAura status={selectedSession?.state === 'waiting_permission' ? 'needs' : auraStatusFor(selectedMood)} color={accent || agentColorHex(activeSelectedAgent.color)} selected quiet manager={activeSelectedAgent.systemRole === 'manager'} />}
           <div className="chat-title">
             {activeSelectedAgent && !sideSession && <button className="icon-button chat-convos-toggle" title={convosOpen ? 'Hide conversations' : 'Show conversations'} aria-label={convosOpen ? 'Hide conversations' : 'Show conversations'} aria-pressed={convosOpen} onClick={() => setConvosVisible(!convosOpen)}>{convosOpen ? <PanelLeftClose size={16} /> : <PanelLeft size={16} />}</button>}
             {sideSession
               ? <SideConversationHeader peer={sidePeer} peerName={sidePeer?.name ?? sideSession.link?.peerName ?? 'Teammate'} target={sideAgent} targetName={sideAgent?.name ?? 'Teammate'} topic={sideTopic(sideSession)} />
               : activeSelectedAgent
-                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{activeSelectedAgent.role?.trim() && <span className="role-chip">{activeSelectedAgent.role.trim()}</span>}{selectedSession && <ConversationCrumb project={currentProjectName} title={selectedSession.title && selectedSession.title !== activeSelectedAgent.name ? selectedSession.title : 'New chat'} />}</>
+                ? <>{runtimeLogos && <RuntimeMark provider={selectedRuntime?.provider} size={15} />}<button type="button" className="chat-title-button" aria-label={`Edit ${activeSelectedAgent.name}`} title={`${Noun} settings`} onClick={() => openEdit(activeSelectedAgent)}>{activeSelectedAgent.name}</button><RuntimeProblemMarker runtime={selectedRuntime} onOpenSettings={() => { setSettingsInitialPage('Agents'); setSettingsFocus(null); setSettingsSheet(true) }} />{selectedSession && <ConversationCrumb project={currentProjectName} title={selectedSession.title && selectedSession.title !== activeSelectedAgent.name ? selectedSession.title : 'New chat'} />}</>
                 : hasActiveBlobs ? <strong className="chat-title-text">{agentName}</strong> : null}
           </div>
           <div className="header-actions" hidden={!hasActiveBlobs && !selectedSession}>
 
-            <ApprovalPill mode={headerMode} />
-            {!sideSession && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
+            {sideSession && <ApprovalPill mode={headerMode} />}
+            {!sideSession && !convosOpen && <button className="icon-button" title={conversationEmpty ? 'This conversation is already fresh' : 'Start a fresh conversation'} aria-label="New conversation" disabled={!canStartSession || conversationEmpty} onClick={(event) => newSession(undefined, event.currentTarget)}><SquarePen size={16} /></button>}
             {!sideSession && typeof selectedSession?.fanoutId === 'string' && <button type="button" className="ghost-button small conversation-compare-link" title="See every bot's answer side by side" onClick={() => { setCompareId(selectedSession.fanoutId as string); setCompareOpen(true) }}><Split size={13} aria-hidden="true" />Compare answers</button>}
             {!sideSession && <button className={`icon-button ${terminalDockOpen ? 'active' : ''}`} title="Terminal (Ctrl+`)" aria-label="Toggle terminal" aria-pressed={terminalDockOpen} onClick={() => setTerminalDockOpen((open) => !open)}><SquareTerminal size={16} /></button>}
             <button className={`icon-button ${inspectorOpen ? 'active' : ''}`} title="Details" aria-label="Toggle context pane" aria-pressed={inspectorOpen} onClick={toggleInspector}><PanelRight size={16} /></button>
             <div className="more-menu-wrap" onKeyDown={(event) => { if (event.key === 'Escape') { setMoreOpen(false); restoreMoreFocus() } }}>
               <button className="icon-button" title="More options" aria-label="More options" aria-haspopup="menu" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={17} /></button>
-              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && handoffChoices > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffLimited(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" />{platform.tray && <button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button>}</div>}
+              {moreOpen && <div className="menu-surface more-menu" role="menu"><button className="menu-item" role="menuitem" disabled={refreshing} onClick={() => { setMoreOpen(false); void refresh() }}><RefreshCw size={15} />Refresh state</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); showUsage() }}><Gauge size={15} />Usage details</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(true) }}><ClipboardCopy size={15} />Copy as Markdown</button><button className="menu-item" role="menuitem" disabled={!selectedSession} onClick={() => { setMoreOpen(false); void exportConversation(false) }}><FileDown size={15} />Export as Markdown…</button>{activeSelectedAgent && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); openEdit(activeSelectedAgent) }}><Settings2 size={15} />{Noun} settings</button>}{selectedSession && !sideSession && handoffChoices > 0 && <button className="menu-item" role="menuitem" onClick={() => { setMoreOpen(false); setHandoffError(null); setHandoffLimited(null); setHandoffOpen(true) }}><ArrowUpRight size={15} />Continue in another {noun}…</button>}<span className="menu-separator" />{platform.tray && <button role="menuitem" className="menu-item danger" onClick={() => void quitBloblex()}><X size={15} />Quit Bitbots</button>}</div>}
             </div>
           </div>
         </header>
@@ -2970,9 +2952,9 @@ ${fileReferenceText(sentFile)}` : typed
           {!sideSession && <ReplyAnnotator container={messageListRef} full={annotations.length >= MAX_ANNOTATIONS} onAdd={addAnnotation} />}
           {!sideSession && selectedSession && !isDraftSession(selectedSession) && <SubbotFleet sessionId={selectedSession.id} parent={activeSelectedAgent ?? undefined} onOpen={openSideConversation} />}
           {sideSession?.link?.subbot === true ? <SubbotComposer sessionId={sideSession.id} name={agents.find((agent) => agent.id === sideSession.agentId)?.name ?? 'this sub-bot'} onClose={closeSideConversation} /> : sideSession ? <div className="side-close"><button type="button" className="secondary-button" onClick={closeSideConversation}>Close chat</button></div> : selectedSession?.link?.movedTo ? <MovedBar sessionId={selectedSession.id} movedTo={selectedSession.link.movedTo} machines={machines} onMoved={() => { void refresh(); void reloadMachines() }} /> : <div className="composer-wrap">
-            {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => void showUsage()} />}
+            {usageTip && <UsageTip tip={usageTip} onDismiss={() => dismissUsageTip(usageTip)} onViewUsage={() => showUsage()} />}
             <div data-tour="composer" className={`composer-box ${composerDropActive ? 'drop-active' : ''}`} onDragOver={(event) => { if (!imagesSupported || !Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) return; event.preventDefault(); setComposerDropActive(true) }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerDropActive(false) }} onDrop={(event) => { setComposerDropActive(false); if (!imagesSupported) return; const files = Array.from(event.dataTransfer.files); if (!files.length) return; event.preventDefault(); addAttachments(files) }}>
-              <ComposerStatus steerChoice={steerAvailable} onModeChange={setBusyOverride} modeInBar onInterrupt={turnLive && composer.trim() && !busy ? () => void interruptAndSend() : undefined} items={promptQueue?.items ?? []} paused={promptQueue?.paused ?? false} sessionBusy={sessionBusy} mode={composerDelivery.mode} notice={deliveryNotice} nowMs={queueNowMs} disabled={connection !== 'connected'} expanded={queueExpanded && (promptQueue?.items.length ?? 0) > 0} onToggle={() => setQueueExpanded((value) => !value)} onResume={resumeQueue} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onCancelRetry={cancelAutoRetry} />
+              <ComposerStatus onInterrupt={turnLive && composer.trim() && !busy ? () => void interruptAndSend() : undefined} items={promptQueue?.items ?? []} paused={promptQueue?.paused ?? false} sessionBusy={sessionBusy} notice={deliveryNotice} nowMs={queueNowMs} disabled={connection !== 'connected'} expanded={queueExpanded && (promptQueue?.items.length ?? 0) > 0} onToggle={() => setQueueExpanded((value) => !value)} onResume={resumeQueue} onSendNow={sendQueuedNow} onDelete={deleteQueued} onUpdate={updateQueued} onReorder={reorderQueued} onCancelRetry={cancelAutoRetry} />
               {replyTarget && <ReplyContextStrip target={replyTarget} onCancel={() => { replyTargetRef.current = null; setReplyTarget(null) }} />}
               <AnnotationTray annotations={annotations} onRemove={(index) => setAnnotations((current) => current.filter((_, position) => position !== index))} />
               <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
@@ -3015,20 +2997,17 @@ ${fileReferenceText(sentFile)}` : typed
                 <div className="composer-controls-start">
                   <AttachMenu imagesSupported={imagesSupported} imagesDisabled={connection !== 'connected' || busy || !runtimeReady} imageCount={attachments.length} fileDisabled={connection !== 'connected' || busy || !runtimeReady || !selectedSession} onImages={addAttachments} onGenerateImage={generatesImages && connection === 'connected' && !busy && runtimeReady ? askForImage : undefined} onPickFile={() => { void (async () => { try { const path = await selectLocalFile(); if (!path) return; const info = await inspectLocalFile(path); setLocalFile({ fileName: info.fileName, path: info.path, sizeBytes: info.sizeBytes }); setLocalFileError(null) } catch (reason) { setLocalFileError(messageOf(reason)) } })() }} />
                   <StashMenu disabled={connection !== 'connected' || busy} canStash={!!composer.trim() || attachments.some((item) => item.status === 'ready')} onStash={stashDraft} onRestored={restoreStashedDraft} onError={setError} />
-                  <button type="button" data-tour="plan" className={`composer-pill plan-pill ${planOn ? 'on' : ''}`} aria-pressed={planOn} aria-label="Plan mode" title={planOn ? 'Plan mode: the agent proposes a plan before changing anything' : 'Turn on plan mode'} disabled={connection !== 'connected' || sessionBusy} onClick={() => void setPlanMode(!planOn)}><ClipboardList size={14} aria-hidden="true" /><span>Plan</span></button>
-                  <PermissionModeControl session={selectedSession} agent={activeSelectedAgent} disabled={connection !== 'connected' || activeSelectedAgent?.locked === true} locked={activeSelectedAgent?.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />
+                  <PermissionModeControl planOn={planOn} planDisabled={sessionBusy} onPlanChange={(enabled) => void setPlanMode(enabled)} session={selectedSession} agent={activeSelectedAgent} disabled={connection !== 'connected' || activeSelectedAgent?.locked === true} locked={activeSelectedAgent?.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />
                 </div>
                 <div className="composer-controls-end">
                   {selectedSession && activeSelectedAgent && <SessionExecutionControls session={selectedSession} agent={activeSelectedAgent} locked={activeSelectedAgent.locked === true} onSessionUpdated={(updated) => setSnapshot((current) => current ? mergeHydratedSession(current, updated.id, updated) : current)} onAgentUpdated={(updated) => mergeAgent(updated)} onError={(reason) => setError(messageOf(reason))} />}
-                  <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => void showUsage()} />
+                  <ContextWindowIndicator used={selectedSession.contextUsed} size={selectedSession.contextSize} contextModel={selectedSession.contextModel} contextEstimated={selectedSession.contextEstimated} model={contextModel} isNewConversation={(selectedSession.messages ?? []).length === 0} quota={sessionQuota} onOpenUsage={() => showUsage()} />
                   {platform.nativeSpeech && speechEnabled && <DictationButton owner="desktop" modelId={speechModel} onFinal={(text) => setComposer((current) => (current ? `${current} ${text}` : text))} disabled={connection !== 'connected' || busy || selectedSession.state === 'waiting_permission' || !runtimeReady} />}
-                  {sessionBusy && <DeliveryModeToggle mode={composerDelivery.mode} steerChoice={steerAvailable} disabled={connection !== 'connected'} onModeChange={setBusyOverride} />}
                   {turnLive && <button className="send-button cancel" onClick={() => void cancelTurn()} disabled={busy} aria-label="Cancel turn" title="Stop"><Square size={12} fill="currentColor" /></button>}
                   <button className="send-button" onClick={(event) => void sendPrompt(undefined, event.ctrlKey || event.metaKey)} disabled={connection !== 'connected' || busy || clipboardReadPending || (!composer.trim() && !annotations.length && !attachments.some((item) => item.status === 'ready')) || attachments.some((item) => item.status === 'staging') || !runtimeReady} aria-label={limitUntil ? 'Send when the limit resets' : sessionBusy ? composerDelivery.mode === 'steer' ? 'Steer now' : 'Queue message' : 'Send message'} title={clipboardReadPending ? 'Preparing the pasted image' : connection !== 'connected' ? 'Waiting for the connection' : limitUntil ? `Goes out when the limit resets, at ${limitResetTime(limitUntil)}` : sessionBusy ? composerDelivery.mode === 'steer' ? `Steer this turn now. ${oppositeKeys(sendShortcut)} queues instead.` : `Add to the queue. ${oppositeKeys(sendShortcut)} sends the other way where supported.` : 'Send'}>{busy ? <LoaderCircle size={16} className="spinning" /> : limitUntil ? <Clock size={16} /> : sessionBusy && composerDelivery.mode === 'queue' ? <ListPlus size={17} /> : <ArrowUp size={17} />}</button>
                 </div>
               </div>
             </div>
-            <div className="composer-note">{currentProjectName ? <><FolderOpen size={11} />{currentProjectName}<span>·</span></> : null}Agent actions run on your device. You approve what matters.</div>
           </div>}
         </>}
         </>}
@@ -3037,19 +3016,18 @@ ${fileReferenceText(sentFile)}` : typed
 
       <aside className="context-pane" aria-label="Conversation details" aria-hidden={!detailsVisible} inert={!detailsVisible}>
         <section className="context-head compact">
-          {activeSelectedAgent ? <BlobCanvas color={accent} size={64} mood={selectedMood} look={agentLook(activeSelectedAgent)} label={activeSelectedAgent.name} /> : <span className="context-head-placeholder"><Code2 size={20} /></span>}
+          {activeSelectedAgent ? <BlobCanvas color={accent} size={32} mood={selectedMood} look={agentLook(activeSelectedAgent)} label={activeSelectedAgent.name} /> : <span className="context-head-placeholder"><Code2 size={20} /></span>}
           <h2>{agentName}</h2>
-          <p>{selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected')}</p>
+          {(() => { const line = selectedSession?.title?.trim() || (selectedRuntime ? [labelize(selectedRuntime.provider), selectedRuntime.version].filter(Boolean).join(' · ') : 'No coding agent selected'); return line.toLowerCase() === agentName.trim().toLowerCase() ? null : <p>{line}</p> })()}
         </section>
         <SessionRail agents={agents} isManager={activeSelectedAgent?.systemRole === 'manager'} onOpenSessionById={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} onOpenSchedules={() => setSchedulesOpen(true)} active={detailsVisible} botName={activeSelectedAgent?.name ?? 'The bot'} canCreatePr={connection === 'connected' && !!selectedSession && !isDraftSession(selectedSession) && !selectedSession.archived && runtimeUsable(selectedRuntime)} onCreatePr={(repository) => selectedSession && setPullRequestFor({ sessionId: selectedSession.id, repository })} onReview={inDesktop && selectedSession && !isDraftSession(selectedSession) ? (path) => setChangesFor({ sessionId: selectedSession.id, path }) : undefined} workingBots={<WorkingBotsPanel sessions={sessions} agents={agents} selectedId={sideSessionId} onOpen={openSideConversation} />} session={selectedSession} usage={snapshot?.usage ?? []} appliedModel={appliedModelState?.sessionId === selectedSession?.id ? appliedModelState?.model ?? null : null} onOpenFile={(path) => void openInEditor(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onRevealFile={(path) => void revealInExplorer(path, selectedSession?.projectPath).catch((reason) => setError(messageOf(reason)))} onCopyPath={async (path) => { try { await navigator.clipboard.writeText(await resolveProjectFile(path, selectedSession?.projectPath)) } catch (reason) { setError(messageOf(reason)) } }} onDiff={(path, content) => setDiffViewer({ path, content })} onOpenFolder={(path) => void revealInExplorer(path, path).catch((reason) => setError(messageOf(reason)))} onOpenRemote={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} runtimeFacts={selectedRuntime ? [`${labelize(selectedRuntime.provider)} ${selectedRuntime.version ?? ''}`.trim(), `Sign-in: ${labelize(selectedRuntime.authState, 'unknown')}`, selectedRuntime.executablePath ? `Executable: ${selectedRuntime.executablePath}` : null].filter(Boolean).join(' · ') : undefined} />
       </aside>
 
       {!companion && <ContextualHints enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet && !quickSwitcherOpen && !whatsNewOpen} />}
       {!companion && <TourHost enabled={connection === 'connected' && !launchVisible && !onboardingVisible && !settingsSheet} justOnboarded={onboardingCompleteThisRun} agentColor={activeSelectedAgent?.color ?? '#b7a7f4'} />}
-      {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={() => void showUsage()} />}
-      {usageSheet && <UsageSheet summary={usageSummary} period={usagePeriod} quotas={snapshot?.quotas ?? []} loading={busy && usageSummary === null} quotaRefreshing={quotaRefreshing} onRefreshQuota={refreshQuota} onPeriodChange={(period) => { setUsageSummary(null); void showUsage(period) }} onOpenHistory={() => { setUsageSheet(false); setAnalyticsOpen(true) }} onClose={() => setUsageSheet(false)} />}
+      {!companion && usageBarEnabled && <QuotaBar quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={showUsage} onTurnOn={openUsageSetting} />}
       {quickSwitcherOpen && <QuickSwitcher items={quickSwitcherItems} onChoose={chooseQuickSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />}
-      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} onSendShortcutChange={setSendShortcut} onShortcutBindingsChange={setShortcutBindings} claudeWorkflowsEnabled={claudeWorkflowsEnabled} onClaudeWorkflowsChange={setClaudeWorkflowsEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} onOpenSession={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); setSettingsSheet(false); setSettingsFocus(null); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />}
+      {settingsSheet && <SettingsSheet experiments={experiments} onExperimentChange={changeExperiment} scanStatus={discoveryStatus} snapshot={snapshot} usageBarEnabled={usageBarEnabled} onUsageBarChange={setUsageBarEnabled} onSendShortcutChange={setSendShortcut} onShortcutBindingsChange={setShortcutBindings} claudeWorkflowsEnabled={claudeWorkflowsEnabled} onClaudeWorkflowsChange={setClaudeWorkflowsEnabled} usageTipsEnabled={usageTipsEnabled} onUsageTipsChange={setUsageTipsEnabled} activityDetails={activityDetails} onActivityDetailsChange={setActivityDetails} runtimeLogos={runtimeLogos} onRuntimeLogosChange={setRuntimeLogos} speechEnabled={speechEnabled} onSpeechEnabledChange={setSpeechEnabled} speechModel={speechModel} onSpeechModelChange={setSpeechModel} initialPage={settingsInitialPage} initialGroup={settingsGroup} focusUpdates={settingsFocus === 'updates'} onClose={() => { setSettingsSheet(false); setSettingsFocus(null); setSettingsGroup(null) }} onRefresh={refreshRuntimes} onError={setError} onRunSetup={() => { setSettingsSheet(false); setOnboardingVisible(true) }} onOpenAgent={(agentId) => { const target = agents.find((agent) => agent.id === agentId); setSettingsSheet(false); if (target) openEdit(target) }} onOpenSession={(sessionId) => { const target = sessions.find((item) => item.id === sessionId); setSettingsSheet(false); setSettingsFocus(null); if (!target) return; if (isSideSession(target)) openSideConversation(sessionId); else { setSideSessionId(null); selectSession(target) } }} />}
       {messageMenu && selectedSession?.id === messageMenu.sessionId && <MessageContextMenu position={messageMenu} canRetry={messageMenu.latest && connection === 'connected' && runtimeReady && !busy && !sessionBusy} onClose={closeMessageMenu} onRetry={() => {
         void doRpc('session.prompt', {
           sessionId: messageMenu.sessionId,
@@ -3189,7 +3167,7 @@ function EmptyConversation({ connected, hasRuntime, hasAgent, runtimeReady, runt
   const canvas = hasAgent ? <BlobCanvas color={accent} size={128} mood={connected ? mood : 'offline'} effectOverscanTop={135} look={look} label={agentName} /> : <BlobCanvas color="#e6e9ee" size={128} mood={connected ? 'idle' : 'offline'} effectOverscanTop={135} label="Bitbots" />
   const needsRuntimeRecovery = hasAgent && !runtimeReady
   const heading = !connected ? 'Connect to your local runtime' : needsRuntimeRecovery ? 'Coding agent needs attention' : hasAgent ? `Start a conversation with ${agentName}` : hasRuntime ? `Create your first ${noun}` : 'Find your coding agent'
-  const description = !connected ? 'Bitbots keeps its daemon and agent sessions on this device. Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'It works in this bot’s project. Your coding agent starts when you send the first message.' : hasRuntime ? `A ${noun} is a teammate that runs on one of the coding agents installed here. Give it a name and a project, and it is ready to work.` : 'We only show agents installed on this device. Refresh to scan for Claude Code, Codex, or OpenCode.'
+  const description = !connected ? 'Reconnect to load the latest state.' : needsRuntimeRecovery ? runtimeStatus === 'error' ? 'Update or repair this CLI in Settings → Coding agents, then scan again.' : 'This coding agent is offline. Open Settings → Coding agents and scan again before starting a conversation.' : hasAgent ? 'Your coding agent starts when you send the first message.' : hasRuntime ? `A ${noun} is a teammate on one of your coding agents.` : 'Scan this computer for Claude Code, Codex or OpenCode.'
   const label = !connected ? 'Try again' : needsRuntimeRecovery ? 'Scan again' : hasAgent ? 'New conversation' : hasRuntime ? `Create your first ${noun}` : 'Scan for agents'
   return <div className="empty-conversation"><PixelClouds className="empty-clouds" /><div className="empty-art">{canvas}</div><h1>{heading}</h1><p className="empty-description">{description}</p><button className="primary-button" onClick={(event) => { if (!connected || needsRuntimeRecovery || !hasAgent && !hasRuntime) onRefresh(); else if (hasAgent) onNewSession(event.currentTarget); else onCreate() }} disabled={!connected && !hasRuntime}>{!hasAgent && hasRuntime && connected ? <Plus size={15} /> : <FolderOpen size={15} />}{label}</button></div>
 }
@@ -3428,50 +3406,6 @@ function DiffViewer({ path, content, onClose }: { path: string; content: string;
   </section></div>
 }
 
-function QuotaDetails({ quotas, refreshing, onRefresh }: { quotas: Record<string, unknown>[]; refreshing: boolean; onRefresh: () => void }) {
-  const rows = quotaRows(quotas)
-  return <section className="usage-block quota-details" aria-label="Plan usage limits">
-    <div className="usage-block-heading quota-heading"><h3>Plan usage limits</h3><span className="usage-divider" aria-hidden="true" /><span className="usage-provenance">Reported by each CLI account</span><Tip text="Each coding agent reports its own plan limits from its signed-in account. Token counts describe recorded activity; plan limits are a separate account quota." describe><button type="button" className="icon-button usage-info-button" aria-label="About plan usage limits"><Info size={14} /></button></Tip><button type="button" className="icon-button usage-refresh-button" aria-label="Refresh plan usage" title="Refresh plan usage" onClick={onRefresh} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spinning' : ''} /></button></div>
-    {rows.length ? <div className="quota-cards">{rows.map((row) => {
-      const updated = updatedAgo(row.fetchedAt)
-      return <article key={row.provider} className="quota-card" data-provider={row.provider}>
-        <header><ProviderLogo provider={row.provider} size={18} /><strong>{row.name}</strong>{updated && <small>{updated}</small>}</header>
-        {row.windows.length ? row.windows.map((window) => {
-          const reset = resetIn(window.resetsAt)
-          return <div key={window.key} className="quota-card-window">
-            <div className="quota-card-line"><span>{window.label}</span><b>{window.usedPercent}%</b></div>
-            <i className={`quota-meter tone-${quotaTone(window.usedPercent)}`} aria-hidden="true"><b style={{ width: `${window.usedPercent}%` }} /></i>
-            {reset && <small>Resets in {reset}</small>}
-          </div>
-        }) : <p className="quota-card-empty">{row.status ?? 'Unavailable'}</p>}
-        {row.stale && <p className="quota-card-empty">{row.status}: last successful reading retained.</p>}
-      </article>
-    })}</div> : <p className="usage-empty-line">No account quota source available.</p>}
-  </section>
-}
-
-export function UsageSheet({ summary, period, quotas, loading, quotaRefreshing, onRefreshQuota, onPeriodChange, onOpenHistory, onClose }: { summary: Record<string, unknown> | null; period: 'today' | 'month'; quotas: Record<string, unknown>[]; loading: boolean; quotaRefreshing: boolean; onRefreshQuota: () => void; onPeriodChange: (period: 'today' | 'month') => void; onOpenHistory: () => void; onClose: () => void }) {
-  const { ref: dialogRef, close } = useDialogAccessibility(onClose)
-  const tokenBuckets = summary ? usageTokenBuckets(summary) : []
-  return <div className="sheet-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close() }}><section ref={dialogRef} className="usage-sheet" role="dialog" aria-modal="true" aria-labelledby="usage-title">
-    <header><div><p className="eyebrow">USAGE</p><h2 id="usage-title">Usage summary</h2><small className="usage-scope">All runtimes on this device</small></div><button className="icon-button" data-dialog-initial-focus aria-label="Close usage summary" onClick={close}><X size={17} /></button></header>
-    <div className="usage-sheet-body">
-      <QuotaDetails quotas={quotas} refreshing={quotaRefreshing} onRefresh={onRefreshQuota} />
-      <section className="usage-block">
-        <div className="usage-block-heading"><h3>Token usage</h3><span>{summary && typeof summary.from === 'string' && typeof summary.to === 'string' ? `${shortDate(summary.from)} – ${shortDate(summary.to)}` : 'Recorded activity'}</span></div>
-        <div className="usage-period-switch" aria-label="Usage date range"><button className={period === 'today' ? 'active' : ''} aria-pressed={period === 'today'} onClick={() => onPeriodChange('today')}>Today</button><button className={period === 'month' ? 'active' : ''} aria-pressed={period === 'month'} onClick={() => onPeriodChange('month')}>This month</button></div>
-        {loading ? <div className="sheet-loading" role="status" aria-busy="true"><Skeleton variant="row" lines={4} /><span className="sr-only">Loading the daemon summary…</span></div> : summary ? tokenBuckets.every((bucket) => bucket.value === 'N/A') ? <p className="usage-empty-line" data-usage-empty>No usage yet {period === 'today' ? 'today' : 'this month'}.</p> : <div className="usage-token-grid">{tokenBuckets.map((bucket) => <div className="usage-token" key={bucket.key}><span>{bucket.label}</span><strong>{bucket.value}</strong></div>)}</div> : <div className="sheet-empty"><CircleHelp size={20} /><strong>Usage summary unavailable</strong><p>The daemon did not return token usage for this period.</p></div>}
-      </section>
-    </div>
-    <footer><button type="button" className="secondary-button small" onClick={onOpenHistory}>Usage history</button></footer>
-  </section></div>
-}
-
-function shortDate(value: unknown) {
-  if (typeof value !== 'string') return 'unknown'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
-}
 
 function recordFrom(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
 
@@ -4288,13 +4222,11 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
       <div className="cs-brand" data-tauri-drag-region><span data-tauri-drag-region>Bitbots</span><NeedsYouBadge count={waitingAgents.length} compact onOpen={openNextWaiting} /></div>
       <div className="cs-bots" data-companion-no-drag="">{roster.map(({ item, state, session: rowSession }, rowIndex) => {
         const focused = item.id === agent?.id
-        const status = state === 'waiting' ? 'needs' : state === 'working' ? 'working' : 'idle'
         return <button key={item.id} type="button" className={`cs-bot${focused ? ' on' : ''}${state === 'offline' ? ' offline' : ''}${state === 'waiting' ? ' state-waiting' : ''}`} aria-keyshortcuts={[rowIndex < 9 ? `Control+${rowIndex + 1}` : '', state === 'waiting' && roster.findIndex((entry) => entry.state === 'waiting') === rowIndex ? 'N' : ''].filter(Boolean).join(' ') || undefined} aria-current={focused || undefined} aria-label={`${item.name}${state === 'waiting' ? ', needs you' : state === 'working' ? ', working' : ''}`} onClick={() => { selectTeamBlob(item); openView('chat') }}>
-          <HazeAura status={focused && permission ? 'needs' : focused ? auraStatusFor(displayMood) : status} color={agentColorHex(item.color)} selected={focused} manager={item.systemRole === 'manager'} />
           <BlobCanvas decorative color={agentColorHex(item.color)} size={hazeLook ? 16 : 24} mood={state === 'offline' ? 'offline' : hazeLook ? 'idle' : state === 'waiting' ? 'permission' : state === 'working' ? 'working' : 'idle'} look={agentLook(item)} label={item.name} />
           <span className="cs-bot-name">{item.name}</span>
           <SubbotCount agentId={item.id} />
-          {state === 'waiting' ? <span className="cs-bot-meta needs">Needs you</span> : rowSession?.updatedAt ? <time className="cs-bot-meta">{shortTime(rowSession.updatedAt)}</time> : null}
+          {state === 'waiting' ? <span className="cs-bot-meta needs">Needs you</span> : state === 'working' ? <span className="cs-bot-meta working">Working</span> : rowSession?.updatedAt ? <time className="cs-bot-meta">{shortTime(rowSession.updatedAt)}</time> : null}
         </button>
       })}<CompanionMachineBots /></div>
       <nav className="cs-foot" aria-label="Companion views" data-companion-no-drag="">
@@ -4306,7 +4238,6 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
     </aside>
     <section className="cs-main companion-content" aria-label={name}>
       <header className="cs-head" data-tauri-drag-region>
-        <HazeAura status={permission ? 'needs' : auraStatusFor(displayMood)} color={color || '#9aa3ad'} selected quiet manager={agent?.systemRole === 'manager'} />
         {focusBlob(hazeLook ? 20 : 30)}
         <span className="cs-title" data-tauri-drag-region><b>{name}</b><small>{statusLine}</small></span>
         <ApprovalPill mode={approvalMode} compact />
@@ -4334,7 +4265,6 @@ function Companion({ sendShortcut = 'enter', deliveryNotice, busyMode = 'steer',
     {dictating && !chatShown && <div className="companion-listening">{dictationIsland}</div>}
     <div ref={capsuleRef} className={`companion-capsule island ${mode}`} data-tauri-drag-region>
       {mode === 'petit' ? <div className="companion-compact" data-tauri-drag-region>
-        <HazeAura status={permission ? 'needs' : auraStatusFor(displayMood)} color={color || '#9aa3ad'} selected manager={agent?.systemRole === 'manager'} />
         <button className="compact-bot" aria-label="Open companion home" onClick={() => fsmRef.current?.click()}>{focusBlob(40)}</button>
         {peekNames.length > 0
           ? <button type="button" className="companion-peek" aria-live="polite" aria-label={`${peekText(peekNames, nouns)} Open`} onClick={openPeek}><span className="companion-peek-text">{peekText(peekNames, nouns)}</span><span className="companion-peek-open">Open</span></button>

@@ -221,7 +221,7 @@ export interface ChartRectModel extends ChartBarModel {
 export function chartRects(bars: readonly ChartBarModel[], width = 640, height = 160): ChartRectModel[] {
   if (!bars.length) return []
   const slot = width / bars.length
-  const barWidth = Math.max(2, slot * 0.62)
+  const barWidth = Math.min(28, Math.max(2, slot * 0.62))
   const peak = bars.reduce((max, bar) => bar.value !== null && bar.value > max ? bar.value : max, 0)
   const plot = height - 8
   return bars.map((bar, index) => {

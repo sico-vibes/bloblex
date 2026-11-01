@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { MachineBadge } from './MachineBots'
 import { hasSettled, settleOrder } from './sidebarOrder'
-import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Tag, Trash2 } from 'lucide-react'
+import { Archive, ArrowLeftRight, ChevronDown, ChevronRight, FolderOpen, FolderPlus, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Smile, Tag, Trash2 } from 'lucide-react'
 import type { Agent, Project, Session } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -13,6 +13,7 @@ import { agentColorHex } from './agentColor'
 import { presentedSessionState } from './sessionOutcome'
 import { ancestorIds, conversationsByProject, conversationTree, defaultProjectFor, isEmptyConversation, sessionIsBusy, sideTitle, type ConversationNode } from './teamSelectors'
 import { TagEditor, TeamMenu, type MenuItem, type TagTarget } from './TeamSidebar'
+import { ProjectIcon, ProjectIconPicker, type ProjectIconChoice } from './ProjectIcon'
 import './conversationsPanel.css'
 
 function Face({ agent, name }: { agent: Agent | null | undefined; name: string }) {
@@ -59,6 +60,8 @@ export type ProjectActions = {
   /** Adds a folder that already exists as a project. */
   onImportProject?: () => Promise<Project | undefined | null> | void
   onRenameProject: (project: Project) => void
+  /** Sets or, with null, clears the project's own icon. */
+  onSetProjectIcon?: (project: Project, icon: ProjectIconChoice | null) => void
   onChangeProjectFolder: (project: Project) => void
   onDeleteProject: (project: Project) => void
 }
@@ -107,10 +110,11 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
   const [menu, setMenu] = useState<{ items: MenuItem[]; label: string; x: number; y: number; trigger: HTMLElement } | null>(null)
   const lastTrigger = useRef<HTMLElement | null>(null)
   const [tagTarget, setTagTarget] = useState<TagTarget | null>(null)
+  const [iconTarget, setIconTarget] = useState<{ projectId: string; x: number; y: number } | null>(null)
   const closeMenu = () => { const trigger = menu?.trigger; setMenu(null); requestAnimationFrame(() => trigger?.focus()) }
   const openMenu = (trigger: HTMLElement, label: string, items: MenuItem[]) => { lastTrigger.current = trigger; const rect = trigger.getBoundingClientRect(); setMenu({ items, label, x: rect.left, y: rect.bottom + 4, trigger }) }
   const pickerItems = (): MenuItem[] => [
-    ...projects.map((project): MenuItem => ({ label: project.name, icon: <Folder size={15} />, checked: project.id === fallback?.id, disabled: !project.path, onSelect: () => onNew(project.id) })),
+    ...projects.map((project): MenuItem => ({ label: project.name, icon: <ProjectIcon project={project} size={15} />, checked: project.id === fallback?.id, disabled: !project.path, onSelect: () => onNew(project.id) })),
     { label: 'No project', icon: <FolderOpen size={15} />, checked: !fallback, onSelect: () => onNew(null) },
     ...(projectActions ? ['separator', { label: 'New project…', icon: <FolderPlus size={15} />, onSelect: () => void Promise.resolve(projectActions.onCreateProject()).then((project) => { if (project?.id) onNew(project.id) }) }, ...(projectActions.onImportProject ? [{ label: 'Use an existing folder…', icon: <FolderOpen size={15} />, onSelect: () => void Promise.resolve(projectActions.onImportProject?.()).then((project) => { if (project?.id) onNew(project.id) }) }] : [])] as MenuItem[] : []),
   ]
@@ -119,6 +123,7 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
     'separator',
     { label: 'Rename project', icon: <Pencil size={15} />, onSelect: () => projectActions.onRenameProject(project) },
     { label: 'Change folder…', icon: <FolderOpen size={15} />, onSelect: () => projectActions.onChangeProjectFolder(project) },
+    ...(projectActions.onSetProjectIcon ? [{ label: 'Change icon…', icon: <Smile size={15} />, onSelect: () => setIconTarget({ projectId: project.id, x: lastTrigger.current?.getBoundingClientRect().left ?? 80, y: (lastTrigger.current?.getBoundingClientRect().bottom ?? 80) + 4 }) }] : []),
     ...(projectActions.onOpenProjectSettings ? [{ label: 'Project settings…', icon: <SlidersHorizontal size={15} />, onSelect: () => projectActions.onOpenProjectSettings?.(project) }] : []),
     // FIX39 item 21: the Manager matches jobs to a project's tags; they moved here with the project headings.
     { label: 'Tags…', icon: <Tag size={15} />, onSelect: () => setTagTarget({ kind: 'project', id: project.id, name: project.name, tags: [...(project.tags ?? [])] }) },
@@ -174,7 +179,6 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
         <button type="button" className="convo-new" aria-label="New conversation" title={fallback ? `Start a conversation in ${fallback.name}` : 'Start a conversation with no project'} disabled={!canCreate} onClick={() => onNew()}><Plus size={14} aria-hidden="true" />New conversation</button>
         <button type="button" className="convo-new-pick" aria-label="Choose the project for a new conversation" aria-haspopup="menu" title="Choose a project" disabled={!canCreate} onClick={(event) => openMenu(event.currentTarget, 'Start a conversation in', pickerItems())}><ChevronDown size={13} aria-hidden="true" /></button>
       </div>
-      <span className="convo-new-where">{fallback ? <><Folder size={11} aria-hidden="true" />{fallback.name}</> : 'No project'}</span>
     </div>
     {total > FILTER_THRESHOLD && <label className="convo-filter"><Search size={13} aria-hidden="true" /><input type="search" value={query} placeholder="Find a conversation" aria-label="Find a conversation" spellCheck={false} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); setQuery('') } }} /></label>}
     <div className="convo-scroll">
@@ -184,7 +188,7 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
         const name = project?.name ?? 'No project'
         return <section key={key} className="convo-project" aria-label={name} data-project-id={project?.id ?? 'none'}>
           <h3 className="convo-group convo-project-head">
-            {project ? <Folder size={12} aria-hidden="true" /> : <FolderOpen size={12} aria-hidden="true" />}
+            <ProjectIcon project={project} size={13} />
             <span className="convo-project-name" title={project?.path ?? undefined}>{name}</span>
             {project?.tags && project.tags.length > 0 && <span className="project-tags" title={project.tags.join(', ')}>{project.tags.map((tag) => <span key={tag} className="project-tag">{tag}</span>)}</span>}
             <span className="convo-project-tools">
@@ -196,6 +200,7 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
         </section>
       })}
     </div>
+    {iconTarget && projects.find((project) => project.id === iconTarget.projectId) && projectActions?.onSetProjectIcon && <ProjectIconPicker project={projects.find((project) => project.id === iconTarget.projectId)!} position={iconTarget} onChange={(icon) => projectActions.onSetProjectIcon?.(projects.find((project) => project.id === iconTarget.projectId)!, icon)} onClose={() => { setIconTarget(null); requestAnimationFrame(() => lastTrigger.current?.focus()) }} />}
     {menu && <TeamMenu label={menu.label} position={menu} items={menu.items} onClose={closeMenu} />}
     {tagTarget && <TagEditor target={tagTarget} onClose={() => { setTagTarget(null); requestAnimationFrame(() => lastTrigger.current?.focus()) }} />}
   </aside>

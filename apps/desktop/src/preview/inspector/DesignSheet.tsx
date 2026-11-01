@@ -36,6 +36,7 @@ import { BlobCanvas } from '../../blob/BlobCanvas'
 import { ART_MOOD_SAMPLE, ART_MOODS } from '../../blob/art/art'
 import { MASCOT_LOOK } from '../../blob/look'
 import { ProviderLogo, providerBrand } from '../../ui/providerBrand'
+import { ProviderLimits } from '../../ui/QuotaBar'
 
 const params = new URLSearchParams(location.search)
 const theme = params.get('theme') === 'light' ? 'light' : 'dark'
@@ -130,6 +131,14 @@ function Sheet() {
         <ConnectionBanner state="disconnected" attempts={5} failed onRetry={() => undefined} />
         <div className="settings-banner"><span>A settings banner with a message.</span><button type="button" className="secondary-button small">Do it</button></div>
         <div className="settings-banner error"><span>A settings error.</span></div>
+      </div>
+    </Section>
+
+    <Section id="usage" title="Usage parts">
+      <div style={{ width: 340, display: 'grid', gap: 16 }}>
+        <ProviderLimits row={{ provider: 'codex', name: 'Codex', status: null, stale: false, readOff: false, fetchedAt: null, windows: [{ key: 's', label: 'Session', short: '5h', usedPercent: 24, resetsAt: new Date(Date.now() + 3 * 3_600_000).toISOString(), durationMins: 300 }, { key: 'w', label: 'Weekly', short: 'wk', usedPercent: 91, resetsAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), durationMins: 10_080 }] }} />
+        <ProviderLimits row={{ provider: 'claude', name: 'Claude', status: 'Usage reading is off', stale: false, readOff: true, fetchedAt: null, windows: [] }} onTurnOn={() => undefined} />
+        <ProviderLimits row={{ provider: 'opencode', name: 'OpenCode Go', status: 'Sign-in needed', stale: false, readOff: false, fetchedAt: null, windows: [] }} />
       </div>
     </Section>
 

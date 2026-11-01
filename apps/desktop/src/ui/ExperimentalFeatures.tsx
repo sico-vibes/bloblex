@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Keys } from './Keys'
 import { X } from 'lucide-react'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
@@ -61,7 +62,7 @@ export function MessageSearch({ agents, onChoose, onClose }: { agents: Agent[]; 
 
 export function ShortcutSheet({ speechEnabled, bindings, sendShortcut, onClose }: { speechEnabled: boolean; bindings?: ShortcutBindings; sendShortcut?: SendShortcut; onClose: () => void }) {
   const { ref, close } = useDialogAccessibility(onClose)
-  return <div className="sheet-backdrop quick-switcher-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close() }}><section ref={ref} className="quick-switcher shortcut-sheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><header><h2>Keyboard shortcuts</h2><button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close keyboard shortcuts" onClick={close}><X size={16} /></button></header><dl>{shortcutRows(speechEnabled, bindings, sendShortcut).map(([keys, label]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{label}</dd></div>)}</dl></section></div>
+  return <div className="sheet-backdrop quick-switcher-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) close() }}><section ref={ref} className="quick-switcher shortcut-sheet" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><header><h2>Keyboard shortcuts</h2><button type="button" className="icon-button" data-dialog-initial-focus aria-label="Close keyboard shortcuts" onClick={close}><X size={16} /></button></header><dl>{shortcutRows(speechEnabled, bindings, sendShortcut).map(([keys, label]) => <div key={keys}><dt><Keys keys={keys} /></dt><dd>{label}</dd></div>)}</dl></section></div>
 }
 
 export type UndoToast = { id: string; text: string; deadline: number; undo: () => Promise<void> }

@@ -2,6 +2,7 @@
 // morning, brief me on the news"). The daemon owns the timer and the runs;
 // this view lists them and edits their definition.
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { HelpTip } from './SettingsParts'
 import { WebhookPanel, type WebhookState } from './WebhookPanel'
 import { ArrowLeft, CalendarClock, ChevronDown, Mail, Newspaper, Pencil, Play, Plus, Trash2, FlaskConical, GitBranch } from 'lucide-react'
 import type { Agent, Automation, AutomationRun } from '../types'
@@ -111,7 +112,7 @@ export function SchedulesView(props: SchedulesViewProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const backRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { backRef.current?.focus() }, [])
+  useEffect(() => { backRef.current?.focus({ focusVisible: false } as FocusOptions) }, [])
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
   const visible = useMemo(() => [...automations]
     .filter((item) => !agentId || item.agentId === agentId)
@@ -136,16 +137,15 @@ export function SchedulesView(props: SchedulesViewProps) {
   return <div className="schedules-page" data-schedules-root>
     <header className="blob-page-header">
       <button ref={backRef} type="button" className="analytics-icon-button" aria-label="Back" title="Back" onClick={onBack}><ArrowLeft size={16} /></button>
-      <strong className="blob-page-heading">Automations</strong>
-      <button type="button" className="primary-button small schedules-new" disabled={!connected || agents.filter((a) => !a.archived).length === 0} onClick={() => { setStartFrom(null); setEditing('new') }}><Plus size={14} aria-hidden="true" />New automation</button>
+      <strong className="blob-page-heading">Schedules</strong>
+      <button type="button" className="primary-button small schedules-new" disabled={!connected || agents.filter((a) => !a.archived).length === 0} onClick={() => { setStartFrom(null); setEditing('new') }}><Plus size={14} aria-hidden="true" />New schedule</button>
     </header>
     <div className="schedules-scroll"><div className="schedules-column">
       <section className="schedules-global" aria-label="Automation controls">
         <div>
-          <strong>Pause all automations</strong>
-          <p>Automations run only while Bitbots is running and your computer is awake. If runs were missed, one run starts when you are back.</p>
+          <strong>Pause all schedules <HelpTip align="start" text="Schedules run only while Bitbots is running and your computer is awake. Missed runs become one run when you're back." /></strong>
         </div>
-        <button type="button" className={`toggle ${paused ? 'on' : ''}`} role="switch" aria-label="Pause all automations" aria-checked={paused} disabled={!connected} onClick={() => void act('global', () => onSetPaused(!paused))}><i /></button>
+        <button type="button" className={`toggle ${paused ? 'on' : ''}`} role="switch" aria-label="Pause all schedules" aria-checked={paused} disabled={!connected} onClick={() => void act('global', () => onSetPaused(!paused))}><i /></button>
       </section>
       {(problem || loadError) && <p className="schedules-problem" role="alert">{problem ?? loadError}</p>}
       {!connected && <p className="blob-muted" role="status">Connect to the local runtime to manage automations.</p>}
@@ -299,7 +299,7 @@ function AutomationEditor({ existing, template, agents, defaultAgentId, onClose,
 
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`}>
     <section ref={ref} className="blob-dialog schedule-dialog" role="dialog" aria-modal="true" aria-labelledby="schedule-dialog-title" tabIndex={-1}>
-      <h2 id="schedule-dialog-title">{existing ? 'Edit automation' : 'New automation'}</h2>
+      <h2 id="schedule-dialog-title">{existing ? 'Edit automation' : 'New schedule'}</h2>
       {!existing && <div className="schedule-ideas" role="group" aria-label="Start from an idea">{TEMPLATES.map((idea) => <button key={idea.id} type="button" className="schedule-idea" aria-pressed={name === idea.name && prompt === idea.prompt} onClick={() => { setName(idea.name); setPrompt(idea.prompt); set({ preset: idea.preset, time: idea.time }); setApprovalMode(idea.approvalMode) }}><idea.icon size={13} aria-hidden="true" />{idea.title}</button>)}</div>}
       <label className="blob-field"><span>Name</span><input data-dialog-initial-focus value={name} maxLength={80} placeholder="Morning summary" onChange={(event) => setName(event.target.value)} /></label>
       <div className="blob-field"><span>{Noun}</span>

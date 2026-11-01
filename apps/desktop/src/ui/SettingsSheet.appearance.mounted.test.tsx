@@ -11,6 +11,7 @@ import { setThemeStyle } from '../blob/bitbots'
 
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), invoke: vi.fn(), setCompanionMonitor: vi.fn(), setCompanionVisibility: vi.fn(), setCloseToTray: vi.fn() }))
 vi.mock('../tauri', () => ({
+  listenForDaemonEvents: vi.fn(async () => () => undefined),
   inDesktop: true,
   previewMode: false,
   rpc: mocks.rpc,
@@ -65,53 +66,60 @@ describe('General settings mounted controls', () => {
     // Wallpaper and glass belonged to Frost, retired on 27 October 2026.
     expect(host.textContent).not.toContain('Wallpaper')
     expect(host.textContent).not.toContain('Look options')
+    // Each font list opens from its row.
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label^="Interface font"]')!.click() })
     const font = [...host.querySelectorAll<HTMLButtonElement>('.font-options button')].find((button) => button.textContent === 'Geist')
     await act(async () => { font?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.font', value: 'geist' })
     expect(localCache.get('bitbots.font')).toBe('geist')
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label^="Code font"]')!.click() })
     const codeSearch = host.querySelector<HTMLInputElement>('[aria-label="Search code fonts"]')!
     const codeChoices = codeSearch.parentElement!.querySelector('.font-options')!.textContent ?? ''
     expect(codeChoices).toContain('JetBrains Mono')
     expect(codeChoices).not.toContain('IBM Plex Sans')
   })
 
-  it('loads and saves the busy-send preference in General', async () => {
+  it('loads and saves the busy-send preference in Chat', async () => {
     mocks.invoke.mockResolvedValue(false)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'composer.busySendMode': 'queue' } } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Chat" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(selectValue(host, 'When you send while a bot is working')).toBe('queue')
     await chooseOption(host, 'When you send while a bot is working', 'steer')
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'composer.busySendMode', value: 'steer' })
   })
 
-  it.each(EXPERIMENTS)('starts $label at its default and saves its exact setting key', async ({ name, label }) => {
+  // Memory's switch lives on the Memory page, with its own tests.
+  const FEATURE_PAGES = { changeReview: 'Chat', messageActions: 'Chat', search: 'Chat', autoTitles: 'Chat', undo: 'Chat', shortcuts: 'Keyboard', resumeAfterUsageLimits: 'General', autoRetry: 'General', approvalBadge: 'General', sidebarModel: 'Appearance', botLock: 'Approvals' } as const
+  it.each(EXPERIMENTS.filter(({ name }) => name !== 'memory'))('starts $label at its default on its own page and saves its exact setting key', async ({ name, label }) => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onExperimentChange = vi.fn()
     const initial = DEFAULT_EXPERIMENTS[name]
+    setThemeStyle(name === 'sidebarModel' ? 'blobots' : 'haze')
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" onExperimentChange={onExperimentChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage={FEATURE_PAGES[name as keyof typeof FEATURE_PAGES]} onExperimentChange={onExperimentChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
     expect(toggle.getAttribute('aria-checked')).toBe(String(initial))
     const row = toggle.closest('.settings-row')
-    expect(row?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
+    expect(row?.textContent).not.toContain('Experimental')
     expect(helpTipText(row)?.length).toBeGreaterThan(20)
     await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: `experimental.${name}`, value: !initial })
     expect(onExperimentChange).toHaveBeenCalledWith(name, !initial)
+    setThemeStyle('haze')
   })
 
-  it('offers the usage bar as an explained, experimental switch that saves and reports the change', async () => {
+  it('offers the usage bar as an explained switch that saves and reports the change', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onUsageBarChange = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" usageBarEnabled={false} onUsageBarChange={onUsageBarChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" usageBarEnabled={false} onUsageBarChange={onUsageBarChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
-    expect(group?.querySelector('.experimental-tag')?.textContent).toBe('Experimental')
+    const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Usage')
     const usageBarRow = [...(group?.querySelectorAll('.settings-row') ?? [])].find((row) => row.querySelector('[aria-label="Usage bar"]'))
     expect(helpTipText(usageBarRow)).toContain('plan limits')
     const toggle = usageBarRow?.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')
@@ -126,22 +134,22 @@ describe('General settings mounted controls', () => {
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const changed = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" claudeWorkflowsEnabled={false} onClaudeWorkflowsChange={changed} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Agents" claudeWorkflowsEnabled={false} onClaudeWorkflowsChange={changed} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Claude dynamic workflows"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
-    expect(helpTipText(toggle.closest('.settings-row'))).toContain('session-local')
+    expect(helpTipText(toggle.closest('.settings-row'))).toContain('workflows')
     await act(async () => { toggle.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key:'claude.enableWorkflows', value:true })
     expect(changed).toHaveBeenCalledWith(true)
   })
 
-  it('offers Usage tips as an independent experimental switch', async () => {
+  it('offers Usage tips as an independent switch', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
     const onUsageTipsChange = vi.fn()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" usageBarEnabled={false} usageTipsEnabled={false} onUsageTipsChange={onUsageTipsChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" usageBarEnabled={false} usageTipsEnabled={false} onUsageTipsChange={onUsageTipsChange} onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Usage tips"]')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
@@ -153,23 +161,19 @@ describe('General settings mounted controls', () => {
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Usage bar"]')?.getAttribute('aria-checked')).toBe('false')
   })
 
-  it('moves the experimental toggles onto their own page and off General', async () => {
+  it('has no Experimental page, groups its tabs, and shows bot-list options only where they change something', async () => {
     mocks.invoke.mockResolvedValue(true)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: {} } : {})
+    setThemeStyle('haze')
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Experimental" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Appearance" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    // The page has its own nav entry and lists the moved toggles.
-    expect([...host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)).toContain('Experimental')
-    const group = [...host.querySelectorAll('.settings-group')].find((section) => section.querySelector('h3')?.textContent === 'Experimental')
-    expect(group).toBeTruthy()
-    expect(group?.querySelector('[aria-label="Usage bar"]')).toBeTruthy()
-    expect(group?.querySelector<HTMLButtonElement>('[aria-label="Model and effort under the name"]')?.getAttribute('aria-checked')).toBe('false')
-    // General no longer carries the group.
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect([...host.querySelectorAll('.settings-group')].some((section) => section.querySelector('h3')?.textContent === 'Experimental')).toBe(false)
-    expect(host.querySelector('[aria-label="Usage bar"]')).toBeNull()
+    expect([...host.querySelectorAll('.settings-nav-label')].map((label) => label.textContent)).toEqual(['App', 'Bots', 'Connections', 'System'])
+    expect(host.querySelector('.settings-nav')?.textContent).not.toContain('Experimental')
+    expect(host.querySelector('[aria-label="Model and effort under the name"]')).toBeNull()
+    act(() => setThemeStyle('blobots'))
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Model and effort under the name"]')?.getAttribute('aria-checked')).toBe('false')
+    act(() => setThemeStyle('haze'))
   })
 
   it('offers theme, text size, companion placement and hotkey controls, and persists appearance changes', async () => {
@@ -186,8 +190,8 @@ describe('General settings mounted controls', () => {
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.appearance-page .density-control button')].find((button) => button.textContent === 'Light')?.click(); await Promise.resolve() })
     expect(mocks.rpc).toHaveBeenCalledWith('settings.set', { key: 'appearance.theme', value: 'light' })
     expect(document.documentElement.dataset.theme).toBe('light')
-    // Companion placement and the hotkey stay on General.
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    // Companion placement and the hotkey live on Companion.
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Companion" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(selectTrigger(host, 'Companion start position')).not.toBeNull()
     expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')).not.toBeNull()
@@ -212,7 +216,7 @@ describe('General settings mounted controls', () => {
     mocks.invoke.mockResolvedValue(false)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'companion.hotkey': true } } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Companion" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(host.querySelector('[role="alert"]')?.textContent).toBe('Ctrl+Alt+B is used by another app. The companion shortcut is off.')
     expect(host.querySelector('[aria-label="Show/hide with Ctrl+Alt+B"]')?.getAttribute('aria-checked')).toBe('false')
@@ -239,7 +243,7 @@ describe('General settings mounted controls', () => {
     mocks.setCompanionVisibility.mockResolvedValue(undefined)
     mocks.rpc.mockImplementation(async (method: string) => method === 'settings.get' ? { settings: { 'companion.openAtStartup': false } } : {})
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="General" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
+    await act(async () => root.render(<SettingsSheet snapshot={null} initialPage="Companion" onClose={vi.fn()} onRefresh={vi.fn()} onError={vi.fn()} onOpenAgent={vi.fn()} />))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const launchSwitch = host.querySelector<HTMLButtonElement>('[aria-label="Open the companion when Bitbots starts"]')
     expect(launchSwitch?.getAttribute('aria-checked')).toBe('false')

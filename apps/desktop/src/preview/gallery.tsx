@@ -59,7 +59,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: 'settings', title: 'Settings', scale: 0.62,
-    description: 'General settings, including the Experimental section with the usage bar switch and its explanation on hover.',
+    description: 'General settings, including the usage bar switch and its explanation on hover.',
     frames: [{ label: 'General', src: `/?preview-settings${t}`, width: 1100, height: 760 }],
   },
   {

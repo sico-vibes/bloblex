@@ -56,7 +56,7 @@ export function BlobPage({ mode, agent, draft, runtime, session, runtimes, proje
   const noun = useEntityNoun()
   const Noun = useEntityNoun({ capital: true })
   const backRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { backRef.current?.focus() }, [])
+  useEffect(() => { backRef.current?.focus({ focusVisible: false } as FocusOptions) }, [])
   const title = mode === 'create' ? `New ${noun}` : agent?.name || draft.name || Noun
   const badgeMode = visibleApprovalMode(draft.approvalMode, agent)
   const latestSessionId = [...sessions].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0]?.id ?? session?.id ?? null

@@ -29,8 +29,8 @@ function CopyText({ text, label }: { text: string; label: string }) {
 
 export function RemoteMethodSwitch({ method, locked, onChange }: { method: RemoteMethodId; locked: boolean; onChange: (method: RemoteMethodId) => void }) {
   const options: Array<{ id: RemoteMethodId; title: string; detail: string; Icon: typeof Globe }> = [
-    { id: 'tailscale', title: 'Tailscale', detail: 'Private network between your own devices. Needs the free Tailscale app on each.', Icon: Smartphone },
-    { id: 'native', title: 'Direct', detail: 'Only Bitbots. Devices sign in with your password over this computer’s own address.', Icon: Globe },
+    { id: 'tailscale', title: 'Tailscale', detail: 'A private network. Needs the free Tailscale app on each device.', Icon: Smartphone },
+    { id: 'native', title: 'Direct', detail: 'Devices sign in with your password over this computer’s address.', Icon: Globe },
   ]
   return <div className="remote-method" role="radiogroup" aria-label="How devices connect">
     {options.map(({ id, title, detail, Icon }) => <button key={id} type="button" role="radio" aria-checked={method === id} className={`remote-method-option${method === id ? ' on' : ''}`} disabled={locked && method !== id} onClick={() => { if (method !== id) onChange(id) }}>

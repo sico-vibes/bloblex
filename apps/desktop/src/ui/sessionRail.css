@@ -1,11 +1,14 @@
 /* The right-hand rail: stacked cards for the open conversation. */
-.session-rail { min-height: 0; flex: 1; padding: 4px 12px 20px; display: grid; align-content: start; gap: 10px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+.session-rail { min-height: 0; flex: 1; padding: 4px 12px 20px; display: grid; align-content: start; gap: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 .rail-empty { margin: 16px 20px; color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; text-align: center; }
-.rail-card { min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); }
-.rail-card-head { min-height: 36px; padding: 0 8px 0 4px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rail-card { min-width: 0; border-top: 1px solid var(--line); }
+.rail-card:has(.schedule-overview-note) { display: none; }
+.rail-card-head { min-height: 36px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .rail-card-toggle { height: 28px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px; color: var(--text-1); border: 0; border-radius: var(--radius-sm); background: transparent; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
-.rail-card-toggle svg { color: var(--text-3); }
-.rail-card-toggle:hover { background: var(--surface-hover); }
+.rail-card-toggle svg { color: var(--text-3); opacity: 0; transition: opacity 100ms ease; }
+.rail-card-toggle[aria-expanded="false"] svg, .rail-card-toggle:hover svg, .rail-card-toggle:focus-visible svg { opacity: 1; }
+.rail-card-toggle { padding: 0; color: var(--text-2); }
+.rail-card-toggle:hover { color: var(--text-1); background: transparent; }
 .rail-card-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .rail-card-body { padding: 0 12px 12px; display: grid; gap: 7px; }
 .rail-row { min-width: 0; min-height: 24px; display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-xs); }
@@ -88,3 +91,26 @@
 .rail-turn .rail-file .rail-confirm { flex: 1 0 100%; margin-bottom: 4px; }
 .rail-turn .rail-file .rail-undo { margin: 0 4px 0 auto; }
 .rail-more { margin-top: 6px; align-self: flex-start; }
+.rail-diffstat { flex: 0 0 auto; white-space: nowrap; }
+.rail-tag { padding: 0; border: 0; white-space: nowrap; }
+.rail-file-name { flex: 1 1 auto; min-width: 72px; }
+.rail-file-open { flex: 1 1 0; min-width: 0; }
+.rail-file-open > svg { flex: 0 0 auto; }
+.rail-add, .rail-del { flex: 0 0 auto; }
+.rail-card-head { gap: 4px; }
+.rail-card-aside { gap: 5px; }
+/* Changes: the count in the heading, then the two actions, then the files in tidy columns. Deleted reads as struck through; the rarer notes are in the row's tooltip. */
+.rail-changes-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.rail-changes-actions .rail-pr { height: 26px; padding: 0 8px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: 6px; background: transparent; font: inherit; font-size: var(--fs-xs); font-weight: 500; }
+.rail-changes-actions .rail-pr:hover:not(:disabled) { color: var(--text-1); border-color: var(--line-strong); background: var(--surface-selected); }
+.rail-scope { margin: 0; color: var(--text-3); font-size: var(--fs-2xs); line-height: 1.4; }
+.rail-file { position: relative; min-height: 26px; gap: 8px; padding: 0 2px; }
+.rail-file > .rail-file-open > svg { display: none; }
+.rail-file-open { min-height: 26px; padding: 0; gap: 0; }
+.rail-file[data-change="deleted"] .rail-file-name { color: var(--text-3); text-decoration: line-through; }
+.rail-file .rail-add, .rail-file .rail-del { min-width: 0; font-size: var(--fs-xs); }
+.rail-file-actions { position: absolute; top: 2px; right: 0; padding-left: 8px; background: var(--surface-overlay); border-radius: 6px; }
+.rail-file:not(:hover):not(:focus-within) .rail-file-actions { pointer-events: none; }
+.rail-file-open { justify-content: flex-start; gap: 8px; }
+.rail-file-open .rail-file-name { flex: 0 1 auto; }
+.rail-file-open .rail-tag { flex: 0 0 auto; margin-left: auto; font-size: var(--fs-2xs); }

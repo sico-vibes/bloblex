@@ -15,7 +15,7 @@ afterEach(() => {
 })
 
 describe('Detailed Usage popover', () => {
-  it('keeps OpenCode Go 5h, weekly and monthly metrics in the same row', async () => {
+  it('lists OpenCode Go 5h, weekly and monthly limits under one heading', async () => {
     host = document.createElement('div')
     document.body.append(host)
     root = createRoot(host)
@@ -25,8 +25,10 @@ describe('Detailed Usage popover', () => {
       { label:'Monthly', primary:{ usedPercent:17, windowDurationMins:null, resetsAt:'2026-10-30T12:00:00Z' } },
     ] } }]} refreshing={false} onRefresh={() => undefined} onOpenDetails={() => undefined} />))
     await act(async () => { (host!.querySelector('.quota-bar-trigger') as HTMLButtonElement).click(); await Promise.resolve() })
-    const windows = [...host!.querySelectorAll('.usage-row-windows .usage-row-window')]
+    const windows = [...host!.querySelectorAll('.usage-popover .limit-row')]
     expect(windows).toHaveLength(3)
-    expect(windows.map((item) => item.textContent?.trim())).toEqual(expect.arrayContaining(['5h5%', 'wk7%', '30d17%']))
+    expect(windows.map((item) => item.querySelector('.limit-name')?.textContent)).toEqual(['Session', 'Weekly', 'Monthly'])
+    expect(windows.map((item) => item.querySelector('.limit-value')?.textContent)).toEqual(['5%', '7%', '17%'])
+    expect(windows.every((item) => item.querySelector('.quota-meter'))).toBe(true)
   })
 })

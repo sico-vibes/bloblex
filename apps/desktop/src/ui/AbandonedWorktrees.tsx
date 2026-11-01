@@ -77,7 +77,7 @@ export function AbandonedWorktrees() {
         : !items.length
           ? <p className="settings-empty" role="status">No leftover task copies. Each one still belongs to a conversation.</p>
           : <>
-            <p className="settings-empty">These git copies have no conversation using them. Bitbots never removes one by itself.</p>
+            <p className="settings-empty">No conversation uses these copies. Bitbots never removes one by itself.</p>
             <ul className="worktree-list">{items.map((item) => <Row key={item.id} item={item} onRemoved={() => void load()} />)}</ul>
           </>}
   </SettingsGroup>

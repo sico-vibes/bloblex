@@ -18,7 +18,7 @@ export function DiagnosticsDialog({ onClose }: { onClose: () => void }) {
   const first = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => { setEntered(true); first.current?.focus() })
+    const frame = requestAnimationFrame(() => { setEntered(true); first.current?.focus({ focusVisible: false } as FocusOptions) })
     return () => cancelAnimationFrame(frame)
   }, [])
   useEffect(() => {
@@ -66,7 +66,7 @@ export function DiagnosticsDialog({ onClose }: { onClose: () => void }) {
         <FileArchive size={18} aria-hidden="true" />
         <h2 id="diagnostics-title">Export diagnostics</h2>
       </header>
-      <p>One zip with the recent logs, the app and operating system versions, the coding agents found, your settings with secrets removed, and recent activity with message text removed. It is saved on this computer; nothing is uploaded anywhere.</p>
+      <p>A zip of recent logs, versions and settings, with message text and secrets removed. Nothing is uploaded.</p>
       {!preview && !problem && <p className="diagnostics-loading" role="status"><LoaderCircle size={14} className="spinning" aria-hidden="true" />Reading the diagnostics list…</p>}
       {problem && <p className="settings-banner error" role="alert">{problem}</p>}
       {preview && <>

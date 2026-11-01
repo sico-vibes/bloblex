@@ -10,3 +10,4 @@
 .bot-status-idle { background: var(--text-3); opacity: .5; }
 @keyframes bot-status-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { .bot-status-working { animation: none; } }
+.remote-status .bot-status-working { background: var(--status-success); animation: none; }

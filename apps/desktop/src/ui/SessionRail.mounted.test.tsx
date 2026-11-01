@@ -80,8 +80,7 @@ describe('rail repository changes', () => {
     await mount(session())
     expect(repositoryCalls()).toEqual([['session.repository', { sessionId: 's1' }]])
     const changes = card('changes')
-    expect(changes.textContent).toContain('feature/rail')
-    expect(changes.textContent).toContain('Every uncommitted change in this repository, not only this conversation')
+    expect(changes.textContent).toContain('not only this conversation')
     expect(rows().map((row) => row.querySelector('.rail-file-name')?.textContent)).toEqual(['App.tsx', 'new.md'])
     expect(changes.querySelector('.rail-diffstat')?.textContent).toBe('+43 −1')
     // The branch shown is the repository's, not the earlier environment reading.

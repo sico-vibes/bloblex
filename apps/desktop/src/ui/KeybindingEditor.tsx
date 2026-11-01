@@ -1,11 +1,12 @@
 // Phase 1: Settings › General › Keyboard shortcuts. Press a new shortcut for an
 // action; the daemon keeps only what differs from the defaults.
-import { useState } from 'react'
-import { RotateCcw, X } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { RotateCcw } from 'lucide-react'
+import { Keys } from './Keys'
 import { SettingsGroup } from './SettingsParts'
 import { keysFor, normalizeBindings, shortcutConflict, shortcutFromEvent, shortcutProblem, SHORTCUT_ACTIONS, type ShortcutActionId, type ShortcutBindings } from './shortcuts'
 
-export function KeybindingEditor({ bindings, disabled, onSave }: {
+export function KeybindingEditor({ first, bindings, disabled, onSave }: { first?: ReactNode;
   bindings: ShortcutBindings
   disabled: boolean
   /** Stores the new overrides; resolves to an error sentence on failure. */
@@ -29,6 +30,8 @@ export function KeybindingEditor({ bindings, disabled, onSave }: {
     event.preventDefault()
     event.stopPropagation()
     if (event.key === 'Escape') { setRecording(null); setProblem(null); return }
+    // Backspace or Delete, alone, clears the shortcut.
+    if ((event.key === 'Backspace' || event.key === 'Delete') && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) { setProblem(null); setRecording(null); void save(withValue(id, null)); return }
     const keys = shortcutFromEvent(event.nativeEvent)
     if (!keys) return
     const refused = shortcutProblem(keys)
@@ -40,6 +43,7 @@ export function KeybindingEditor({ bindings, disabled, onSave }: {
     void save(withValue(id, keys))
   }
   return <SettingsGroup title="Keyboard shortcuts">
+    {first}
     <ul className="keybinding-list">
       {SHORTCUT_ACTIONS.map((action) => {
         const keys = keysFor(action.id, bindings)
@@ -47,11 +51,10 @@ export function KeybindingEditor({ bindings, disabled, onSave }: {
         const active = recording === action.id
         return <li key={action.id}>
           <span className="keybinding-label">{action.label}</span>
-          <button type="button" className={`keybinding-keys${active ? ' recording' : ''}`} disabled={disabled} aria-label={active ? `Press a new shortcut for ${action.label}. Esc cancels.` : `Change the shortcut for ${action.label}: ${keys ?? 'none'}`} onClick={() => { setProblem(null); setRecording(active ? null : action.id) }} onBlur={() => { if (active) setRecording(null) }} onKeyDown={(event) => onKey(action.id, event)}>
-            {active ? 'Press keys…' : keys ? <kbd>{keys}</kbd> : <span className="keybinding-none">None</span>}
+          <button type="button" className={`keybinding-keys${active ? ' recording' : ''}`} disabled={disabled} aria-label={active ? `Press a new shortcut for ${action.label}. Backspace clears it, Esc cancels.` : `Change the shortcut for ${action.label}: ${keys ?? 'none'}`} onClick={() => { setProblem(null); setRecording(active ? null : action.id) }} onBlur={() => { if (active) setRecording(null) }} onKeyDown={(event) => onKey(action.id, event)}>
+            {active ? 'Press keys, or Backspace to clear' : keys ? <Keys keys={keys} /> : <span className="keybinding-none">None</span>}
           </button>
           <span className="keybinding-actions">
-            {keys && <button type="button" className="composer-icon-button" disabled={disabled} aria-label={`Remove the shortcut for ${action.label}`} title="Remove" onClick={() => void save(withValue(action.id, null))}><X size={13} aria-hidden="true" /></button>}
             {changed && <button type="button" className="composer-icon-button" disabled={disabled} aria-label={`Reset the shortcut for ${action.label}`} title="Reset" onClick={() => { const next = { ...bindings }; delete next[action.id]; void save(next) }}><RotateCcw size={13} aria-hidden="true" /></button>}
           </span>
         </li>

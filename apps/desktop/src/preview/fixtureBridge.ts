@@ -273,10 +273,13 @@ if (fixtureScene) {
   sessions.push({ id: SCENE_SESSION_ID, runtimeId: 'runtime-codex', agentId: 'agent-codex', title: fixtureScene.title ?? 'Preview', projectPath: 'C:/work/korus', state: fixtureScene.state ?? 'idle', model: 'gpt-6.1-sol', updatedAt: new Date().toISOString(), messages: fixtureScene.messages ?? [], tools: fixtureScene.tools ?? [], files: fixtureScene.files ?? [], ...fixtureScene.session } as Session)
   for (const extra of fixtureScene.extraSessions ?? []) sessions.push(extra as unknown as Session)
 }
+// `?chatbg=dither`: a generated chat background, so the inspector can show each effect.
+if (flags().get('chatbg')) void import('../ui/chatBackgroundStore').then((module) => module.seedChatBackgroundForPreview(flags().get('chatbg') as never))
+else if (flags().has('clean')) void import('../ui/chatBackgroundStore').then((module) => module.updateChatBackgroundPrefs({ hasImage: false }))
 // `?clean`: no first-run hints, tour or What's New over the screen being inspected.
 if (flags().has('clean')) {
   try {
-    localStorage.setItem('bitbots.whatsNew.seen', '9.9.9')
+    localStorage.removeItem('bitbots.whatsNew.seen')
     localStorage.setItem('bitbots.tour', JSON.stringify({ version: 1, done: true, step: 0 }))
     localStorage.setItem('bloblex.firstRun.complete', '1')
     localStorage.removeItem('bitbots.drafts.v1')
@@ -1462,6 +1465,15 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
     if (params.overrides) projects = projects.map((project) => project.id === params.projectId ? { ...project, overrides: params.overrides as Project['overrides'] } : project)
     projects = projects.map((project) => project.id === params.projectId ? { ...project, ...(typeof params.name === 'string' ? { name: params.name } : {}), ...(typeof params.collapsed === 'boolean' ? { collapsed: params.collapsed } : {}), ...('path' in params ? { path: typeof params.path === 'string' ? params.path : null } : {}) } : project)
     return { project: projects.find((project) => project.id === params.projectId) } as T
+  }
+  if (method === 'project.icon.set') {
+    projects = projects.map((project) => project.id === params.projectId ? { ...project, overrides: { ...project.overrides, icon: (params.icon ?? undefined) as NonNullable<Project['overrides']>['icon'] } } : project)
+    return { project: projects.find((project) => project.id === params.projectId) } as T
+  }
+  if (method === 'project.favicon') {
+    // `?favicon`: the preview's projects each have a favicon in their folder.
+    if (!flags().has('favicon')) return { found: false } as T
+    return { found: true, path: 'public/favicon.svg', mime: 'image/svg+xml', dataBase64: btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="4" fill="#3d9bff"/><path d="M4 11V5l4 3 4-3v6" fill="none" stroke="#fff" stroke-width="1.6"/></svg>') } as T
   }
   if (method === 'project.delete') {
     projects = projects.filter((project) => project.id !== params.projectId)

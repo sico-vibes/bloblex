@@ -1,13 +1,17 @@
-/* Requests in the main sidebar. The companion badge has its own .needs-you class. */
-.sidebar-attention { display: grid; gap: 2px; min-width: 0; margin: 0 8px 8px; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
-.sidebar-attention ul { display: grid; gap: 1px; max-height: 240px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
-.sidebar-attention-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 2px 6px 4px; color: var(--text-2); font-size: var(--fs-2xs); font-weight: 600; text-align: left; }
-.sidebar-attention-head b { min-width: 18px; padding: 0 5px; color: var(--status-working-text, var(--status-working)); border-radius: var(--radius-sm); background: var(--surface-hover); font-size: var(--fs-2xs); font-weight: 600; text-align: center; }
-.sidebar-attention-row { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 40px; padding: 5px 6px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; text-align: left; cursor: pointer; }
-.sidebar-attention-row:hover { color: var(--text-1); background: var(--surface-hover); }
-.sidebar-attention-row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.sidebar-attention-row > svg, .sidebar-attention-row time { flex: none; color: var(--text-3); font-size: var(--fs-2xs); white-space: nowrap; }
-.sidebar-attention-copy { display: grid; flex: 1 1 0; gap: 2px; min-width: 0; }
-.sidebar-attention-copy strong, .sidebar-attention-copy span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-attention-copy strong { color: var(--text-1); font-size: var(--fs-xs); font-weight: 500; }
-.sidebar-attention-copy span { color: var(--text-3); font-size: var(--fs-2xs); }
+/* The bell beside the sidebar's buttons. The companion badge has its own .needs-you class. */
+.needs-bell { position: relative; flex: 0 0 auto; }
+.needs-bell .icon-button { position: relative; }
+.needs-bell-count { position: absolute; top: 3px; right: 3px; min-width: 13px; height: 13px; padding: 0 3px; display: grid; place-items: center; color: #1a1205; border-radius: 4px; background: var(--status-working); font-size: 9px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.menu-surface.needs-bell-panel { position: fixed; z-index: 60; top: 46px; left: 8px; width: 280px; max-width: calc(100vw - 16px); min-width: 0; padding: 4px; color: var(--text-2); }
+.needs-bell-panel ul { max-height: 320px; margin: 0; padding: 0; display: grid; gap: 1px; overflow-y: auto; list-style: none; }
+.needs-bell-empty { margin: 0; padding: 12px; color: var(--text-3); font-size: var(--fs-xs); text-align: center; }
+.needs-bell-row { width: 100%; min-width: 0; min-height: 44px; padding: 6px 8px; display: flex; align-items: center; gap: 8px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.needs-bell-row:hover { color: var(--text-1); background: var(--surface-hover); }
+.needs-bell-row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.needs-bell-row > svg, .needs-bell-row time { flex: none; color: var(--text-3); font-size: var(--fs-2xs); white-space: nowrap; }
+.needs-bell-row > svg { opacity: 0; }
+.needs-bell-row:hover > svg, .needs-bell-row:focus-visible > svg { opacity: 1; }
+.needs-bell-copy { min-width: 0; flex: 1 1 0; display: grid; gap: 2px; }
+.needs-bell-copy strong, .needs-bell-copy span { min-width: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.needs-bell-copy strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 400; }
+.needs-bell-copy span { color: var(--text-3); font-size: var(--fs-2xs); }

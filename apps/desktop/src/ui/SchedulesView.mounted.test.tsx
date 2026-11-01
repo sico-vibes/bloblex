@@ -59,7 +59,7 @@ describe('SchedulesView', () => {
     await click(idea)
     await flush()
     const dialog = q('[role="dialog"]')!
-    expect(dialog.textContent).toContain('New automation')
+    expect(dialog.textContent).toContain('New schedule')
     expect((dialog.querySelector('input[maxlength="80"]') as HTMLInputElement).value).toBe('Email check')
     expect((dialog.querySelector('textarea') as HTMLTextAreaElement).value).toContain('Check my email')
     expect((dialog.querySelector('input[type="time"]') as HTMLInputElement).value).toBe('08:30')
@@ -132,7 +132,7 @@ describe('SchedulesView', () => {
     const handlers = view([])
     await click(q('.schedules-new'))
     const dialog = q('[role="dialog"]')!
-    expect(dialog.textContent).toContain('New automation')
+    expect(dialog.textContent).toContain('New schedule')
     const create = () => all('[role="dialog"] button').find((button) => button.textContent === 'Create automation') as HTMLButtonElement
     expect(create().disabled).toBe(true)
     await type(dialog.querySelector<HTMLInputElement>('input[placeholder="Morning summary"]'), 'Morning summary')
@@ -161,7 +161,7 @@ describe('SchedulesView', () => {
   it('toggles the global pause and reports errors without crashing', async () => {
     const onSetPaused = vi.fn(async () => { throw new Error('The daemon refused.') })
     view([], { onSetPaused })
-    await click(q('[aria-label="Pause all automations"]'))
+    await click(q('[aria-label="Pause all schedules"]'))
     await flush()
     expect(onSetPaused).toHaveBeenCalledWith(true)
     expect(q('[role="alert"]')?.textContent).toBe('The daemon refused.')
@@ -170,7 +170,7 @@ describe('SchedulesView', () => {
   it('shows the daemon text, with the code prefix stripped, for a plain string rejection', async () => {
     const onSetPaused = vi.fn(async () => Promise.reject('conflict: Real reason'))
     view([], { onSetPaused })
-    await click(q('[aria-label="Pause all automations"]'))
+    await click(q('[aria-label="Pause all schedules"]'))
     await flush()
     expect(onSetPaused).toHaveBeenCalledWith(true)
     expect(q('[role="alert"]')?.textContent).toBe('Real reason')

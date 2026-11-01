@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { HAZE_ICONS, isHazeIcon } from './icons'
-import { auraStatusFor } from './HazeAura'
 import { resolveHazeIcon } from './HazeMark'
 import { agentLook, normalizeLook } from '../look'
 import { CHARACTER_ASSETS, HAZE_CHARACTERS } from './characters'
@@ -41,16 +40,3 @@ describe('Haze icons', () => {
   })
 })
 
-describe('auraStatusFor', () => {
-  it('maps moods onto the gradient states', () => {
-    expect(auraStatusFor('working')).toBe('working')
-    expect(auraStatusFor('tool_activity')).toBe('working')
-    expect(auraStatusFor('thinking')).toBe('thinking')
-    expect(auraStatusFor('permission')).toBe('needs')
-    expect(auraStatusFor('error')).toBe('error')
-    expect(auraStatusFor('success')).toBe('done')
-    expect(auraStatusFor('idle')).toBe('idle')
-    expect(auraStatusFor('offline')).toBe('idle')
-    expect(auraStatusFor(undefined)).toBe('idle')
-  })
-})

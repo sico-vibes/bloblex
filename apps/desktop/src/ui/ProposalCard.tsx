@@ -125,7 +125,8 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, r
     const parent = await openProjectFolder()
     if (parent) set('folder', { ...folder, mode: 'new', path: joinFolder(parent, text(draft.name)) })
   }
-  const field = (key: string, label: string, options: { multiline?: boolean; max?: number } = {}) => <label className="proposal-field">
+  // Nothing to say, nothing shown: an empty field appears only while editing.
+  const field = (key: string, label: string, options: { multiline?: boolean; max?: number } = {}) => !editing && !text(draft[key]) ? null : <label className="proposal-field">
     <span>{label}</span>
     {editing
       ? options.multiline
@@ -140,7 +141,7 @@ export function ProposalCard({ request, managerName = 'The Manager', projects, r
     <p className="proposal-value">{text((value as JsonRecord | null)?.shape) || 'Default look'}</p>
   </div>
 
-  return <section className="proposal-card" aria-label={`${managerName} proposes: ${title}`}>
+  return <section className={`proposal-card ${editing ? 'editing' : ''}`} aria-label={`${managerName} proposes: ${title}`}>
     <header className="proposal-head">
       <span className="proposal-icon" aria-hidden="true"><Icon size={15} /></span>
       <div><small>{managerName} proposes</small><strong>{title}</strong></div>

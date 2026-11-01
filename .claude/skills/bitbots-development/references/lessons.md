@@ -2,6 +2,26 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-11-01 · CSS · A component's stylesheet can load before `theme.css`
+
+The icon picker rendered 1,300 px wide and the bell panel ran off the window. `main.tsx` imports `App` first, so a stylesheet imported by a component arrives before `theme.css`, and `.menu-surface` then wins any tie. Fix: give the rule more weight (`.menu-surface.project-icon-picker`). Avoid: never restyle a shared class at equal specificity from a component's own CSS. Tests can't see this; look at the screen.
+
+## 2026-11-01 · Preview · Renaming a file blanked every page
+
+Renaming `chatBackground.ts` left Vite serving a stale module, and every page came up empty with a 404 in the console. Restart the dev server after renaming a file. Also, `ChatBackground.tsx` and `chatBackground.ts` can't sit side by side: Windows and TypeScript treat them as one name.
+
+## 2026-11-01 · Daemon · A stored-only project override costs three pieces
+
+For a project field set through its own RPC (the icon, before it the trusted hash): add the key only to the stored allow list in `validate_overrides`, validate it in one storage function, write it in one `Storage` method that emits `project.changed`, copy the stored value forward in `project_update_with_identity`, and add `never` rows to `tiers.json`. `json_set(..., '$.icon', ?2)` stores a string; pass `json(?2)`. Run the daemon suite without `BITBOTS_HOOK_BRIDGE` and `BITBOTS_REMOTE_WEB_DIR`, which the running app sets: with them, `doctor::tests::database_and_hook_rows...` and `remote::tests::an_absent_web_folder...` fail for no code reason.
+
+## 2026-10-31 · Inspector · `?clean` still showed What's New
+
+`clean` stored a seen version of `9.9.9`, and `shouldShowWhatsNew` opens on any seen version that differs from the app's, so the dialog covered every screen. Clearing the key is what hides it: no seen version means a first run, which shows nothing. Fixed in `preview/fixtureBridge.ts`.
+
+## 2026-10-31 · Focus · A search box drew two outlines
+
+The global `:focus-visible` ring landed on the `<input>` while its wrapper drew its own `:focus-within` ring. Fix: a text field never takes the ring (`theme.css`), and wrappers change `border-color` only. Check any new wrapped field for this.
+
 ## 2026-10-31 · Release · A gate that printed its result never exited
 
 The beta.46 release sat for 41 minutes on `npm run perf` after it printed "every budget holds". A `claude.exe --help` probe outlived the daemon the gate had killed, and it had inherited the gate's stdout pipe, so Node waited on the pipe. `bounded_output` puts its probes in a job, so why this one survived isn't known; it's on the polish list. The gate now calls `process.exit(0)`. **To avoid it:** when a release script goes quiet, read its log's timestamp, and look at what's still running under it. CI on GitHub uses a newer Rust than this machine (1.94), so a clippy failure there may not reproduce here.

@@ -1,6 +1,6 @@
 # Design language
 
-Last reviewed: 2026-10-27 (Haze is frosted glass: native Windows backdrop blur with a tint over it; fallback 80% opaque; rich blocks, media previews, terminal dock, Needs you, workspace and checkpoint cards added). Source of truth for rules: `docs/design/design-system.md` and `docs/library/content/reference/theme-system.md`. When the owner changes a visual rule, edit the rule here in place and in `docs/design/design-system.md`.
+Last reviewed: 2026-11-01 (MonoCode-style Haze controls, chat background, bell, message actions under the message, Plan in the mode menu, project icons). 2026-10-31 (facelift: no status gradient or neon, one focus highlight per field, one set of usage parts, ten Settings tabs; which part to use is in `docs/design/components.md`, the screen-by-screen state in `docs/design/facelift-audit.md`). Earlier: 2026-10-27 (Haze is frosted glass: native Windows backdrop blur with a tint over it; fallback 80% opaque; rich blocks, media previews, terminal dock, Needs you, workspace and checkpoint cards added). Source of truth for rules: `docs/design/design-system.md` and `docs/library/content/reference/theme-system.md`. When the owner changes a visual rule, edit the rule here in place and in `docs/design/design-system.md`.
 
 ## Product feel
 
@@ -46,11 +46,22 @@ The main Haze window's background is **about 80% opaque, 20% transparent**, with
 - **Stone stays opaque.** Stone's `--surface-app` is opaque. Companion and dictation windows are unchanged (opaque smoke).
 - **Legibility:** text now sits mostly over the opaque base, so contrast depends little on the desktop behind. Nothing was measured in this pass (owner rule: no screenshots).
 
-## Haze: the status gradient (owner directive, 24 October 2026)
+## Haze follows the accent (owner, 31 October 2026)
 
-In Haze the status of a bot is a soft gradient rolling in from the right of its row (`blob/haze/HazeAura.tsx`), the owner's exception to "no decorative gradients". It shows only while the bot is doing something or is selected; the Manager keeps a still golden fade. Speed and colourfulness carry the state: selected-idle slow and muted, thinking two close hues, working fast with three hues, needs-you breathes amber, a failure falters in red, done sweeps green once. A change of state cross-fades (900 ms), never cuts. The same gradient marks the conversation header, the companion bar, focus card and teammate rows. Put it behind content with `z-index: -1` inside an `isolation: isolate` parent; never make the parent's children `position: relative` to lift them (see lessons, 2026-10-24). Tinted logos are inline SVG with their inner marks cut out (Codex's prompt glyph, OpenCode's inner block at 38%), not a CSS mask of the whole file.
+The backdrop's blobs are `--haze-d1` to `--haze-d4`. With no accent they're neutral grey; with one, `themes/haze.css` mixes `--user-accent` into each (`data-accent="custom"`). Stone never takes it on its surfaces. The look orb's band follows the accent too.
 
-Haze character portraits keep their source SVG colours. The bot colour belongs to the status aura, not the character artwork. Small marks and picker cells load the static SVG; larger avatars load the animated SVG by URL so SVG-internal animation stays scoped. Saved `char-*` values are ignored by Frost and Stone renderers and preserved when switching looks.
+## No ribbon, no neon, one highlight (owner, 31 October 2026; replaces the 24 October status gradient)
+
+The owner rejected the moving status gradient on rows ("the ribbon effect") and coloured outlines on chips ("neon-esque"). `HazeAura` and its CSS are deleted.
+
+- **Selected is a flat tint.** A bot's state is one word at the end of its row (Working, Needs you, Failed), amber and red only for the last two. A task's state is a dot and a word; its border never changes colour.
+- **One highlight per field.** A text field answers focus with its border or its wrapper's, never a ring, never both (`theme.css`, first rule after `:focus-visible`). A wrapper's `:focus-within` changes `border-color` only.
+- **Focus moved by code draws no ring:** `focus({ focusVisible: false })`.
+- **Amber and red colour a word or an icon, never a box.** Approvals, plans, board availability and the companion and phone badges are neutral.
+- **Subtext is the last resort.** Hide a row that can't change anything, hide an empty section, and don't repeat a tab's name as a group title.
+- **Schedules** is the one name in anything a person reads; `automation` stays in code and RPCs.
+
+Haze character portraits keep their source SVG colours. Small marks and picker cells load the static SVG; larger avatars load the animated SVG by URL so SVG-internal animation stays scoped. Saved `char-*` values are ignored by Frost and Stone renderers and preserved when switching looks.
 
 ## Rules that apply to every look
 
@@ -64,7 +75,7 @@ Haze character portraits keep their source SVG colours. The bot colour belongs t
 
 ## Companion, conversation tree and message buttons (FIX43, 25 October 2026)
 
-- **One companion layout for every look.** Expanded, the companion is the split layout in `Companion` (`ui/App.tsx`, `.companion-shell` in `ui/companion.css`): the bot list on the left, the open bot's header and one pane on the right (chat, approval, activity, settings, drop target, side conversation), approvals and everything else in that pane, the compact bar unchanged. Frost and Stone keep their own bot art and status marks in the list (mascots at 24 px, with the art's own status badge); only Haze adds its gradient (`themes/haze.css`, the rules for `.cs-bot > .haze-aura` and `.cs-head > .haze-aura`). The old island (overview cards, tab header, teammates grid) is gone. Shared layout rules read the companion surface tokens (`--surface-sidebar`, `--surface-selected`, `--line`, `--text-*`), which every look defines.
+- **One companion layout for every look.** Expanded, the companion is the split layout in `Companion` (`ui/App.tsx`, `.companion-shell` in `ui/companion.css`): the bot list on the left, the open bot's header and one pane on the right (chat, approval, activity, settings, drop target, side conversation), approvals and everything else in that pane, the compact bar unchanged. Frost and Stone keep their own bot art and status marks in the list (mascots at 24 px, with the art's own status badge). The old island (overview cards, tab header, teammates grid) is gone. Shared layout rules read the companion surface tokens (`--surface-sidebar`, `--surface-selected`, `--line`, `--text-*`), which every look defines.
 - **Resizable, always on top.** The window is frameless and transparent, so eight handles (`CompanionResize.tsx`, `.cs-resize-*`) drive the shell's `companion_resize_*` commands from the real cursor position. Minimum 520 x 340, maximum the work area, the size is remembered (`companion-size.json`), the header's "Make larger" toggles a 960 x 720 size, Settings has "Reset size". The compact bar is fixed at 344 x 62. The old Compact/Comfortable/Tall height setting is retired (the daemon still accepts the `companion.chatSize` key; nothing reads it).
 - **Branch tree.** In the Conversations column the trunk starts below the parent card (a 3 px gap, nothing drawn inside the parent row) and runs down to an elbow into each child, as in Claude Code's branch tree.
 - **Message buttons** (time, copy, reply, react) are centred on the bubble: the row inside `.message-action-shell` has no margin of its own.
@@ -94,6 +105,20 @@ Haze character portraits keep their source SVG colours. The bot colour belongs t
 - **Unconfirmed delivery is said plainly.** A pending message the daemon could not confirm reads "Bitbots could not confirm the bot received this ..." with **Send again** (never a silent retry); a failed turn with unconfirmed delivery adds that it will not be sent again on its own. Copy about a model change says what is asked of the provider, never that it will succeed.
 - **A queued send that may have been delivered** reads *May already have been sent* and asks *Send it again?* in the row before it resends.
 
+## Second-round rules (owner, 1 November 2026)
+
+- **Haze's controls follow MonoCode, Stone keeps its own:** 6 to 7 px corners, hairline borders, flat selected fill, pill toggles with a white knob (`themes/haze.css`, last block). Scope any new control style to Haze.
+- **Chat background:** Haze only, off by default, in `ChatBackground.tsx` and `chatBackgroundStore.ts`. It stays in the window's IndexedDB and localStorage, never the daemon or a backup. Effects run on the main thread (30 to 140 ms at full size).
+- **Message actions sit under the message**, in both the main window and the companion.
+- **Needs you is a bell** beside the sidebar's buttons (`NeedsYouBell`), never a block in the bot list.
+- **The composer has no Plan button and no Steer or Queue control.** Plan is in the mode menu; the delivery choice is `composer.busySendMode` in Settings › Chat, and Ctrl+Enter still sends the other way.
+- **Dragging a task moves the real card.** The original leaves a dashed gap.
+- **Shortcuts always render through `Keys`; emails through `PrivateEmail`; project icons through `ProjectIcon`.**
+
+## Usage (owner, 31 October 2026)
+
+One set of parts in `ui/QuotaBar.tsx`: `LimitMeter` (its mark shows how much of the window's time has passed), `LimitRow`, `ProviderLimits`, `UsagePanel`. The panel opens from the bottom bar and the sidebar line; there is no usage dialog. With the bar on, the sidebar line hides. The Usage page's stat tiles also pick what the chart plots.
+
 ## Tokens
 
 All colours, sizes and radii come from `apps/desktop/src/ui/theme.css` tokens (`--surface-*`, `--text-1..3`, `--line*`, `--status-*`, `--radius-*`, `--shadow-pop`, `--focus-ring`, `--font-ui`, `--font-mono`, `--fs-*`, companion tokens). A look overrides tokens first and adds component rules only where tokens are not enough. Component stylesheets use tokens, not literals.
@@ -114,7 +139,7 @@ Static SVG viewports centre the complete head with 3% clearance per side. Picker
 
 The OUTER `.blob-page-layout` is capped at 880px, moderately wider than the original 640px rather than filling the screen. Its inner column fills that layout. The Look preview column is 320px so all five status buttons fit in one nonwrapping line; the choices occupy the remaining width. Keep stronger Haze-specific button selectors to prevent inherited padding from clipping portraits.
 
-Hide the Colour control when a premade `char-*` portrait is selected. Show it again for runtime logos and pixel art. Keep the saved bot colour when switching; do not recolour the portrait or reset the existing aura colour.
+Hide the Colour control when a premade `char-*` portrait is selected. Show it again for runtime logos and pixel art. Keep the saved bot colour when switching; do not recolour the portrait.
 
 ## Manager assignments (FIX47, 26 October 2026)
 

@@ -2,7 +2,9 @@
 
 > **What this is:** The visual design rules for Bitbots: the scene, tokens, layout, controls, companion, and the FIX39 and FIX40 rules. Read it before changing the UI.
 > **Status:** current
-> **Last updated:** 2026-10-22
+> **Last updated:** 2026-10-31
+
+**Components:** which part to use and when is in [components.md](components.md).
 
 ## Scene and Register
 
@@ -30,7 +32,7 @@ All colors, type sizes and radii live in `apps/desktop/src/ui/theme.css`. Compon
 - Blob row: avatar, name and time on the first line, one subtitle line and the expand chevron on the second. An expanded blob keeps one continuous highlight; its projects and conversations hang off a guide line under the avatar.
 - Header: blob name (opens the blob editor) and a conversation dropdown on the left; model, approval mode (only when not Ask), new conversation, details toggle and more on the right.
 - Details panel (320 px): avatar, name and runtime at the top, then text tabs (Details, Runtime, Files) and plain label/value rows. It hides on the blob editor and Analytics.
-- Settings: left page list (General, Appearance, Experimental, Remote, Agents, Manager, Memory, Skills, Speech, Backup, Updates), page title, grey group labels over rounded cards of rows. Agents merges detected command line tools, their blobs and approvals: each tool expands in place. The page list is `SettingsSheet.tsx` (`apps/desktop/src/ui/SettingsSheet.tsx`).
+- Settings: ten tabs in four groups (App: General, Appearance, Chat, Companion. Bots: Coding agents, Manager, Approvals, Memory and skills. Connections: Remote access, Integrations. System: System), page title, grey group labels over rounded cards of rows. A tab with several pages shows them as tabs under its title. Coding agents merges detected command line tools and their bots: each tool expands in place. The page list is `SettingsSheet.tsx` (`apps/desktop/src/ui/SettingsSheet.tsx`).
 - Tasks: a Tasks button in the sidebar header opens the task board (Board, Tree and Timeline views). The board's design follows the rules above; see [docs/library/content/guides/tasks.md](../library/content/guides/tasks.md).
 - Profile: initials and name; its menu holds Usage, Find coding agents, Settings, name editing and Quit. First run asks for a name without blocking the app.
 
@@ -146,7 +148,7 @@ Owner: first "90% transparent and gradient blobs more blended in and bigger", th
 
 - The main window stays natively transparent (`transparent: true` in `apps/desktop/src-tauri/tauri.conf.json`) so about 20% of the desktop shows through. Creation-time property: needs a rebuild and restart.
 - `apps/desktop/src/ui/themes/haze.css`: the non-interactive `.haze-backdrop` paints an opaque composition (neutral dark or light `--haze-base` under four broad overlapping radial blobs with a four-stop falloff) and carries `opacity: .8` on that element only. html, body, the shell and the panes stay transparent; sidebar tint 8%.
-- Text, controls, menus, dialogs, the settings sheet and the composer keep their own surfaces. The status aura is unchanged. No opacity on containers that hold content.
+- Text, controls, menus, dialogs, the settings sheet and the composer keep their own surfaces. No opacity on containers that hold content.
 - Stone keeps an opaque surface, so it looks as before. Companion and dictation windows are unchanged.
 
 ### Rich content, terminal and review cards (T3 wave, 26 October 2026)

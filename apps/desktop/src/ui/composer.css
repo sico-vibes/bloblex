@@ -13,7 +13,7 @@
 .composer-box textarea:focus-visible { box-shadow: none; }
 .composer-box textarea::placeholder { color: var(--text-3); }
 
-.composer-control-strip { min-height: 34px; container-type: inline-size; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.composer-control-strip { min-height: 34px; container-type: inline-size; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
 .composer-controls-start, .composer-controls-end { min-width: 0; display: flex; align-items: center; gap: 4px; }
 .composer-controls-start { flex: 0 1 auto; margin-left: -6px; }
 .composer-controls-end { flex: 0 1 auto; justify-content: flex-end; }
@@ -270,7 +270,6 @@
 .composer-status-chip.failed { color: var(--danger-ink); border-color: color-mix(in srgb, var(--danger-ink) 55%, transparent); }
 .composer-status-chevron { transition: transform 120ms ease; }
 .composer-status-chevron.open { transform: rotate(180deg); }
-.composer-status-mode { flex: 0 0 auto; color: var(--text-2); }
 .composer-status-paused, .composer-status-retry { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: var(--warning); }
 .composer-status-note { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-3); text-overflow: ellipsis; }
 .composer-status .queue-link { font-size: inherit; }
@@ -345,9 +344,17 @@
 .composer-file-error { color: var(--status-danger-text, var(--status-danger)); font-size: var(--fs-xs); }
 
 /* How the next message reaches a running turn (27 October 2026): two small choices instead of a hidden Ctrl+Enter. */
-.composer-status-modes { flex: 0 0 auto; display: inline-flex; padding: 1px; gap: 1px; border: 1px solid var(--line); border-radius: 7px; }
-.composer-status-modes button { min-height: 20px; padding: 0 8px; color: var(--text-3); border: 0; border-radius: 6px; background: transparent; font: inherit; cursor: pointer; }
-.composer-status-modes button:hover:not(:disabled):not(.active) { color: var(--text-1); background: var(--surface-hover); }
-.composer-status-modes button.active { color: var(--text-1); background: var(--surface-selected-strong, var(--surface-selected)); }
-.composer-status-modes button:disabled { cursor: default; opacity: .55; }
-.composer-status-modes button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.composer-controls-end { flex-wrap: wrap; margin-left: auto; }
+@container (max-width: 480px) { .composer-controls-end svg.lucide-chevron-down { display: none; } }
+
+/* The composer's one row of controls (owner, 1 November 2026): every control the same height, one shape, one gap. */
+.composer-control-strip { gap: 4px 6px; }
+.composer-controls-start, .composer-controls-end { gap: 2px; }
+.composer-control-strip :is(.composer-pill, .composer-icon-button, .dictation-button, .send-button, .context-window-indicator) { height: 28px; border-radius: var(--radius-pill); }
+.composer-control-strip :is(.composer-icon-button, .dictation-button, .send-button, .context-window-indicator) { width: 28px; }
+.composer-control-strip .send-button.cancel { margin-left: 2px; }
+.composer-control-strip .composer-pill { padding: 0 7px; gap: 5px; font-size: var(--fs-xs); }
+.composer-pill-chevron { opacity: .5; }
+.context-window-indicator.tone-unknown { opacity: .5; }
+.permission-pill.mode-plan { color: var(--text-1); }

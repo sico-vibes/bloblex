@@ -76,7 +76,7 @@ export function BotWizard({ draft, errors, noun, ready, saving, providerName, on
     </header>
 
     {step.id === 'start' && <div className="bot-wizard-templates" role="list">
-      {BOT_TEMPLATES.map((template) => <button key={template.id} type="button" role="listitem" className={`bot-template ${templateId === template.id ? 'on' : ''}`} onClick={() => pick(template.id)}>
+      {BOT_TEMPLATES.filter((template) => template.id !== 'blank').map((template) => <button key={template.id} type="button" role="listitem" className={`bot-template ${templateId === template.id ? 'on' : ''}`} onClick={() => pick(template.id)}>
         <strong>{template.name}</strong>
         <small>{template.tagline}</small>
       </button>)}

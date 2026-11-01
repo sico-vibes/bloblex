@@ -2,9 +2,10 @@
    Tokens live in theme.css. */
 
 /* ── Approval request ────────────────────────────────────────────────── */
-.permission-card { width: auto; max-width: min(620px, 100%); margin: 14px 0 6px; padding: 14px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--permission-line); border-radius: var(--radius-lg); background: var(--surface-permission); }
-.permission-card:focus { outline: none; box-shadow: var(--focus-ring); }
+.permission-card { width: auto; max-width: min(620px, 100%); margin: 14px 0 6px; padding: 14px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--surface-raised); }
+.permission-card:focus, .permission-card:focus-visible { outline: none; box-shadow: none; }
 .permission-choice kbd { margin-left: 8px; padding: 2px 5px; color: var(--text-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font: var(--fs-2xs) var(--font-mono); }
+.permission-choice-primary kbd { color: inherit; border-color: currentColor; opacity: .55; }
 .file-turn-group { padding: 8px 0 4px; }
 .file-turn-group + .file-turn-group { border-top: 1px solid var(--line); }
 .file-turn-group h3 { margin: 4px 0 2px; color: var(--text-3); font-size: var(--fs-2xs); font-weight: 600; }
@@ -37,7 +38,7 @@
 .companion-approval-card .permission-actions .permission-choice-primary { color: var(--text-inverse); border-color: transparent; background: var(--text-1); }
 .companion-approval-card .permission-actions .permission-choice-primary:hover:not(:disabled) { color: var(--text-inverse); background: var(--text-1); }
 .empty-conversation ~ .permission-card, .conversation-pane > .permission-card { margin: 14px auto 0; }
-.permission-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--status-working); border-radius: var(--radius-sm); background: var(--surface-permission-icon); }
+.permission-icon { width: 30px; height: 30px; flex: 0 0 auto; display: grid; place-items: center; color: var(--status-working); border-radius: var(--radius-sm); background: transparent; }
 .permission-copy { flex: 1; min-width: 0; }
 .permission-copy > strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
 .permission-copy p { margin: 4px 0 12px; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -57,33 +58,10 @@
 .companion-file-note button { margin-left: 5px; padding: 2px 5px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: 5px; background: transparent; font: inherit; cursor: pointer; }
 
 /* ── Usage sheet ─────────────────────────────────────────────────────── */
-.usage-sheet { width: min(540px, calc(100% - 32px)); max-height: min(660px, calc(100% - 48px)); padding: 22px; overflow: auto; border-radius: var(--radius-lg); background: var(--surface-overlay); box-shadow: var(--shadow-pop); animation: sheet-in 160ms ease-out; }
-.usage-sheet > header { display: flex; align-items: flex-start; justify-content: space-between; }
-.usage-sheet h2 { margin: 4px 0 0; font-size: var(--fs-xl); font-weight: 600; }
 .sheet-loading { min-height: 150px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--text-2); font-size: var(--fs-sm); }
 .sheet-empty { min-height: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-2); text-align: center; }
 .sheet-empty strong { color: var(--text-1); font-size: var(--fs-sm); }
 .sheet-empty p { max-width: 360px; margin: 0; font-size: var(--fs-xs); line-height: 1.6; }
-.usage-sheet > footer { margin-top: 16px; padding-top: 12px; color: var(--text-3); border-top: 1px solid var(--line); font-size: var(--fs-2xs); }
-.usage-period-switch { margin: 14px 0 4px; display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-raised); }
-.usage-period-switch button { height: 28px; padding: 0 12px; color: var(--text-2); border: 0; border-radius: var(--radius-pill); background: transparent; font-size: var(--fs-xs); }
-.usage-period-switch button.active { color: var(--text-inverse); background: var(--text-1); }
-.usage-sheet-body { display: grid; gap: 12px; margin-top: 14px; }
-.usage-block { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
-.usage-block-heading { margin-bottom: 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.usage-block-heading h3 { margin: 0; color: var(--text-1); font-size: var(--fs-sm); font-weight: 600; }
-.usage-block-heading > span { color: var(--text-3); font-size: var(--fs-2xs); text-align: right; }
-.usage-block-heading.quota-heading { align-items: center; justify-content: flex-start; }
-.quota-heading h3 { flex-shrink: 0; }
-.quota-heading .usage-divider { flex: 0 0 1px; height: 14px; background: var(--line); }
-.quota-heading .usage-provenance { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.quota-heading .tip { flex-shrink: 0; }
-.quota-heading .usage-info-button { width: 24px; height: 24px; }
-.quota-heading .usage-refresh-button { flex-shrink: 0; margin-left: auto; }
-.usage-token-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.usage-token { min-width: 0; padding: 9px 10px; display: grid; align-content: center; gap: 4px; border-radius: var(--radius-sm); background: var(--surface-subtle); }
-.usage-token span { color: var(--text-3); font-size: var(--fs-2xs); }
-.usage-token strong { color: var(--text-1); font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere; }
 .usage-raw { margin-top: 12px; color: var(--text-2); font-size: var(--fs-xs); }
 .usage-raw pre { max-height: 200px; overflow: auto; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px var(--font-mono); }
 

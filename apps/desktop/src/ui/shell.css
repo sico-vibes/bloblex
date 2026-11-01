@@ -162,7 +162,7 @@
 .approval-pill.compact { height: 18px; padding: 0 6px; font-size: 10px; }
 .more-menu-wrap { position: relative; }
 .more-menu { top: calc(100% + 6px); right: 0; width: max-content; min-width: 210px; max-width: 320px; max-height: none; overflow-x: hidden; }
-.inline-error { margin: 10px auto 0; width: min(760px, calc(100% - 48px)); padding: 9px 12px; display: flex; align-items: center; gap: 9px; color: var(--status-danger-text); border: 1px solid var(--status-danger); border-radius: var(--radius-md); background: var(--surface-danger); font-size: var(--fs-sm); }
+.inline-error { margin: 10px auto 0; width: min(760px, calc(100% - 48px)); padding: 9px 12px; display: flex; align-items: center; gap: 9px; color: var(--status-danger-text); border: 0; border-radius: var(--radius-md); background: var(--surface-danger); font-size: var(--fs-sm); }
 .inline-error > span { flex: 1; line-height: 1.45; }
 .inline-error button { padding: 3px; display: grid; place-items: center; color: inherit; border: 0; background: none; }
 .update-banner { margin: 10px 16px 0; padding: 8px 10px 8px 14px; display: flex; align-items: center; gap: 8px; color: var(--text-1); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-raised); }
@@ -391,11 +391,11 @@
   .model-pill { display: none; }
 }
 
-.companion-sidebar-card { width: calc(100% - 16px); min-height: 62px; margin: 0 8px 8px; padding: 8px 10px; display: flex; align-items: center; gap: 9px; color: var(--text-1); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-raised); text-align: left; }
-.companion-sidebar-card:hover { background: var(--surface-selected); }
+.companion-sidebar-card { width: calc(100% - 16px); height: 36px; margin: 0 8px; padding: 0 10px; display: flex; align-items: center; gap: 10px; color: var(--text-2); border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit; cursor: pointer; }
+.companion-sidebar-card:hover { color: var(--text-1); background: var(--surface-hover); }
 .companion-sidebar-card:focus-visible { box-shadow: var(--focus-ring); }
 .companion-sidebar-card > span { min-width: 0; flex: 1; display: grid; gap: 3px; }
-.companion-sidebar-card strong { font-size: var(--fs-sm); font-weight: 600; }
+.companion-sidebar-card strong { font-size: var(--fs-sm); font-weight: 400; }
 .companion-sidebar-card small { color: var(--text-2); font-size: var(--fs-2xs); line-height: 1.35; }
 .companion-sidebar-card .toggle { width: 34px; height: 19px; flex: 0 0 auto; padding: 2px; display: flex; align-items: center; border-radius: var(--radius-pill); background: var(--surface-toggle-off); }
 .companion-sidebar-card .toggle b { width: 15px; height: 15px; display: block; border-radius: 50%; background: var(--surface-toggle-knob); transition: transform 160ms ease; }
@@ -535,7 +535,6 @@
 .activity-summary { width: min(100%, 620px); margin: 2px 0 6px; }
 .activity-summary-toggle { height: 26px; padding: 0 8px 0 4px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); border: 0; border-radius: 8px; background: transparent; font-size: var(--fs-xs); cursor: pointer; transition: color 120ms ease, background 120ms ease; }
 .activity-summary-toggle:hover, .activity-summary.open .activity-summary-toggle { color: var(--text-1); background: var(--surface-hover); }
-.activity-summary.has-failed .activity-summary-toggle { color: var(--danger-ink); }
 .activity-summary-toggle .typing { transform: scale(.8); }
 .activity-steps { margin: 4px 0 0; padding: 0 0 0 10px; display: grid; gap: 2px; list-style: none; border-left: 1px solid var(--line); animation: activity-open 160ms ease-out both; }
 .activity-steps.flat { padding: 0; border: 0; }
@@ -605,3 +604,23 @@
 
 /* Wave 14: a message sent through the Bitbots MCP names its sender above the bubble. */
 .message-via { display: inline-flex; align-items: center; gap: 4px; align-self: flex-end; margin: 0 6px 3px; color: var(--text-3); font-size: var(--fs-2xs); }
+
+
+/* The connection line: small and centred, not a box across the conversation. */
+.connection-banner { width: fit-content; max-width: calc(100% - 48px); padding: 4px 10px; border: 0; background: var(--surface-hover); font-size: var(--fs-xs); }
+.connection-banner[data-state="failed"] { border: 0; }
+.connection-banner > span { flex: 0 1 auto; }
+/* The outline stays out of the way until the pointer is over the conversation. */
+.conversation-outline { opacity: 0; }
+.conversation-frame:hover .conversation-outline { opacity: .32; }
+.conversation-frame .conversation-outline:hover, .conversation-frame .conversation-outline:focus-within { opacity: 1; }
+.context-head.compact { padding: 14px 16px 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; justify-items: start; text-align: left; }
+.context-head.compact > :first-child { grid-row: 1 / span 2; }
+.context-head.compact h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+.context-head.compact p { margin: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.timeline-activity.error { border-color: transparent; }
+.companion-sidebar-card > span { text-align: left; }
+.sidebar-create-actions { gap: 1px; }
+.sidebar-create-actions :is(.icon-button, .icon-button.small) { width: 30px; height: 30px; }
+/* A layer behind the conversation sits under its content without lifting anything. */
+.conversation-pane { isolation: isolate; }

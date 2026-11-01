@@ -3,7 +3,7 @@
 // or off, the time limit it runs under) and links to the real run's conversation. Editing stays on the Schedules and
 // Tasks pages, where the unattended limits are set.
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowUpRight, CalendarClock } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
 import type { Agent, Automation, BoardTask, TaskScheduleOutcome } from '../types'
 import { isAutomation } from '../types'
 import { rpc } from '../tauri'
@@ -75,10 +75,10 @@ export function ScheduleOverview({ agents, connected, onOpenSession, scope = nul
   }, [connected])
   const rows = useMemo(() => scheduleRows(automations ?? [], tasks, agents, now, scope), [automations, tasks, agents, now, scope?.agentId, scope?.projectId])
   return <section className={`schedule-overview${compact ? ' compact' : ''}`} {...(compact ? { 'aria-label': 'Schedules' } : { 'aria-labelledby': 'schedule-overview-title' })}>
-    {!compact && <h3 id="schedule-overview-title"><CalendarClock size={14} aria-hidden="true" />Schedules</h3>}
+    {!compact && <h3 id="schedule-overview-title">Schedules</h3>}
     {problem && <p className="schedule-overview-note" role="alert">{problem}</p>}
     {!automations && !problem && <p className="schedule-overview-note">Reading schedules…</p>}
-    {automations && !rows.length && <p className="schedule-overview-note">{scope ? 'Nothing is scheduled for this bot or project.' : 'Nothing is scheduled.'} Bots only start work by themselves when you set a schedule on the Schedules or Tasks page.</p>}
+    {automations && !rows.length && <p className="schedule-overview-note">{scope ? 'Nothing is scheduled for this bot or project.' : 'Nothing is scheduled.'}</p>}
     {compact && onOpenSchedules && <button type="button" className="rail-link" onClick={onOpenSchedules}>Open schedules</button>}
     {rows.length > 0 && <ul>{rows.map((row) => <li key={row.key} data-state={row.state}>
       <div className="schedule-overview-main"><strong>{row.name}</strong><small>{row.agent} · {row.when || 'No time set'}{row.limit ? ` · ${row.limit}` : ''}</small></div>

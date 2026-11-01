@@ -141,11 +141,8 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
   if (state.available === null) return <p className="settings-loading">Loading Remote…</p>
 
   const intro = <div className="remote-hero">
-    <span className={`remote-hero-art${on && status?.link === 'online' ? ' live' : ''}`} aria-hidden="true"><Monitor size={24} /><i /><Smartphone size={20} /></span>
-    <div>
-      <h3>Use your {nouns} from anywhere</h3>
-      <p>Open Bitbots on your phone, a tablet or another computer and chat with your {nouns} while this computer does the work. Use your private Tailscale network, or connect directly with a password.</p>
-    </div>
+    <span className={`remote-hero-art${on && status?.link === 'online' ? ' live' : ''}`} aria-hidden="true"><Monitor size={18} /><i /><Smartphone size={16} /></span>
+    <p>Chat with your {nouns} from your phone or another computer while this one does the work.</p>
   </div>
 
   if (state.available === false) {
@@ -168,13 +165,13 @@ export function RemoteSettings({ onOpenPower }: { onOpenPower?: () => void }) {
     {previewMode && <p className="remote-preview-note" role="note">Preview. This page is simulated: no Tailscale, no network and no real devices are involved.</p>}
     {intro}
 
-    <SettingsGroup title="How devices connect">
+    {!on && <SettingsGroup title="How devices connect">
       <RemoteMethodSwitch method={native ? 'native' : 'tailscale'} locked={on} onChange={(method) => void remote.setMethod(method)} />
-    </SettingsGroup>
+    </SettingsGroup>}
 
     {native && <NativeAccountGroup native={nativeStatus} busy={state.busy} onSave={(username, password) => remote.setNativeAccount(username, password)} />}
 
-    <SettingsGroup title="Remote access">
+    <SettingsGroup title="Turn on">
       {fix && !on && <div className="remote-fix" role="status">
         <strong>{fix.title}</strong>
         <ol>{fix.steps.map((step) => <li key={step}>{step}</li>)}</ol>

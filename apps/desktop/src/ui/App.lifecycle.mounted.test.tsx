@@ -208,7 +208,7 @@ describe('App mounted lifecycle', () => {
     const action = view.host.querySelector<HTMLButtonElement>('[data-result-id="find-agents"]')
     expect(action).not.toBeNull()
     await act(async () => { action!.click(); await settleMicrotasks(); await vi.advanceTimersByTimeAsync(40) })
-    expect(view.host.querySelector('.settings-sheet h2')?.textContent).toBe('Agents')
+    expect(view.host.querySelector('.settings-sheet h2')?.textContent).toBe('Coding agents')
     const scan = [...view.host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Scanning…')
     expect(scan?.disabled).toBe(true)
     expect(h.rpc.mock.calls.filter(([method]) => method === 'runtime.refresh')).toHaveLength(1)
@@ -431,6 +431,7 @@ describe('App mounted lifecycle', () => {
     act(() => view.host.querySelector<HTMLButtonElement>('.profile-button')!.click())
     act(() => [...view.host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === 'Settings')!.click())
     await view.settle()
+    act(() => [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((item) => item.textContent === 'Companion')!.click())
     const sounds = [...view.host.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find((button) => button.getAttribute('aria-label') === 'Companion sounds')!
     act(() => sounds.click())
     await view.settle()

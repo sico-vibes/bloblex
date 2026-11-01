@@ -23,3 +23,11 @@
 .proposal-error { flex: 0 0 100%; margin: 0 0 2px; color: var(--status-danger); font-size: var(--fs-xs); text-align: left; overflow-wrap: anywhere; }
 .proposal-hint { margin-right: auto; color: var(--text-3); font-size: var(--fs-xs); }
 @media (max-width: 520px) { .proposal-row { grid-template-columns: 1fr; } }
+
+/* Reading a proposal: label and value on one line, like a sheet. Editing goes back to stacked fields. */
+.proposal-card:not(.editing) .proposal-body { gap: 6px; }
+.proposal-card:not(.editing) .proposal-row { grid-template-columns: 1fr; gap: 6px; }
+.proposal-card:not(.editing) .proposal-field { grid-template-columns: 110px minmax(0, 1fr); align-items: baseline; gap: 10px; }
+.proposal-card:not(.editing) .proposal-field > span { font-size: var(--fs-xs); }
+.proposal-card:not(.editing) .proposal-row:empty { display: none; }
+.proposal-icon { width: 26px; height: 26px; color: var(--text-2); background: transparent; }

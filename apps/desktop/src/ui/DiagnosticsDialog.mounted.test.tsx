@@ -62,7 +62,7 @@ describe('the Export diagnostics preview', () => {
     expect(text).toContain('Settings — with secrets removed')
     expect(text).toContain('Recent activity — message and command text removed')
     expect(text).toContain('Log file — recent lines')
-    expect(document.body.textContent).toContain('nothing is uploaded anywhere')
+    expect(document.body.textContent).toContain('Nothing is uploaded')
   })
 
   it('writes the zip through the native save token and reports where it went', async () => {

@@ -136,17 +136,15 @@ describe('SendLaterControl', () => {
 describe('ComposerStatus', () => {
   const status = (props: Partial<ComponentProps<typeof ComposerStatus>> = {}) => {
     const handlers = { onToggle: vi.fn(), onResume: vi.fn(), onSendNow: vi.fn(), onDelete: vi.fn(), onUpdate: vi.fn(), onReorder: vi.fn() }
-    render(<ComposerStatus items={[]} paused={false} sessionBusy mode="queue" nowMs={NOW} expanded={false} {...handlers} {...props} />)
+    render(<ComposerStatus items={[]} paused={false} sessionBusy nowMs={NOW} expanded={false} {...handlers} {...props} />)
     return handlers
   }
 
-  it('keeps one quiet row when nothing is queued and says how the next message travels', () => {
+  it('shows nothing while a turn runs with nothing queued: how a message travels is a setting', () => {
     status()
-    expect(q('.composer-status')).not.toBeNull()
-    expect(q('.composer-status-chip button, .composer-status-chip:not(.quiet)')).toBeNull()
-    expect(q('.composer-status-mode')?.textContent).toBe('Queue · sends after this turn')
-    status({ mode: 'steer' })
-    expect(q('.composer-status-mode')?.textContent).toBe('Steer · reaches this turn now')
+    expect(q('.composer-status')).toBeNull()
+    status({ onInterrupt: vi.fn() })
+    expect(q('.composer-status-interrupt')?.textContent).toBe('Stop and send instead')
   })
 
   it('names the queue count and unfolds the rows on demand', () => {

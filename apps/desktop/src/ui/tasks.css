@@ -1,12 +1,14 @@
 /* Tasks: the delegate board. Flat, rounded rectangles; colour only for state (working, waiting, failed). All values come from theme tokens. */
 .tasks-page { min-height: 0; flex: 1; display: flex; flex-direction: column; background: var(--app); }
-.tasks-new { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.tasks-new { display: inline-flex; align-items: center; gap: 6px; }
+.tasks-page .blob-page-header .segmented { margin-left: auto; margin-right: 8px; border: 0; background: var(--surface-hover); }
 .tasks-scroll { min-height: 0; flex: 1; overflow: auto; }
 .tasks-column { width: min(1080px, calc(100% - 48px)); margin: 0 auto; padding: 16px 0 32px; display: grid; gap: 12px; }
 .tasks-lead { margin: 0; color: var(--text-3); font-size: var(--fs-sm); line-height: 1.5; }
 .tasks-problem { margin: 0; color: var(--danger-ink); font-size: var(--fs-sm); }
 .tasks-loading { margin: 0; color: var(--text-3); font-size: var(--fs-sm); }
-.tasks-notice { min-height: 18px; font-size: var(--fs-sm); }
+.tasks-notice { font-size: var(--fs-sm); }
+.tasks-notice:empty { display: none; }
 .tasks-notice-text { color: var(--text-2); }
 .tasks-notice-text.bad { color: var(--danger-ink); }
 
@@ -23,7 +25,8 @@
 
 .delegate-draft { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app); cursor: grab; transition: border-color 120ms ease, opacity 120ms ease; }
 .delegate-draft:hover { border-color: var(--line-strong); }
-.delegate-draft.dragging { opacity: .5; }
+.delegate-draft.dragging { border-style: dashed; background: transparent; }
+.delegate-draft.dragging > * { visibility: hidden; }
 .delegate-draft.busy { opacity: .6; cursor: progress; }
 .delegate-draft-main { width: 100%; padding: 0; display: flex; align-items: flex-start; gap: 6px; color: inherit; text-align: left; border: 0; background: transparent; font: inherit; cursor: inherit; }
 .delegate-draft-main:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
@@ -44,17 +47,17 @@
 .delegate-done small { color: var(--text-3); font-size: var(--fs-xs); }
 
 .delegate-lane { padding: 10px; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app); transition: border-color 120ms ease, background 120ms ease; }
-.delegate-lane.drop-ready { border-style: dashed; border-color: var(--line-strong); }
-.delegate-lane.over { border-style: solid; border-color: var(--text-2); background: var(--surface-hover, var(--app)); }
+.delegate-lane { transition: border-color 120ms ease, background 120ms ease; }
+.delegate-lane.over { border-style: solid; border-color: var(--user-accent, var(--text-2)); background: var(--surface-hover, var(--app)); }
 .delegate-lane-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .delegate-badges { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .delegate-face { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; }
 .delegate-lane-name { min-width: 96px; flex: 1 1 96px; display: grid; gap: 1px; }
 .delegate-lane-name strong { overflow: hidden; color: var(--text-1); font-size: var(--fs-md, 14px); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .delegate-lane-name small { overflow: hidden; color: var(--text-3); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
-.delegate-availability { flex: 0 0 auto; padding: 2px 8px; color: var(--text-3); font-size: var(--fs-xs); border-radius: var(--radius-sm); background: var(--surface-hover, var(--line)); white-space: nowrap; }
+.delegate-availability { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; }
 .delegate-availability.tone-working { color: var(--status-working, var(--text-2)); }
-.delegate-availability.tone-attention { color: var(--warning); background: var(--surface-warning); }
+.delegate-availability.tone-attention { color: var(--warning); }
 
 .delegate-chips { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
 .delegate-chip { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 5px 9px; color: var(--text-1); text-align: left; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-raised); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
@@ -62,7 +65,6 @@
 .delegate-chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .delegate-chip-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .delegate-chip small { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-xs); }
-.delegate-chip.tone-needs_you, .delegate-chip.tone-awaiting_review { border-color: var(--warning); }
 
 .delegate-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--text-3); opacity: .7; }
 .tone-running .delegate-dot { background: var(--status-working, var(--text-2)); opacity: 1; }
@@ -140,7 +142,6 @@
 .tree-card { width: 100%; padding: 9px 10px; display: grid; gap: 6px; color: inherit; text-align: left; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); font: inherit; cursor: pointer; }
 .tree-card:hover { border-color: var(--line-strong); }
 .tree-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.tree-node.tone-needs_you .tree-card, .tree-node.tone-awaiting_review .tree-card { border-color: var(--warning); }
 .tree-card-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tree-face { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; }
 .tree-face-empty { width: 14px; height: 14px; border: 1px dashed var(--line-strong); border-radius: 4px; }
@@ -171,11 +172,11 @@
 .timeline-bar { position: absolute; height: 24px; min-width: 6px; padding: 0 8px; display: flex; align-items: center; overflow: hidden; color: var(--text-1); text-align: left; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-hover, var(--line)); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 .timeline-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-bar:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.timeline-bar.queued { color: var(--text-3); border-style: dashed; background: transparent; }
-.timeline-bar.tone-running { border-color: var(--status-working, var(--text-2)); }
-.timeline-bar.tone-attention { border-color: var(--warning); background: var(--surface-warning); color: var(--warning); }
-.timeline-bar.tone-done { border-color: var(--status-success, var(--line-strong)); }
-.timeline-bar.tone-failed { border-color: var(--danger-ink); color: var(--danger-ink); }
+.timeline-bar { border: 0; background: var(--surface-selected); }
+.timeline-bar.queued { color: var(--text-3); border: 1px dashed var(--line-strong); background: transparent; }
+.timeline-bar.tone-attention { color: var(--warning); }
+.timeline-bar.tone-done { color: var(--text-2); }
+.timeline-bar.tone-failed { color: var(--danger-ink); }
 .timeline-bar.tone-cancelled { color: var(--text-3); }
 .timeline-note { margin: 4px 0 0; color: var(--text-3); font-size: var(--fs-xs); }
 @media (max-width: 880px) { .timeline-axis, .timeline-lane { grid-template-columns: minmax(0, 1fr); gap: 4px; } .timeline-axis-spacer { display: none; } }
@@ -189,7 +190,6 @@
 
 /* Internal pointer dragging works without WebView2's intercepted HTML drag events. */
 .delegate-draft-main { touch-action: none; user-select: none; -webkit-user-select: none; }
-.delegate-drag-ghost { position: fixed; z-index: 10000; max-width: 300px; padding: 10px 14px; pointer-events: none; color: var(--text-1); background: var(--surface-overlay); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-pop); font-size: var(--fs-sm); }
 /* Task details keep their header and actions visible while only the body scrolls. */
 .blob-dialog.task-detail-dialog { width: min(760px, calc(100% - 40px)); max-height: calc(100dvh - 48px); padding: 0; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
 .task-detail-dialog > .task-dialog-head { flex: 0 0 auto; padding: 20px 24px 16px; border-bottom: 1px solid var(--line); }
@@ -201,3 +201,9 @@
 .task-detail-dialog .task-actions button { height: 34px; border-radius: var(--radius-md); }
 .task-retry-select { margin-right: auto; }
 .task-retry-select .select-trigger { padding: 0 12px; color: var(--text-1); border: 1px solid var(--line-strong); background: transparent; font-size: var(--fs-sm); }
+.delegate-drag-card { position: fixed; z-index: 10000; top: 0; left: 0; display: grid; gap: 6px; border-color: var(--line-strong); background: var(--surface-overlay); box-shadow: var(--shadow-pop); pointer-events: none; cursor: grabbing; will-change: transform; }
+.delegate-drag-card.home { transition: transform 200ms cubic-bezier(.2, .8, .2, 1); }
+.delegate-drag-card.land { opacity: 0; transition: opacity 140ms ease; }
+.delegate-drag-card .delegate-draft-main { display: flex; }
+.delegate-drag-assign { height: 26px; padding: 0 6px 0 9px; display: inline-flex; align-items: center; gap: 6px; justify-self: start; color: var(--text-2); font-size: var(--fs-xs); }
+@media (prefers-reduced-motion: reduce) { .delegate-drag-card { transition: none !important; } .delegate-lane { transition: none; } }

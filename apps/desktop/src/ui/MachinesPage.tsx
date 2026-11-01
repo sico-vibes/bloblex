@@ -181,7 +181,7 @@ export function MachinesPage() {
     await reload()
   }
   return <>
-    <p className="settings-intro">Link your other Windows computers. Each one keeps running its own {nouns}. Here you can read what they're doing, and take a conversation over so it carries on on this machine.</p>
+    <p className="settings-intro">See what the {nouns} on your other computers are doing, and take a conversation over.</p>
     <ThisMachine />
     <SettingsGroup title="Other machines">
       {loaded && !machines.length && !pairing && <p className="settings-empty">No other machines yet.</p>}

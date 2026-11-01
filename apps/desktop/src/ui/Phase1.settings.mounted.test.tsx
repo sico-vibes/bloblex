@@ -94,7 +94,7 @@ describe('shortcuts', () => {
     const button = (label: string) => view.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!
     const press = async (target: HTMLElement, init: KeyboardEventInit) => { await act(async () => { target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })) }) }
     await act(async () => { button('Change the shortcut for New conversation').click() })
-    expect(view.querySelector('.keybinding-keys.recording')?.textContent).toBe('Press keys…')
+    expect(view.querySelector('.keybinding-keys.recording')?.textContent).toBe('Press keys, or Backspace to clear')
     const recording = view.querySelector<HTMLButtonElement>('.keybinding-keys.recording')!
     await press(recording, { ctrlKey: true, code: 'KeyK', key: 'k' })
     expect(view.querySelector('[role="alert"]')?.textContent).toContain('already used for “Open the quick switcher”')
@@ -103,7 +103,10 @@ describe('shortcuts', () => {
     expect(view.querySelector('[role="alert"]')?.textContent).toContain('used for typing')
     await press(recording, { ctrlKey: true, shiftKey: true, code: 'KeyN', key: 'N' })
     expect(onSave).toHaveBeenLastCalledWith({ 'app.terminal': 'Alt+T', 'conversation.new': 'Ctrl+Shift+N' })
-    await act(async () => { button('Remove the shortcut for Open the quick switcher').click() })
+    // Backspace while recording clears a shortcut; there's no separate remove button.
+    expect(view.querySelector('[aria-label^="Remove the shortcut"]')).toBeNull()
+    await act(async () => { button('Change the shortcut for Open the quick switcher').click() })
+    await press(view.querySelector<HTMLButtonElement>('.keybinding-keys.recording')!, { code: 'Backspace', key: 'Backspace' })
     expect(onSave).toHaveBeenLastCalledWith({ 'app.terminal': 'Alt+T', 'app.quickSwitcher': null })
     await act(async () => { button('Reset the shortcut for Show or hide the terminal').click() })
     expect(onSave).toHaveBeenLastCalledWith({})

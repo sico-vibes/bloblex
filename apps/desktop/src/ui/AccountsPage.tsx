@@ -2,6 +2,7 @@
 // own config folders, and models a catalog doesn't list. Bitbots reads a name from the agent's
 // own command, never a token, and the owner signs in with the agent's own command.
 import { useCallback, useEffect, useState } from 'react'
+import { PrivateEmail } from './PrivateEmail'
 import { Check, Copy, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import type { Runtime } from '../types'
 import { rpc } from '../tauri'
@@ -23,6 +24,11 @@ export function accountLine(account: Pick<RuntimeAccount, 'label' | 'plan'> | nu
   if (!signedIn) return 'Not signed in'
   const parts = [account?.label || 'Signed in', account?.plan].filter(Boolean)
   return parts.join(' · ')
+}
+
+function AccountLine({ account, signedIn = true }: { account: Pick<RuntimeAccount, 'label' | 'plan'> | null | undefined; signedIn?: boolean }) {
+  if (!signedIn) return <>Not signed in</>
+  return <><PrivateEmail text={account?.label || 'Signed in'} />{account?.plan ? ` · ${account.plan}` : ''}</>
 }
 
 /** Why this custom model can't be saved, or null. The daemon checks again. */
@@ -71,7 +77,7 @@ function AccountRow({ account, onChanged, onProblem }: { account: Account; onCha
         {renaming
           ? <input className="remote-rename" aria-label={`Name for ${account.name}`} value={draft} maxLength={60} autoFocus onChange={(event) => setDraft(event.target.value)} onBlur={save} onKeyDown={(event) => { if (event.key === 'Enter') save(); if (event.key === 'Escape') { setDraft(account.name); setRenaming(false) } }} />
           : <strong>{account.name}</strong>}
-        <small>{accountLine(account, account.signedIn)} · {account.bots === 1 ? `1 ${noun}` : `${account.bots} ${nouns}`}</small>
+        <small><AccountLine account={account} signedIn={account.signedIn} /> · {account.bots === 1 ? `1 ${noun}` : `${account.bots} ${nouns}`}</small>
       </span>
       <button type="button" className="secondary-button small" onClick={() => void showSignIn()}>{account.signedIn ? 'Sign in again' : 'Sign in'}</button>
       <button type="button" className="icon-button" aria-label={`Check ${account.name} now`} title="Check now" onClick={() => void act('account.check', {}, 'That account could not be checked.')}><RefreshCw size={14} aria-hidden="true" /></button>
@@ -146,13 +152,13 @@ export function AccountsPage({ runtimes }: { runtimes: readonly Runtime[] }) {
   useEffect(load, [load])
   const chosen = modelProvider || providers[0]?.provider || ''
   return <>
-    <p className="settings-intro">Each coding agent keeps its own sign-in. Add an account to give some {nouns} a different one, then choose it in that bot's settings. Bitbots reads the name from the agent's own command and never handles a token.</p>
+    <p className="settings-intro">Give some {nouns} a different sign-in, then choose it in their settings. Bitbots never handles a token.</p>
     {providers.map((runtime) => {
       const provider = runtime.provider ?? ''
       const account = runtime.account as RuntimeAccount | null | undefined
       return <SettingsGroup key={provider} title={providerBrand(provider).name}>
         <SettingsRow label="Default account" hint="The agent's own sign-in on this computer.">
-          <span className="account-default"><ProviderLogo provider={provider} size={14} />{accountLine(account)}</span>
+          <span className="account-default"><ProviderLogo provider={provider} size={14} /><span><AccountLine account={account} /></span></span>
         </SettingsRow>
         {accounts.filter((item) => item.provider === provider).map((item) => <AccountRow key={item.id} account={item} onChanged={load} onProblem={setProblem} />)}
         <AddAccount provider={provider} onAdded={load} onProblem={setProblem} />

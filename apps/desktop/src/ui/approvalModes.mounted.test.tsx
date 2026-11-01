@@ -19,6 +19,7 @@ vi.mock('../desktopIntegrations', () => ({
   flashMainWindow: async () => undefined,
 }))
 vi.mock('../tauri', () => ({
+  listenForDaemonEvents: vi.fn(async () => () => undefined),
   inDesktop: true,
   previewMode: false,
   rpc,
@@ -144,9 +145,9 @@ describe('settings modal', () => {
     const view = mount(<SettingsSheet snapshot={snapshot} initialPage="General" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={(id) => opened.push(id)} />)
     views.push(view)
     await view.settle()
-    const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find((button) => button.textContent === name)?.click() }) }
+    const page = async (name: string) => { await act(async () => { [...view.host.querySelectorAll<HTMLButtonElement>('.settings-nav button, .settings-subtabs button')].find((button) => button.textContent === name)?.click() }) }
     const nav = [...view.host.querySelectorAll('.settings-nav button')].map((button) => button.textContent)
-    expect(nav).toEqual(['General', 'Appearance', 'Experimental', 'Remote', 'Machines', 'Connections', 'Agents', 'Accounts', 'Secrets', 'Approvals', 'Manager', 'Memory', 'Skills', 'Speech', 'Backup', 'Health check', 'Updates'])
+    expect(nav).toEqual(['General', 'Appearance', 'Chat', 'Companion', 'Coding agents', 'Manager', 'Approvals', 'Memory and skills', 'Remote access', 'Integrations', 'System'])
     expect(view.host.textContent).not.toMatch(/Add budget|pricing|subscription/i)
     const start = view.host.querySelector<HTMLButtonElement>('[aria-label="Start with Windows"]')!
     expect(start.disabled).toBe(false)
@@ -161,22 +162,20 @@ describe('settings modal', () => {
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'notifications.enabled', value: false })
     expect(notifications.getAttribute('aria-checked')).toBe('false')
+    await page('Companion')
     expect(view.host.querySelector('[aria-label="Companion sounds"]')).not.toBeNull()
 
-    await page('Updates')
+    await page('System')
     expect(view.host.querySelector('[data-settings-section="updates"]')).not.toBeNull()
-    const about = view.host.querySelector('[data-settings-about]')
-    expect(about?.textContent).toContain('Code signing')
-    expect(about?.textContent).toContain('Not configured')
-    expect(about?.querySelector('button, input, select, textarea')).toBeNull()
+    expect(view.host.textContent).not.toContain('Code signing')
 
-    await page('Agents')
+    await page('Approvals')
     expect((await selectOptions(view.host, 'Default approval mode')).map((option) => option.value)).toEqual(['ask', 'accept_edits', 'auto', 'bypass'])
     await chooseOption(view.host, 'Default approval mode', 'auto')
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'auto' })
     expect(rpc.mock.calls.some((call) => call[1]?.value === 'bypass')).toBe(false)
-    expect(viewText(view.host)).toContain('Full access runs everything without asking')
+    expect(viewText(view.host)).toContain('Scheduled work always stays on safe actions')
     // Phase 1: Full access can be the default, only after an explicit yes, and only then is it sent.
     await chooseOption(view.host, 'Default approval mode', 'bypass')
     await view.settle()
@@ -186,6 +185,7 @@ describe('settings modal', () => {
     await act(async () => { [...fullDefault.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Make it the default')!.click() })
     await view.settle()
     expect(rpc).toHaveBeenCalledWith('settings.set', { key: 'permissions.default_mode', value: 'bypass', confirm: true })
+    await page('Coding agents')
     const runtimeHead = view.host.querySelector<HTMLButtonElement>('.runtime-entry-head')!
     expect(runtimeHead.getAttribute('aria-expanded')).toBe('false')
     expect(runtimeHead.textContent).toContain('Codex')
@@ -206,7 +206,7 @@ describe('settings modal', () => {
   it('disables the global default when the policy cannot be loaded', async () => {
     rpc.mockResolvedValue({ settings: {} })
     policy.mockRejectedValue(new Error('unsupported: not ready'))
-    const view = mount(<SettingsSheet snapshot={{ agents: [] }} initialPage="Agents" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
+    const view = mount(<SettingsSheet snapshot={{ agents: [] }} initialPage="Approvals" onClose={() => undefined} onRefresh={() => undefined} onError={() => undefined} onOpenAgent={() => undefined} />)
     views.push(view)
     await view.settle()
     expect(selectTrigger(view.host, 'Default approval mode')?.disabled).toBe(true)

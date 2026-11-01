@@ -9,6 +9,8 @@ export type QuotaWindowRow = {
   short: string
   usedPercent: number
   resetsAt: string | null
+  /** The window's length as the provider reported it, or null. */
+  durationMins: number | null
 }
 
 export type QuotaProviderRow = {
@@ -18,6 +20,8 @@ export type QuotaProviderRow = {
   /** Short status when no window is available, or the latest refresh failed. */
   status: string | null
   stale: boolean
+  /** Bitbots may not read this provider's sign-in, so the owner can turn that on. */
+  readOff: boolean
   fetchedAt: string | null
 }
 
@@ -31,7 +35,7 @@ export const SIGN_IN_NEEDED = 'Sign-in needed'
 
 const ERROR_STATUS: Record<string, string> = {
   no_credentials: SIGN_IN_NEEDED,
-  read_off: 'Turn on “Read sign-ins for usage bars” in Settings › Experimental.',
+  read_off: 'Usage reading is off',
   unauthorized: SIGN_IN_NEEDED,
   no_subscription: 'No subscription',
   protocol: 'Unreadable',
@@ -76,7 +80,7 @@ export function quotaRows(quotas: Record<string, unknown>[], signedOut: readonly
           if (typeof value.usedPercent !== 'number' || !Number.isFinite(value.usedPercent)) continue
           const duration = typeof value.windowDurationMins === 'number' ? value.windowDurationMins : null
           const names = windowNames(duration, limitLabel, provider, slot)
-          windows.push({ key: `${limitLabel}-${slot}`, ...names, usedPercent: Math.max(0, Math.min(100, Math.round(value.usedPercent))), resetsAt: typeof value.resetsAt === 'string' ? value.resetsAt : null })
+          windows.push({ key: `${limitLabel}-${slot}`, ...names, usedPercent: Math.max(0, Math.min(100, Math.round(value.usedPercent))), resetsAt: typeof value.resetsAt === 'string' ? value.resetsAt : null, durationMins: duration })
         }
       }
       const lastError = typeof item.lastError === 'string' ? item.lastError : null
@@ -87,9 +91,25 @@ export function quotaRows(quotas: Record<string, unknown>[], signedOut: readonly
         windows,
         status: failed && signedOut.includes(provider) ? SIGN_IN_NEEDED : failed,
         stale: !!lastError && windows.length > 0,
+        readOff: lastError === 'read_off',
         fetchedAt: typeof item.fetchedAt === 'string' ? item.fetchedAt : null,
       }
     })
+}
+
+/** The reading closest to its limit across the given providers: the one worth glancing at. */
+export function mostPressingWindow(rows: readonly QuotaProviderRow[]): { row: QuotaProviderRow; window: QuotaWindowRow } | null {
+  let best: { row: QuotaProviderRow; window: QuotaWindowRow } | null = null
+  for (const row of rows) for (const window of row.windows) if (!best || window.usedPercent > best.window.usedPercent) best = { row, window }
+  return best
+}
+
+/** How much of a window's time has passed, from its reported length and reset; null when either is unknown. */
+export function windowElapsedPercent(window: Pick<QuotaWindowRow, 'resetsAt' | 'durationMins'>, now = Date.now()) {
+  if (!window.resetsAt || !window.durationMins) return null
+  const left = new Date(window.resetsAt).getTime() - now
+  if (Number.isNaN(left) || left < 0) return null
+  return Math.round(Math.max(0, Math.min(100, 100 - left / (window.durationMins * 600))))
 }
 
 /** "4h 59m", "2d 3h", "12m"; null when the reset time is unknown. */

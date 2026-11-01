@@ -326,6 +326,8 @@ button, textarea, select, input { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.42; }
 :focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* One highlight per field (owner, 31 October 2026): a text field answers focus with its border, or its wrapper's. It never gets a ring, so a search box can't show two outlines. */
+input:not([type="checkbox"], [type="radio"], [type="range"]):focus-visible, textarea:focus-visible { box-shadow: none; border-color: var(--line-focus); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

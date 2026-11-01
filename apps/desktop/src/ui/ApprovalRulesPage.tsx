@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Agent, Project } from '../types'
 import { listenForDaemonEvents, rpc } from '../tauri'
-import { SettingsGroup, SettingsRow } from './SettingsParts'
+import { HelpTip, SettingsGroup, SettingsRow } from './SettingsParts'
 import { Select } from './Select'
 
 export type ApprovalRule = { id: string; agentId: string; kind: string; label: string; createdAt?: string; projectId?: string | null; projectName?: string | null }
@@ -46,11 +46,10 @@ export function ApprovalRulesPage({ agents, projects = [] }: { agents: Agent[]; 
   const byBot = new Map<string, ApprovalRule[]>()
   for (const rule of rules ?? []) byBot.set(rule.agentId, [...(byBot.get(rule.agentId) ?? []), rule])
   return <div className="approval-rules-page">
-    <SettingsGroup title="Always allowed">
-      <p className="settings-empty">When you choose Always allow on an approval, that bot can do the same thing again without asking, in that project or in every project. It applies in the bot's own conversations, never in Plan mode or scheduled runs.</p>
+    <SettingsGroup title="Always allowed" action={<HelpTip align="end" text="A bot can do these again without asking, in its own conversations. Never in Plan mode or scheduled runs." />}>
       {problem && <p className="settings-empty" role="alert">{problem}</p>}
       {rules === null ? <p className="settings-empty" role="status">Reading saved approvals…</p>
-        : rules.length === 0 ? <p className="settings-empty">Nothing is always allowed yet.</p>
+        : rules.length === 0 ? <p className="settings-empty">Nothing yet. Choose Always allow on an approval to add it here.</p>
         : [...byBot].map(([agentId, items]) => <SettingsRow key={agentId} label={nameOf(agentId)} stacked>
           <ul className="approval-rule-list">{items.map((rule) => <li key={rule.id}>
             <span className="approval-rule-label">{rule.label}</span>

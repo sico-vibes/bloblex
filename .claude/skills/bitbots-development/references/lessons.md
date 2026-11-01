@@ -2,6 +2,10 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
+## 2026-11-01 · Architecture · Still slow after beta.48: compared with T3 Code, not the stack
+
+Read from code, not yet timed in the app. The main window loads every partial conversation in the background, four at a time (`App.tsx:589`), and `session.get` runs `session_detail` on the writer lock (`storage/lib.rs`), so writes such as effort and task dispatch can queue behind it. Beta.48's read connections don't cover it. Changing effort also awaits two RPCs in a row, the label falls back to the old value meanwhile (`SessionExecutionControls.tsx:193`), and `agent.update` and `validate_agent_catalog` each read the catalog in `Fresh` mode with different Claude cache keys, so past 15 minutes it can wait on a provider probe. T3 Code (`pingdotgg/t3code`) is Electron and Node on SQLite WAL, a heavier stack, yet it bounds what a client loads (about 1 MiB per window, tool bodies omitted at the wire), streams per thread, keeps effort as local draft state and runs `synchronous=NORMAL`. So look at what is loaded and waited on before blaming Rust, Tauri or SQLite. Note the 4 to 12 MB a snapshot sends is small beside the roughly 380 MB of tool data it reads.
+
 ## 2026-11-01 · Tests · An `Instant` can't go further back than the machine's uptime
 
 `backup_import_of_an_expired_preview_is_not_found` failed in CI on `9f8fdae` and passed locally: the import succeeded after `expire_all`. The helper did `Instant::now().checked_sub(TTL + 1 s).unwrap_or_else(Instant::now)`. On Windows an `Instant` counts from boot, so on a runner up for less than 10 minutes `checked_sub` returns `None` and the preview is simply "created now". Inferred from the code; the runner's uptime wasn't read. Fix: store when a preview expires, not when it was made, so a test sets `expires` to now. Avoid: never fake the past by subtracting from an `Instant`.

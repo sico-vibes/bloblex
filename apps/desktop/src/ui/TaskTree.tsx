@@ -6,7 +6,7 @@ import type { Agent, BoardTask } from '../types'
 import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
-import { TASK_STATE_LABEL, elapsedLabel, isFinished } from './taskModel'
+import { taskStateLabel, elapsedLabel, isFinished } from './taskModel'
 
 export interface TaskTreeProps { tasks: readonly BoardTask[]; agents: readonly Agent[]; nowMs: number; onOpen: (task: BoardTask) => void }
 
@@ -43,7 +43,7 @@ export function TaskTree({ tasks, agents, nowMs, onOpen }: TaskTreeProps) {
           <span className="tree-card-top">
             <span className="tree-face" aria-hidden="true">{agent ? <BlobCanvas decorative color={agentColorHex(agent.color)} size={22} mini mood={task.state === 'running' ? 'working' : 'idle'} look={agentLook(agent)} label={agent.name} /> : <span className="tree-face-empty" />}</span>
             <span className="tree-agent">{agent?.name ?? 'Unassigned'}</span>
-            <span className="tree-state"><span className="delegate-dot" aria-hidden="true" />{TASK_STATE_LABEL[task.state]}</span>
+            <span className="tree-state"><span className="delegate-dot" aria-hidden="true" />{taskStateLabel(task)}</span>
           </span>
           <strong className="tree-title">{task.title}</strong>
           {took && <small className="tree-time">{task.completedAt ? 'Took' : 'Running for'} {took}</small>}

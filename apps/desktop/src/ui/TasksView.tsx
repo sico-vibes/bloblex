@@ -13,7 +13,7 @@ import { SafeMarkdown } from './SafeMarkdown'
 import { openSafeLink } from './openSafeLink'
 import { TaskForm } from './TaskForm'
 import { TaskImageStrip } from './TaskImageStrip'
-import { SCHEDULE_OUTCOME_LABEL, TASK_STATE_LABEL, assignableAgents, dispatchMessage, elapsedLabel, newIdempotencyKey, scheduleSummary } from './taskModel'
+import { SCHEDULE_OUTCOME_LABEL, TASK_STATE_LABEL, taskStateLabel, assignableAgents, dispatchMessage, elapsedLabel, newIdempotencyKey, scheduleSummary } from './taskModel'
 import { useTasks, type TaskInput } from './useTasks'
 import './tasks.css'
 
@@ -51,6 +51,10 @@ export function TasksView({ agents, projects, runtimes, connected, onBack, onOpe
   const assign = async (task: BoardTask, agent: Agent) => {
     mark(task.id, true)
     setNotice(null)
+    // The card shows "Starting" on the bot's lane at once; the daemon's own row
+    // arrives with the reply and replaces it, and a refusal reloads the board and
+    // shows the reason.
+    board.optimisticDispatch(task, agent.id)
     try {
       const result = await board.dispatch(task, agent.id, newIdempotencyKey(task.id))
       setNotice({ tone: 'ok', text: dispatchMessage(result.disposition, agent.name, result.queuePosition, result.reason) })
@@ -131,7 +135,7 @@ function TaskDetailDialog({ task, agents, projects, connected, nowMs, board, onC
   const state = task.state
   return <div className={`sheet-backdrop blob-dialog-backdrop ${entered ? 'is-entered' : ''}`} onPointerDown={(event) => { if (event.target === event.currentTarget) close() }}>
     <section ref={ref} className="blob-dialog task-dialog task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" tabIndex={-1}>
-      <header className="task-dialog-head"><h2 id="task-detail-title">{task.title}</h2><span className={`task-state tone-${state}`}>{TASK_STATE_LABEL[state]}</span></header>
+      <header className="task-dialog-head"><h2 id="task-detail-title">{task.title}</h2><span className={`task-state tone-${state}`}>{taskStateLabel(task)}</span></header>
       <div className="task-detail-content">
       <dl className="task-facts">
         {assignee && <><dt>Bot</dt><dd>{assignee.name}</dd></>}

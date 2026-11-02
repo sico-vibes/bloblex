@@ -2,9 +2,48 @@
 
 Newest first. One entry per lesson: date, area, symptom, root cause with evidence, fix, how to avoid it. Before adding, search this file; if an entry covers the topic, update it. Remove entries that stop being true (the history stays in `docs/history/`).
 
-## 2026-11-01 · Architecture · Still slow after beta.48: compared with T3 Code, not the stack
+## 2026-11-01 · Storage · A correlated subquery made every conversation cost 250 to 400 ms
 
-Read from code, not yet timed in the app. The main window loads every partial conversation in the background, four at a time (`App.tsx:589`), and `session.get` runs `session_detail` on the writer lock (`storage/lib.rs`), so writes such as effort and task dispatch can queue behind it. Beta.48's read connections don't cover it. Changing effort also awaits two RPCs in a row, the label falls back to the old value meanwhile (`SessionExecutionControls.tsx:193`), and `agent.update` and `validate_agent_catalog` each read the catalog in `Fresh` mode with different Claude cache keys, so past 15 minutes it can wait on a provider probe. T3 Code (`pingdotgg/t3code`) is Electron and Node on SQLite WAL, a heavier stack, yet it bounds what a client loads (about 1 MiB per window, tool bodies omitted at the wire), streams per thread, keeps effort as local draft state and runs `synchronous=NORMAL`. So look at what is loaded and waited on before blaming Rust, Tauri or SQLite. Note the 4 to 12 MB a snapshot sends is small beside the roughly 380 MB of tool data it reads.
+`session_detail_parts` read each turn's `turn.error` detail with a correlated subquery inside the turns statement. `EXPLAIN QUERY PLAN` shows `SCAN e` for that form, while the same lookup with the turn id bound as `?1` is `SEARCH … USING INDEX idx_app_events_turn_error`. SQLite would not seek the partial index for the correlated term, so it scanned the whole event log **once per turn**: 11.5 to 14.3 s for the log's 167 turns, about 74 ms a turn. A conversation with one turn cost about 75 ms and a busy one 1.2 s, although every statement measured on its own stayed under 10 ms — which is why the cost looked unexplainable and was blamed on the 380 MB of tool payloads instead.
+
+Measured on a copy of the owner's 654 MB database (67 conversations, 4,972 tool calls, 150,966 events, 167 turns), `cargo run --release -p bloblex-storage --example snapshot-timing -- <copy> --runs 5`:
+
+| measure | before | after |
+|---|---|---|
+| `session.get`, median | 81 ms | **0.5 ms** |
+| slowest conversation | 1,211 ms | **100 ms** (96 ms of it the tool payloads) |
+| per-turn `turn.error` lookup, all 167 turns | 11,587 ms (`SCAN e`) | **1.7 ms** (`SEARCH … USING INDEX`) |
+| full snapshot | 12.4 s | **1.0 s** |
+
+Fix: read the turns without `detail`, then run one indexed lookup per turn with the id bound, and merge the value in (valid JSON stays a value, anything else stays a string, exactly as `json_object` embedded it). `turnDetailProof` in the tool proves `answersIdentical: true` for all 167 turns on the owner's data.
+
+**To avoid:** never put a correlated subquery over `app_events` inside a per-row statement. Print the plan of the **whole** statement — a probe that times the inner `SELECT` alone shows the index being used and hides the scan. `--plans` in `snapshot-timing` prints the shapes side by side.
+
+## 2026-11-01 · Architecture · Still slow after beta.48: what it loads and what it waits on
+
+Second half of the day: measured on a copy of the owner's database (654 MB, 67 conversations, 4,972 tool calls, 167 turns) with `crates/bloblex-storage/examples/snapshot-timing.rs`. The installed beta.48 felt like a heavy backend because of what the window loaded and what an action waited on, not because of Rust, Tauri or SQLite.
+
+| measure | before | after |
+|---|---|---|
+| lazy snapshot (`app.snapshot?lazy`) | 8.1–8.8 s (keep 15); 4.96 s on this copy | **99 ms**, 2.1 MB (keep 0) |
+| full snapshot | 21.8–22.5 s (12.4 s on this copy) | **1.0 s**, 13 MB |
+| `session.get`, median | 81 ms | **0.5 ms** |
+| effort save (`agent.update` + `session.model.update`, storage work) | 226 ms | **3.5 ms** |
+| the same while every conversation is read back to back | 630 ms | **3.7 ms** |
+| `task.create` + `task.dispatch` | 3.2 ms | 3.4 ms (the queue was never the cost; the writer lock was) |
+| a write during a full background load | queued behind a snapshot (Settings waited up to 33.8 s in the first wave) | **0 ms median, 0.1 ms max** |
+
+What changed:
+
+- **Three read connections, not one.** `snapshot_reader`, `read_conn` (settings, `agent_get`, `session_event_summary`, `session_execution_row`) and `detail_conn` (a whole conversation). `session_detail`, `session_event_summary` and `agent_get` no longer take the writer lock. Every read runs in its own transaction, so read-after-write stays correct; `impl Drop` still closes readers first so the writer checkpoints the log.
+- **A conversation loads when it is opened.** `App.tsx` fetched every partial conversation four at a time; now `conversationsToLoad` loads the open one plus the selected bot's newest two, one at a time, and nothing in the companion. A `session.changed` loads a transcript only for a conversation on screen — the row arrives in the event and `applyEvent` already merges it.
+- **Startup sends summaries only.** `LAZY_SNAPSHOT_KEEP` is 0, so every at-rest conversation is a row plus its last three messages and no `tool_calls` row is read. A conversation with a turn running is still sent in full, because the window has nothing else to show.
+- **An action reads the row, not the transcript.** `Storage::session_execution_row` is the conversation's own row plus its context counters; `session.model.update`, `session.model.plan` and `session.permissions.set` use it.
+- **Effort is instant and honest.** The pill shows the chosen level while the save runs (`requestEffort` keeps the draft until it resolves; `triggerLabel` follows the draft), the bot and conversation writes run together (`Promise.allSettled`), and `agent.update` reads the model catalog **once**, from the cache (`Mode::CachedOnly`), instead of `Fresh` twice under two different Claude cache keys (one without the model hint, one with). A model change still writes the conversation first, so a cancelled one leaves both rows untouched. When no catalog is cached the values are accepted, which is what a failed probe already did.
+- **A dropped task reads "Starting" at once**, before `task.dispatch` answers (`pendingDispatch`, UI only, never sent by the daemon), and goes back with the reason if it is refused.
+- Still open: the tool payloads. 185 tool rows are 96 of one conversation's 100 ms, and 901 ms of the 993 ms the whole database costs to detail; the read-only-ids comparison is 17.8 ms. Fixing that needs `tool_calls` columns for kind/title/state and a tool-output-on-demand RPC, not a faster query.
+
+**To avoid:** when a screen feels slow, time the RPC end to end on a copy before optimising any statement, and check which lock the action waits on. A per-conversation read on the writer lock queues every save behind it, however fast the query is.
 
 ## 2026-11-01 · Tests · An `Instant` can't go further back than the machine's uptime
 

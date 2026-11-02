@@ -706,6 +706,12 @@ export interface BoardTask extends JsonRecord {
   scheduleLastOutcome?: TaskScheduleOutcome | null
   /** The run started without the owner present (a schedule), so it kept the unattended rails. */
   unattended?: boolean
+  /**
+   * UI only, never sent by the daemon: the owner dropped this task on a bot and
+   * the board shows it as starting before `task.dispatch` answers. The daemon's
+   * own row replaces it.
+   */
+  pendingDispatch?: boolean
 }
 export interface BoardTaskRun extends JsonRecord {
   id: string

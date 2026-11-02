@@ -330,6 +330,34 @@ describe('session execution controls', () => {
     expect(rpc.mock.calls.filter(([method]) => method === 'session.model.update')).toHaveLength(0)
   })
 
+  // 2026-11-01: the chosen level is shown from the moment of commit and stays
+  // while the save runs, instead of falling back to the old one until the reply.
+  it('shows the chosen effort at once and keeps it until the save resolves', async () => {
+    let release: (() => void) | null = null
+    const onSessionUpdated = vi.fn()
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'runtime.models') return catalog
+      if (method === 'session.model.update') {
+        await new Promise<void>((resolve) => { release = resolve })
+        return { session: { ...session, modelLock: { model: params.model, thinking: params.thinking } } }
+      }
+      return { agent: { ...agent, ...params, id: 'agent' } }
+    })
+    const host = document.createElement('div'); document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(<SessionExecutionControls session={session} agent={agent} onSessionUpdated={onSessionUpdated} onError={() => undefined} />))
+    mounted.push({ root, host })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await act(async () => { host.querySelector<HTMLButtonElement>('.session-effort-trigger')!.click() })
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('.session-effort-labels button')].find((button) => button.textContent === 'Low')!.click(); await Promise.resolve() })
+    // The save has not answered yet, and the pill already reads the new level.
+    expect(release).not.toBeNull()
+    expect(host.querySelector('.session-effort-trigger')?.textContent).toContain('Low')
+    await act(async () => { release!(); await Promise.resolve(); await Promise.resolve() })
+    // And the conversation's own update carries the same level to the parent.
+    expect(onSessionUpdated).toHaveBeenCalledWith(expect.objectContaining({ modelLock: { model: 'alpha', thinking: 'low' } }))
+  })
+
   it('rolls an effort draft back after failure and does not deliver an old save into a newly selected session', async () => {
     let rejectUpdate = true
     const onError = vi.fn()

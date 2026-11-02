@@ -2000,9 +2000,17 @@ pub struct Storage {
     /// cannot see, and every read then falls back to `conn` exactly as before.
     snapshot_reader: Option<Mutex<Connection>>,
     /// The small reads Settings opens with (`settings.get`, the approval
-    /// policy, runtime profiles). They get their own connection so they never
-    /// queue behind a snapshot either.
+    /// policy, runtime profiles) and the summary read every write path answers
+    /// with (`session_event_summary`). They get their own connection so they
+    /// never queue behind a snapshot, and never behind a conversation load.
     read_conn: Option<Mutex<Connection>>,
+    /// A whole conversation (`session.get`, and the background load the window
+    /// used to run for every partial one). It gets its own connection so a long
+    /// conversation read never queues in front of a save on the writer lock, and
+    /// never behind the small reads either: a tool-heavy conversation still
+    /// spends about 100 ms reading its tool payloads (2026-11-01). `None` for an
+    /// in-memory database, as for the others.
+    detail_conn: Option<Mutex<Connection>>,
 }
 
 /// What an unclean exit had to settle, so boot can announce it: the sessions
@@ -2217,6 +2225,7 @@ impl Drop for Storage {
     fn drop(&mut self) {
         drop(self.snapshot_reader.take());
         drop(self.read_conn.take());
+        drop(self.detail_conn.take());
     }
 }
 
@@ -2487,11 +2496,22 @@ impl Storage {
     /// old schema. A file database gets them; an in-memory one does not, because
     /// a second connection would see an empty database.
     fn finish(conn: Connection, path: Option<&Path>) -> Result<Self, StorageError> {
-        let (snapshot_reader, read_conn) = match path {
-            Some(path) => (Some(Mutex::new(open_reader(path)?)), Some(Mutex::new(open_reader(path)?))),
-            None => (None, None),
+        let (snapshot_reader, read_conn, detail_conn) = match path {
+            Some(path) => (Some(Mutex::new(open_reader(path)?)), Some(Mutex::new(open_reader(path)?)), Some(Mutex::new(open_reader(path)?))),
+            None => (None, None, None),
         };
-        Ok(Self { conn: Mutex::new(conn), snapshot_reader, read_conn })
+        Ok(Self { conn: Mutex::new(conn), snapshot_reader, read_conn, detail_conn })
+    }
+    /// Changes the writer connection's durability mode. It exists so the
+    /// timing example can compare the shipped `synchronous=FULL` (the owner's
+    /// decision) with `NORMAL` on a database copy; the daemon never calls it,
+    /// and only those two values are accepted.
+    #[doc(hidden)]
+    pub fn set_write_synchronous(&self, mode: &str) -> Result<(), StorageError> {
+        if !matches!(mode, "FULL" | "NORMAL") { return Err(StorageError::InvalidAgent); }
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute_batch(&format!("PRAGMA synchronous={mode}"))?;
+        Ok(())
     }
     /// Runs one read on the given private connection inside a read transaction,
     /// so a value built from several queries cannot see a write land between
@@ -3361,7 +3381,7 @@ impl Storage {
         Ok((!text.is_empty()).then_some(text))
     }
 
-    pub fn agent_get(&self, id:&str)->Result<Value,StorageError>{ validate_agent_id(id)?;let c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; agent_read(&c,id) }
+    pub fn agent_get(&self, id:&str)->Result<Value,StorageError>{ validate_agent_id(id)?;self.read_in(&self.read_conn,|c| agent_read(c,id)) }
     pub fn agent_create(&self, input:&Value)->Result<(Value,Vec<Value>),StorageError>{
         validate_agent_fields(input,true)?;
         let mut c=self.conn.lock().map_err(|_|StorageError::Poisoned)?; let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -3756,8 +3776,7 @@ impl Storage {
         Ok(serde_json::from_str(&raw.ok_or(StorageError::AgentNotFound)?)?)
     }
     pub fn session_event_summary(&self, id: &str) -> Result<Value, StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        session_event_summary_locked(&c, id)
+        self.read_in(&self.read_conn, |c| session_event_summary_locked(c, id))
     }
     pub fn session_rename(&self, id: &str, title: &str) -> Result<Value, StorageError> {
         let title = title.trim();
@@ -6617,9 +6636,20 @@ impl Storage {
         let mode:String=serde_json::from_str(&raw)?; if !["ask","auto","accept_edits","bypass"].contains(&mode.as_str()){return Err(StorageError::InvalidAgent)} Ok(mode)
         })
     }
+    /// A whole conversation: its row, every turn, message, tool call and file
+    /// change. Read on its own connection (see `detail_conn`) so a cold load of
+    /// a large conversation never holds up a save. Every read starts its own
+    /// transaction, so it still sees a write that landed a moment earlier.
     pub fn session_detail(&self, id: &str) -> Result<Value, StorageError> {
-        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
-        self.session_detail_locked(&c, id)
+        self.read_in(&self.detail_conn, |c| self.session_detail_parts(c, id, true))
+    }
+    /// The conversation's own row and context counters, without its transcript.
+    /// A model, effort or permission change decides with this: about a
+    /// millisecond, where a whole conversation also reads every tool payload it
+    /// holds (2026-11-01). Read on the small-read connection, which no
+    /// conversation load uses.
+    pub fn session_execution_row(&self, id: &str) -> Result<Value, StorageError> {
+        self.read_in(&self.read_conn, |c| session_row_locked(c, id))
     }
     pub fn session_context(&self, id: &str) -> Result<(Option<u64>, Option<u64>), StorageError> {
         let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
@@ -7026,14 +7056,7 @@ impl Storage {
         self.session_detail_parts(c, id, true)
     }
     fn session_detail_parts(&self, c: &Connection, id: &str, full: bool) -> Result<Value, StorageError> {
-        let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'projectApprovalMode',(SELECT CASE WHEN json_valid(q.overrides_json) THEN json_extract(q.overrides_json,'$.approvalMode') END FROM projects q WHERE q.id=COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path))),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
-        let mut v: Value =
-            serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
-        let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
-        v["contextUsed"] = json!(context_used);
-        v["contextSize"] = json!(context_size);
-        v["contextModel"] = json!(context_model);
-        v["contextEstimated"] = json!(context_estimated);
+        let mut v = session_row_locked(c, id)?;
         if !full {
             let mut last=query_jsons(c,&SESSION_MESSAGES_SQL.replace("ORDER BY sequence","ORDER BY sequence DESC LIMIT 3"),id)?;
             last.reverse();
@@ -7041,7 +7064,28 @@ impl Storage {
             v["partial"] = json!(true);
             return Ok(v);
         }
-        let turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'delivery',json_extract(t.data,'$.delivery'),'detail',(SELECT json_extract(e.payload,'$.detail') FROM app_events e WHERE e.event_type='turn.error' AND json_valid(e.payload) AND json_extract(e.payload,'$.turnId')=t.id ORDER BY e.sequence DESC LIMIT 1)) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
+        let mut turns=query_jsons(c,"SELECT json_object('id',t.id,'state',t.state,'createdAt',t.created_at,'completedAt',t.completed_at,'recoveryHandled',json(CASE WHEN json_extract(t.data,'$.recoveryHandled')=1 THEN 'true' ELSE 'false' END),'failureClass',COALESCE(t.failure_class_v2,t.failure_class),'failureMessage',CASE COALESCE(t.failure_class_v2,t.failure_class) WHEN 'context' THEN 'Context window is full. Start a new conversation.' WHEN 'timeout' THEN 'The provider stopped making progress before the turn completed.' WHEN 'permission_denied' THEN 'A required permission was denied.' WHEN 'cancelled' THEN 'The turn was cancelled.' WHEN 'budget_stop' THEN 'The turn stopped because an applicable budget was reached.' WHEN 'config_unsupported' THEN 'Requested execution settings were unsupported.' WHEN 'provider_error' THEN 'The provider reported a turn error.' WHEN 'other' THEN 'The turn could not be completed.' ELSE NULL END,'delivery',json_extract(t.data,'$.delivery')) FROM turns t WHERE t.session_id=?1 ORDER BY t.created_at",id)?;
+        // A failed turn's detail, one turn at a time with the turn id as a bound
+        // value. Written as a correlated subquery inside the statement above,
+        // SQLite cannot seek the partial `idx_app_events_turn_error` index for it
+        // and scans the whole event log once per turn: measured at 74 ms a turn,
+        // 12.3 s for the log's 167 turns, and that was the real reason opening a
+        // conversation cost 250 to 400 ms while every statement measured under
+        // 10 ms (2026-11-01). The same lookup with the id bound uses the index
+        // (SEARCH … USING INDEX) and costs about 0.01 ms.
+        {
+            let mut detail = c.prepare("SELECT json_extract(payload,'$.detail') FROM app_events WHERE event_type='turn.error' AND json_valid(payload) AND json_extract(payload,'$.turnId')=?1 ORDER BY sequence DESC LIMIT 1")?;
+            for turn in turns.iter_mut() {
+                let turn_id = turn["id"].as_str().unwrap_or("").to_owned();
+                let raw: Option<String> = detail.query_row([&turn_id], |row| row.get::<_, Option<String>>(0)).optional()?.flatten();
+                turn["detail"] = match raw {
+                    // `json_object` used to embed this column, so valid JSON text
+                    // came back as a value and anything else as a string.
+                    Some(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+                    None => Value::Null,
+                };
+            }
+        }
         let msgs=query_jsons(c,SESSION_MESSAGES_SQL,id)?;
         v["turns"] = json!(turns);
         v["messages"] = json!(msgs);
@@ -7627,6 +7671,24 @@ fn session_event_summary_locked(c: &Connection, id: &str) -> Result<Value, Stora
     summary["contextModel"] = json!(context_model);
     summary["contextEstimated"] = json!(context_estimated);
     Ok(summary)
+}
+
+/// A conversation's own row plus its context counters: the model lock, the
+/// provider session, the project, the state and the link, and nothing that grows
+/// with the transcript. `session_detail_parts` starts from this, and the
+/// execution paths (`session.model.update`, `session.model.plan`,
+/// `session.permissions.set`) read only this: they never need a single message
+/// or tool payload (2026-11-01).
+fn session_row_locked(c: &Connection, id: &str) -> Result<Value, StorageError> {
+    let base:Option<String>=c.query_row("SELECT json_object('id',id,'runtimeId',runtime_id,'agentId',agent_id,'provider',provider,'providerSessionId',provider_session_id,'projectPath',project_path,'title',COALESCE(title_override,title),'modelLock',json(model_lock_json),'archived',json(CASE WHEN archived=1 THEN 'true' ELSE 'false' END),'state',state,'limitedUntil',limited_until,'resumable',json(CASE WHEN resumable!=0 THEN 'true' ELSE 'false' END),'createdAt',created_at,'updatedAt',updated_at,'workspaceLabel',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path),'Casual'),'projectId',COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path)),'projectName',COALESCE((SELECT p.name FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.name FROM projects p WHERE p.path=sessions.project_path)),'fanoutId',(SELECT f.id FROM fanouts f WHERE f.id=json_extract(sessions.data,'$.fanoutId')),'projectApprovalMode',(SELECT CASE WHEN json_valid(q.overrides_json) THEN json_extract(q.overrides_json,'$.approvalMode') END FROM projects q WHERE q.id=COALESCE((SELECT p.id FROM projects p WHERE p.id=json_extract(sessions.data,'$.projectId')),(SELECT p.id FROM projects p WHERE p.path=sessions.project_path))),'link',json_extract(data,'$.link')) FROM sessions WHERE id=?1",[id],|r|r.get(0)).optional()?;
+    let mut v: Value =
+        serde_json::from_str(&base.ok_or(rusqlite::Error::QueryReturnedNoRows)?)?;
+    let (context_used, context_size, context_model, context_estimated) = session_context_locked(c, id)?;
+    v["contextUsed"] = json!(context_used);
+    v["contextSize"] = json!(context_size);
+    v["contextModel"] = json!(context_model);
+    v["contextEstimated"] = json!(context_estimated);
+    Ok(v)
 }
 
 // Context counters plus the model label and estimated flag; a named type would not add meaning.
@@ -9612,6 +9674,24 @@ mod tests {
     }
 
     #[test]
+    fn a_turns_error_detail_is_the_newest_one_and_keeps_its_json_shape() {
+        // The detail used to come from a correlated subquery inside the turns
+        // statement, which made SQLite scan the whole event log once per turn.
+        // It is now one indexed lookup per turn; this pins what it answers.
+        let db = Storage::open_in_memory().unwrap();
+        db.create_session("detail-session", "runtime", "codex", ".", "Turn detail").unwrap();
+        db.create_turn("first-turn", "detail-session").unwrap();
+        db.update_turn_outcome("first-turn", "error", Some("provider_error")).unwrap();
+        db.push_event("turn.error", &json!({"sessionId":"detail-session","turnId":"first-turn","detail":"first"})).unwrap();
+        db.push_event("turn.error", &json!({"sessionId":"detail-session","turnId":"first-turn","detail":"second"})).unwrap();
+        db.create_turn("object-turn", "detail-session").unwrap();
+        db.push_event("turn.error", &json!({"sessionId":"detail-session","turnId":"object-turn","detail":{"kind":"rate_limit","retryAfter":30}})).unwrap();
+        let turns = db.session_detail("detail-session").unwrap()["turns"].as_array().unwrap().clone();
+        assert_eq!(turns.iter().find(|turn| turn["id"] == "first-turn").unwrap()["detail"], "second", "the newest error wins");
+        assert_eq!(turns.iter().find(|turn| turn["id"] == "object-turn").unwrap()["detail"], json!({"kind":"rate_limit","retryAfter":30}), "a structured detail keeps its shape");
+    }
+
+    #[test]
     fn analytics_output_contains_usage_metrics_without_monetary_fields() {
         let metrics = AnalyticsAccumulator::default();
         let totals = metrics.totals_json();
@@ -11553,6 +11633,7 @@ mod task_ledger_tests {
             let db = Storage::open(&path).unwrap();
             assert!(db.snapshot_reader.is_some(), "a file gets a snapshot connection");
             assert!(db.read_conn.is_some(), "a file gets a connection for the small reads");
+            assert!(db.detail_conn.is_some(), "a file gets a connection for whole-conversation reads");
             db.upsert_runtime(&json!({"id": "rt-read", "provider": "codex"})).unwrap();
             db.create_session("s-read", "rt-read", "codex", ".", "Reads").unwrap();
             db.update_session_state("s-read", "idle").unwrap();
@@ -11563,12 +11644,15 @@ mod task_ledger_tests {
             assert_eq!(db.default_approval_mode().unwrap(), "auto", "the small-read connection sees the new setting");
             assert_eq!(db.settings().unwrap()["permissions.default_mode"], "auto");
             assert!(db.agent_list(false, None).unwrap().is_empty());
+            // A whole-conversation read straight after a write sees that write too.
+            assert_eq!(db.session_detail("s-read").unwrap()["id"], "s-read", "the detail reader sees the new conversation");
+            assert_eq!(db.session_event_summary("s-read").unwrap()["state"], "idle", "the summary reader sees the new state");
         }
         assert!(!path.with_extension("db-wal").exists(), "closing the writer last folds the log back in");
         assert!(!path.with_extension("db-shm").exists());
         let _ = fs::remove_file(&path);
         let memory = Storage::open_in_memory().unwrap();
-        assert!(memory.snapshot_reader.is_none() && memory.read_conn.is_none(), "an in-memory database has no second connection");
+        assert!(memory.snapshot_reader.is_none() && memory.read_conn.is_none() && memory.detail_conn.is_none(), "an in-memory database has no second connection");
         assert!(memory.snapshot().unwrap()["sessions"].is_array(), "and still serves a snapshot");
     }
 

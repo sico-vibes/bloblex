@@ -8,6 +8,8 @@ import type { Agent, BoardTask } from '../types'
 
 const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 let listed: BoardTask[] = []
+/** Set by a test that wants `task.dispatch` to stay unanswered. */
+let hangDispatch = false
 vi.mock('../tauri', () => ({
   rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
     calls.push({ method, params })
@@ -16,6 +18,7 @@ vi.mock('../tauri', () => ({
     if (method === 'task.image') return { dataUrl: 'data:image/png;base64,AAAA' }
     if (method === 'task.create') return { task: { ...base('new-1', 'unassigned'), title: String(params.title) } }
     if (method === 'task.update') return { task: { ...(listed.find((item) => item.id === params.taskId) as BoardTask), title: String(params.title), version: 3 } }
+    if (method === 'task.dispatch' && hangDispatch) return new Promise(() => undefined)
     if (method === 'task.dispatch') return { task: { ...base('new-1', 'running'), assigneeAgentId: params.assigneeAgentId }, disposition: 'started', queuePosition: null, reason: null, replayed: false }
     return {}
   }),
@@ -35,6 +38,7 @@ let host: HTMLDivElement
 beforeEach(() => {
   calls.length = 0
   listed = []
+  hangDispatch = false
   host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
   if (!URL.createObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: () => 'blob:preview' })
   if (!URL.revokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined })
@@ -88,6 +92,24 @@ describe('Tasks page forms', () => {
     expect((created.schedule as { kind: string; cron: string }).kind).toBe('cron')
     expect((created.schedule as { cron: string }).cron).toBe('0 9 * * *')
     expect(last('task.dispatch')).toBeUndefined()
+  })
+
+  // 2026-11-01: the drop shows on the board at once. The card reads "Starting"
+  // before `task.dispatch` answers, and the daemon's own row replaces it.
+  it('shows a task as starting on the bot lane before the dispatch answers', async () => {
+    hangDispatch = true
+    await mount()
+    act(() => button('New task', host).click())
+    await flush()
+    type(dialog().querySelector<HTMLInputElement>('input[data-dialog-initial-focus]')!, 'Start me now')
+    await choose('Bot', 'Codex')
+    act(() => button('Add and start', dialog()).click())
+    await flush()
+    expect(last('task.dispatch')).toBeTruthy()
+    expect(host.querySelector('.delegate-chips')?.textContent).toContain('Start me now')
+    expect(host.querySelector('.delegate-chips')?.textContent).toContain('Starting')
+    // The draft lane is empty: the task already sits with its bot.
+    expect(host.querySelectorAll('.delegate-draft')).toHaveLength(0)
   })
 
   it('creates and starts a task straight away when "Now" and a bot are chosen', async () => {

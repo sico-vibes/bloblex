@@ -68,6 +68,16 @@ export function useTasks(active: boolean, connected: boolean) {
     merge(result.task)
     return result
   }, [])
+  /**
+   * Shows the drop on the board at once, before the daemon answers: the card
+   * moves to the bot's lane as "Starting". The daemon's own row replaces it when
+   * `task.dispatch` returns; a refusal puts the saved task back (`reload`) and
+   * the caller shows the reason. Nothing here decides anything: the assignee,
+   * the queue and the claim still come from the daemon.
+   */
+  const optimisticDispatch = useCallback((task: BoardTask, assigneeAgentId: string) => {
+    merge({ ...task, state: 'queued', queuePosition: null, assigneeAgentId, updatedAt: new Date().toISOString(), pendingDispatch: true })
+  }, [])
   const act = useCallback(async (method: 'task.unassign' | 'task.cancel' | 'task.stop', task: BoardTask) => {
     const result = await rpc<{ task: BoardTask }>(method, { taskId: task.id, expectedVersion: task.version })
     merge(result.task)
@@ -86,5 +96,5 @@ export function useTasks(active: boolean, connected: boolean) {
   }, [load])
   const runs = useCallback(async (taskId: string) => (await rpc<{ runs?: BoardTaskRun[] }>('task.runs', { taskId })).runs ?? [], [])
 
-  return { tasks, loaded, error, reload: load, create, update, image, dispatch, act, review, reorder, runs }
+  return { tasks, loaded, error, reload: load, create, update, image, dispatch, optimisticDispatch, act, review, reorder, runs }
 }

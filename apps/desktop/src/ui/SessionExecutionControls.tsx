@@ -145,6 +145,7 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
       if (bot.agent?.id) onAgentUpdated?.(bot.agent)
     }
     let askedToConfirm = false
+    let botWriteFailed = false
     try {
       if (isDraftSession(session)) {
         await writeBot()
@@ -152,8 +153,8 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
       }
       // A model change is written to the conversation first: the daemon refuses
       // an unconfirmed change before it stores anything, so a cancel leaves both
-      // the conversation and the bot untouched. Effort and speed keep writing
-      // the bot first, which the picker relies on while its menu stays open.
+      // the conversation and the bot untouched. Effort and speed write both at
+      // once, below.
       const modelChanging = nextModel !== (model ?? null)
       let result: { session?: Session }
       if (modelChanging) {
@@ -166,11 +167,23 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
         try { await writeBot() } catch { if (applied && mounted.current) onError('The model changed for this conversation, but Bitbots could not save it as the default for new ones.') }
         return applied
       } else {
-        await writeBot()
-        result = await rpc<{ session?: Session }>('session.model.update', { sessionId, model: nextModel, thinking: nextThinking, confirmModelChange })
+        // Effort and speed write two rows: the conversation's own lock and the
+        // bot's default for new conversations. Neither orders the other, so they
+        // run together and the save takes one round trip instead of two. A model
+        // change above stays conversation-first, so a cancelled one still leaves
+        // both untouched.
+        const [botWrite, sessionWrite] = await Promise.allSettled([
+          writeBot(),
+          rpc<{ session?: Session }>('session.model.update', { sessionId, model: nextModel, thinking: nextThinking, confirmModelChange }),
+        ])
+        if (sessionWrite.status === 'rejected') throw sessionWrite.reason
+        result = sessionWrite.value
+        if (botWrite.status === 'rejected') botWriteFailed = true
       }
       const current = currentSessionId.current === sessionId && sessionGeneration.current === generation && result.session?.id === sessionId
       if (current && mounted.current) onSessionUpdated(result.session!)
+      // The conversation has the value; only the bot's default failed.
+      if (botWriteFailed && mounted.current && currentSessionId.current === sessionId) onError('The setting changed for this conversation, but Bitbots could not save it as the default for its new ones.')
       return current
     } catch (reason) {
       // The daemon saw context this view had not: ask before retrying with the
@@ -190,9 +203,20 @@ export function SessionExecutionControls({ session, agent, locked = false, onSes
   }
 
   const requestEffort = async (next: string | null) => {
-    setEffortDraft(null)
-    if (next === thinking) return true
-    return save(session.id, model ?? null, next, false)
+    if (next === thinking) { setEffortDraft(null); return true }
+    // Owner-visible from the moment of commit: the pill and the meter show the
+    // chosen level while the save runs, instead of falling back to the old one
+    // until the reply lands (2026-11-01). If the daemon refuses, it returns to
+    // the saved value and `onError` has already said why. On success the
+    // conversation's own update keeps the new value.
+    setEffortDraft({ sessionId: session.id, model: model ?? null, value: next })
+    let saved = false
+    try {
+      saved = await save(session.id, model ?? null, next, false)
+    } finally {
+      if (mounted.current) setEffortDraft((current) => current && current.sessionId === session.id && current.model === model ? null : current)
+    }
+    return saved
   }
   const providerStyle = resolveProviderStyle(catalog?.provider ?? '', selectedModel?.providerId, selectedModel?.id ?? model, selectedModel?.displayName)
   const pendingForSession = pendingModel?.sessionId === session.id ? pendingModel : null
@@ -437,8 +461,12 @@ function EffortControl({ provider, providerStyle, modelName, efforts, defaultThi
     else { clearSettle(); setMode('rest'); setPosition(restIndex); positionRef.current = restIndex; setOpen(true) }
   }
 
+  // The pill wears the drafted level as soon as it is chosen, so a commit reads
+  // as done before the daemon answers (2026-11-01). Without a draft this is the
+  // saved value, exactly as before.
   const triggerLabel = lockedReason === MODEL_FIRST_REASON ? 'Effort'
-    : value && efforts.includes(value) ? labelizeEffort(value, provider) : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
+    : visibleIndex >= 0 && efforts[visibleIndex] ? labelizeEffort(efforts[visibleIndex], provider)
+      : unlistedValue ? labelizeEffort(unlistedValue, provider) : defaultThinking ? labelizeEffort(defaultThinking, provider) : 'Model default'
   const savedTop = efforts.length > 1 && value === efforts[efforts.length - 1]
   const trigger = <button type="button" className={`composer-pill session-effort-trigger ${savedTop ? 'highest' : ''} ${isTopTierEffort(value) ? 'max-tier' : ''} ${lockedReason ? 'locked' : ''}`} aria-haspopup="dialog" aria-expanded={open} aria-label={lockedReason ? `Effort: ${triggerLabel}. ${lockedReason}` : `Effort: ${triggerLabel}`} aria-disabled={lockedReason ? true : undefined} title={locked && !lockedReason ? LOCKED_CONTROL_TOOLTIP : undefined} disabled={disabled && !lockedReason} onClick={toggle}>
     {/* Owner, 28 October 2026: the thinking level wears one static brain; the menu still shows each level's bars. */}

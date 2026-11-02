@@ -66,7 +66,7 @@ import { WorkingBotsPanel } from './WorkingBotsPanel'
 import { DelegationGroup } from './DelegationGroup'
 import { buildDelegationRows, delegationRuns, newestNoticeBySide, useDelegations } from './delegations'
 import { ChangeBanner } from './ChangeBanner'
-import { conversationPlaceName, hashQuery, HYDRATE_AT_ONCE, hydrationOrder, isEmptyConversation, isSideSession, isWaitingDelegation, leaveProjectStep, sideTopic, mainSessionFor, mentionQuery, projectMatches, projectNamedInText, projectOfSession, splitMentions, splitReferences } from './teamSelectors'
+import { conversationPlaceName, conversationsToLoad, hashQuery, HYDRATE_AT_ONCE, isEmptyConversation, isSideSession, isWaitingDelegation, leaveProjectStep, sideTopic, mainSessionFor, mentionQuery, projectMatches, projectNamedInText, projectOfSession, splitMentions, splitReferences } from './teamSelectors'
 import { effectiveApprovalMode } from '../approvalContract'
 import type { ExecutionSendGate } from '../executionContract'
 import { parseExecSnapshot } from '../executionContract'
@@ -448,6 +448,13 @@ export function App() {
   const pendingSessionHydrations = useRef(new Set<string>())
   /** Background loads that failed; the conversation loads again when it is opened. */
   const failedSessionHydrations = useRef(new Set<string>())
+  /**
+   * The conversations on screen, kept for the event path: a `session.changed`
+   * only loads a transcript for one of these (2026-11-01).
+   */
+  const openSessionIdsRef = useRef<Set<string>>(new Set())
+  /** The conversation the effect below last opened, so a failed load retries on re-open. */
+  const lastHydratedOpen = useRef<string | null>(null)
   const selectedAgentIdRef = useRef<string | null>(null)
   const detailsSessionIdRef = useRef<string | null>(null)
   const selectedRuntimeIdRef = useRef<string | null>(null)
@@ -579,15 +586,34 @@ export function App() {
   // Every screen that offers bots as a choice uses this; a sub-bot belongs to its parent.
   const bots = agents.filter((agent) => !agent.parentAgentId)
   const projects = snapshot?.projects ?? []
-  // Conversations load in the background: the selected bot's newest first, a
-  // few at a time, so its list opens ready while the rest follow. Each finished
-  // load changes the snapshot, which runs this again for the next ones.
+  // A conversation loads when it is opened, not every partial one in the
+  // background: a whole conversation still carries every tool payload (about
+  // 100 ms for a tool-heavy one), and loading all of them held up saves
+  // (2026-11-01). The open conversation goes first; the newest couple of the
+  // selected bot follow only once nothing is waiting, so the list stays warm
+  // without anything blocking on it.
   useEffect(() => {
     if (!snapshot || !inDesktop) return
-    const open = [selectedSessionId, sideSessionId]
-    // The companion loads only a partial conversation it is showing; the main window loads the rest in the background.
-    const queue = hydrationOrder(sessions, selectedAgentId, open).filter((session) => (!companion || (session.partial === true && open.includes(session.id))) && !pendingSessionHydrations.current.has(session.id) && !failedSessionHydrations.current.has(session.id))
-    for (const session of queue.slice(0, Math.max(0, HYDRATE_AT_ONCE - pendingSessionHydrations.current.size))) {
+    const open = [selectedSessionId, sideSessionId].filter((id): id is string => !!id)
+    openSessionIdsRef.current = new Set(open)
+    // A conversation that failed to load tries again when it is opened afresh.
+    if (lastHydratedOpen.current !== selectedSessionId) {
+      lastHydratedOpen.current = selectedSessionId
+      if (selectedSessionId) failedSessionHydrations.current.delete(selectedSessionId)
+    }
+    const wanted = (session: Session) => !session.archived && (session.partial === true || (!Array.isArray(session.messages) && !Array.isArray(session.turns)))
+    const ready = (session: Session) => !pendingSessionHydrations.current.has(session.id) && !failedSessionHydrations.current.has(session.id)
+    // Opened conversations, then (in the main window only) a bounded prefetch of
+    // the selected bot's newest ones. Neither grows: a conversation that has
+    // loaded drops out of `wanted`, and the prefetch set is fixed by recency.
+    const planned = conversationsToLoad(sessions, selectedAgentId, open, { companion })
+    const opened = planned.open.filter(wanted).filter(ready)
+    const ahead = planned.ahead.filter(wanted).filter(ready)
+    const queue = opened.length > 0 ? opened : ahead
+    // A prefetch waits until nothing is loading, so opening a conversation is
+    // never behind one.
+    const budget = opened.length > 0 ? HYDRATE_AT_ONCE : (pendingSessionHydrations.current.size === 0 ? 1 : 0)
+    for (const session of queue.slice(0, Math.max(0, budget))) {
       pendingSessionHydrations.current.add(session.id)
       void rpc<Session>('session.get', { sessionId: session.id }).then((fullSession) => {
         setSnapshot((current) => current ? mergeHydratedSession(current, session.id, fullSession) : current)
@@ -889,6 +915,10 @@ export function App() {
     if (typeof session.id !== 'string' || session.archived === true) return
     const current = snapshotRef.current
     if (current?.deletedSessionIds?.includes(session.id) || current?.sessions?.some((item) => item.id === session.id && item.partial !== true && (Array.isArray(item.messages) || Array.isArray(item.turns)))) return
+    // `applyEvent` has already merged the row this event carried. Only the
+    // conversation on screen needs its transcript fetched: loading every changed
+    // one is what made a background save feel heavy (2026-11-01).
+    if (!openSessionIdsRef.current.has(session.id)) return
     if (pendingSessionHydrations.current.has(session.id)) return
     pendingSessionHydrations.current.add(session.id)
     void rpc<Session>('session.get', { sessionId: session.id }).then((fullSession) => {

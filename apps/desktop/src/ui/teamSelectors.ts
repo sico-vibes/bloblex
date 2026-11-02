@@ -401,6 +401,14 @@ export function ancestorIds(tree: readonly ConversationNode[], sessionId: string
 export const HYDRATE_AT_ONCE = 4
 
 /**
+ * How many of the selected bot's newest conversations are fetched ahead of the
+ * one on screen. Small on purpose: a whole conversation carries every tool
+ * payload, so a tool-heavy one still costs about 100 ms to read (2026-11-01),
+ * and only the list's previews need them.
+ */
+export const PREFETCH_CONVERSATIONS = 2
+
+/**
  * Conversations still to load in full, in the order they should load: the
  * selected bot's first, newest first within each group. Archived ones and
  * ones already loaded are left out.
@@ -412,6 +420,31 @@ export function hydrationOrder(sessions: readonly Session[], selectedAgentId: st
     // Wave 13: a lazy snapshot's `partial` conversation carries only its last messages, so it still needs loading.
     .filter((session) => !session.archived && (session.partial === true || (!Array.isArray(session.messages) && !Array.isArray(session.turns))))
     .sort((a, b) => open(b) - open(a) || Number(b.agentId === selectedAgentId && !!selectedAgentId) - Number(a.agentId === selectedAgentId && !!selectedAgentId) || time(b) - time(a))
+}
+
+/**
+ * Which conversations load now (2026-11-01). A conversation loads when it is
+ * opened; the main window also fetches its selected bot's newest `prefetch`
+ * ones so the list's previews stay warm. Nothing else loads: before this, every
+ * partial conversation was fetched in the background, and each read returns
+ * every tool payload the conversation holds.
+ *
+ * `open` is what the window is showing. `ahead` is bounded by recency, so it
+ * cannot keep sliding into more work as conversations finish loading, and it is
+ * empty in the companion and when no bot is selected.
+ */
+export function conversationsToLoad(sessions: readonly Session[], selectedAgentId: string | null, openSessionIds: readonly (string | null | undefined)[], options: { companion?: boolean; prefetch?: number } = {}): { open: Session[]; ahead: Session[] } {
+  const open = openSessionIds.filter((id): id is string => !!id)
+  const needed = hydrationOrder(sessions, selectedAgentId, open)
+  const opened = needed.filter((session) => open.includes(session.id))
+  const prefetch = options.companion ? 0 : options.prefetch ?? PREFETCH_CONVERSATIONS
+  if (prefetch <= 0 || !selectedAgentId) return { open: opened, ahead: [] }
+  const newest = sessions
+    .filter((session) => !session.archived && session.agentId === selectedAgentId && !open.includes(session.id))
+    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+    .slice(0, prefetch)
+  const ahead = needed.filter((session) => newest.some((item) => item.id === session.id))
+  return { open: opened, ahead }
 }
 
 /**

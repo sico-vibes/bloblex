@@ -6,6 +6,16 @@ export const TASK_STATE_LABEL: Record<string, string> = {
   claimed: 'Starting', ambiguous: 'Needs a look', unassigned: 'Draft', queued: 'Queued', running: 'Working', needs_you: 'Needs you', awaiting_review: 'Ready for review', done: 'Done', failed: 'Failed', cancelled: 'Cancelled',
 }
 
+/**
+ * What to print for a task's state. A task the owner just dropped on a bot says
+ * "Starting" until the daemon's own answer replaces it (`pendingDispatch`); the
+ * stored state behind it is the one the board already knew.
+ */
+export function taskStateLabel(task: Pick<BoardTask, 'state' | 'pendingDispatch'>): string {
+  if (task.pendingDispatch) return 'Starting'
+  return TASK_STATE_LABEL[task.state] ?? task.state
+}
+
 export const FINISHED_STATES: readonly TaskState[] = ['done', 'failed', 'cancelled']
 export const isFinished = (task: BoardTask) => FINISHED_STATES.includes(task.state)
 /** On a bot's lane: assigned and not finished. */

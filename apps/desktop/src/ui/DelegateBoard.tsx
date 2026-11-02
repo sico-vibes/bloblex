@@ -7,7 +7,7 @@ import { BlobCanvas } from '../blob/BlobCanvas'
 import { agentLook } from '../blob/look'
 import { agentColorHex } from './agentColor'
 import { Select } from './Select'
-import { TASK_STATE_LABEL, SCHEDULE_OUTCOME_LABEL, draftTasks, finishedTasks, laneAvailability, laneTasks, assignableAgents, scheduleSummary, scheduledTasks } from './taskModel'
+import { taskStateLabel, SCHEDULE_OUTCOME_LABEL, draftTasks, finishedTasks, laneAvailability, laneTasks, assignableAgents, scheduleSummary, scheduledTasks } from './taskModel'
 import { describeNextRun } from './automationSchedule'
 import { useEntityNoun } from './vocabulary'
 
@@ -126,7 +126,7 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
       </div>}
       {finished.length > 0 && <div className="delegate-finished">
         <button type="button" className="delegate-finished-toggle" aria-expanded={showFinished} onClick={() => setShowFinished((open) => !open)}><ChevronDown size={14} aria-hidden="true" className={showFinished ? 'open' : ''} />Finished<span className="delegate-count">{finished.length}</span></button>
-        {showFinished && <ul className="delegate-list compact">{finished.map((task) => <li key={task.id}><button type="button" className={`delegate-done tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-done-title">{task.title}</span><small>{TASK_STATE_LABEL[task.state]}</small></button></li>)}</ul>}
+        {showFinished && <ul className="delegate-list compact">{finished.map((task) => <li key={task.id}><button type="button" className={`delegate-done tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-done-title">{task.title}</span><small>{taskStateLabel(task)}</small></button></li>)}</ul>}
       </div>}
     </section>
 
@@ -146,7 +146,7 @@ export function DelegateBoard({ tasks, agents, projects, nowMs, connected, busy,
               <span className="delegate-lane-name"><strong>{agent.name}</strong>{runtimeName(agent).toLowerCase() !== agent.name.trim().toLowerCase() && <small>{runtimeName(agent)}</small>}</span>
               <span className="delegate-badges"><span className={`delegate-availability tone-${availability.tone}`}>{availability.label}</span>{availability.queued > 0 && <span className="delegate-availability">{availability.queued} queued</span>}</span>
             </header>
-            {lane.length > 0 && <ul className="delegate-chips">{lane.map((task) => <li key={task.id}><button type="button" className={`delegate-chip tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-chip-title">{task.title}</span><small>{task.state === 'queued' && task.queuePosition != null ? `Queued ${task.queuePosition + 1}` : TASK_STATE_LABEL[task.state]}</small></button></li>)}</ul>}
+            {lane.length > 0 && <ul className="delegate-chips">{lane.map((task) => <li key={task.id}><button type="button" className={`delegate-chip tone-${task.state}`} onClick={() => onOpen(task)}><span className="delegate-dot" aria-hidden="true" /><span className="delegate-chip-title">{task.title}</span><small>{task.state === 'queued' && task.queuePosition != null ? `Queued ${task.queuePosition + 1}` : taskStateLabel(task)}</small></button></li>)}</ul>}
           </section>
         </li>
       })}</ul>}

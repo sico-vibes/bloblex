@@ -1065,15 +1065,24 @@ async fn dispatch(st: &AppState, method: &str, p: Value) -> Result<Value, Dispat
             let options_changed = ["runtimeId", "model", "thinking", "serviceTier"].iter().any(|key| fields.get(*key).is_some());
             if options_changed {
                 if let Some(runtime) = st.runtimes.read().await.iter().find(|runtime| runtime["id"] == runtime_id).cloned() {
-                    if let Ok(Some(served)) = catalog::get(st, &runtime, None, None, catalog::Mode::Fresh).await {
-                        let catalog = served.value;
-                        if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &effective, &catalog) {
+                    // One cached read, then both normalise and validate against
+                    // it. Before, the normaliser asked with no model hint and
+                    // `validate_agent_catalog` with one; for Claude those are
+                    // two cache keys, so one save could start two probes in a
+                    // row (2026-11-01). A save with any catalog cached doesn't
+                    // wait on a probe: the cache serves what it has and refreshes
+                    // behind the save. Only with nothing cached at all does the
+                    // validator below read a fresh one.
+                    let workflows = runtime["provider"] == "claude" && st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true);
+                    let known = catalog::get(st, &runtime, Some(workflows), effective["model"].as_str(), catalog::Mode::CachedOnly).await.ok().flatten().map(|served| served.value);
+                    if let Some(catalog) = &known {
+                        if let Some(normalized) = normalize_model_fields(catalog["provider"].as_str().unwrap_or(""), &effective, catalog) {
                             if let Some(target) = fields.as_object_mut() { for (key, value) in normalized.as_object().unwrap() { target.insert(key.clone(), value.clone()); } }
                             if let (Some(destination), Some(source)) = (effective.as_object_mut(), normalized.as_object()) { for (key, value) in source { destination.insert(key.clone(), value.clone()); } }
                         }
                     }
+                    validate_agent_catalog_against(st, &runtime_id, &effective, known).await?;
                 }
-                validate_agent_catalog(st, &runtime_id, &effective).await?;
             }
             let (agent, events) = st.db.agent_update(id, &fields).map_err(agent_error)?;
             if let Some(refs) = &refs { st.db.env_refs_set(id, refs).map_err(agent_error)?; }
@@ -2167,6 +2176,16 @@ async fn runtime_models(st: &AppState, p: &Value) -> Result<Value, DispatchError
     Ok(catalog)
 }
 async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) -> Result<(), DispatchError> {
+    validate_agent_catalog_against(st, runtime_id, value, None).await
+}
+
+/// The shared body of [`validate_agent_catalog`]. `known` is a catalog the
+/// caller has already read: the save path passes the cached one so a save never
+/// starts a probe and never reads the same catalog twice under two keys. `None`
+/// asks for a fresh one, which is what creating a bot and the Manager's
+/// proposals still do. When no catalog is known the values are accepted, which
+/// is what a failed probe did before this change.
+async fn validate_agent_catalog_against(st: &AppState, runtime_id: &str, value: &Value, known: Option<Value>) -> Result<(), DispatchError> {
     for key in ["model", "thinking", "serviceTier"] {
         if value.get(key).is_some_and(|v| v.is_string() && v.as_str().unwrap().is_empty()) { return Err(derr("invalid_argument", &format!("{key} must be a non-empty identifier"), StatusCode::BAD_REQUEST)); }
     }
@@ -2180,8 +2199,13 @@ async fn validate_agent_catalog(st: &AppState, runtime_id: &str, value: &Value) 
         }
     }
     let runtime = st.runtimes.read().await.iter().find(|r| r["id"] == runtime_id).cloned().ok_or_else(|| derr("not_found", "runtime not found", StatusCode::NOT_FOUND))?;
-    let workflows = runtime["provider"] == "claude" && st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true);
-    let catalog = match catalog::get(st, &runtime, Some(workflows), value["model"].as_str(), catalog::Mode::Fresh).await { Ok(Some(served)) => served.value, _ => return Ok(()) };
+    let catalog = match known {
+        Some(catalog) => catalog,
+        None => {
+            let workflows = runtime["provider"] == "claude" && st.db.settings().map(|settings| claude_workflows_enabled(&settings)).unwrap_or(true);
+            match catalog::get(st, &runtime, Some(workflows), value["model"].as_str(), catalog::Mode::Fresh).await { Ok(Some(served)) => served.value, _ => return Ok(()) }
+        }
+    };
     validate_option_values_against_catalog(value["model"].as_str(),value["thinking"].as_str(),value["serviceTier"].as_str(),Some(&catalog),runtime["provider"]=="codex")
 }
 /// The shared body of `agent.create`: normalize the requested model/effort
@@ -3360,7 +3384,9 @@ async fn update_session_model(st: &AppState, p: Value) -> Result<Value, Dispatch
     // prevents a prompt from reserving a turn with stale thinking/model options.
     let _guard = gate.lock().await;
     if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-    let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
+    // The row and its context counters only: a change of effort, speed or model
+    // must not read the transcript (2026-11-01).
+    let row = st.db.session_execution_row(sid).map_err(|_| derr("not_found", "session not found", StatusCode::NOT_FOUND))?;
     // FIX39 item 13: a locked bot's conversation cannot change model, effort,
     // speed or permission either. P5 audit F1: plan mode is a per-conversation
     // work mode, not one of the locked settings, so a request that carries only
@@ -3526,7 +3552,7 @@ async fn session_model_plan(st: &AppState, p: Value) -> Result<Value, DispatchEr
     let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
         .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-    let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    let row = st.db.session_execution_row(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     let next_model = p["model"].as_str().map(str::trim).filter(|model| !model.is_empty())
         .ok_or_else(|| derr("invalid_argument", "Choose a concrete model. Conversation model selections cannot be unset.", StatusCode::BAD_REQUEST))?;
     let facts = session_model_facts(st, &row, sid, Some(next_model)).await?;
@@ -3557,7 +3583,7 @@ async fn set_session_permissions(st: &AppState, p: Value) -> Result<Value, Dispa
     let sid = p["sessionId"].as_str().filter(|value| !value.is_empty())
         .ok_or_else(|| derr("invalid_argument", "sessionId is required", StatusCode::BAD_REQUEST))?;
     if session_is_deleted(st, sid).await { return Err(derr("not_found", "session not found", StatusCode::NOT_FOUND)); }
-    let row = st.db.session_detail(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
+    let row = st.db.session_execution_row(sid).map_err(|_| derr("not_found", "Conversation not found.", StatusCode::NOT_FOUND))?;
     let approval = match p.get("approvalMode") {
         Some(Value::Null) => None,
         Some(Value::String(value)) if matches!(value.as_str(), "ask" | "auto" | "accept_edits" | "bypass") => Some(value.clone()),
@@ -4689,8 +4715,16 @@ fn merge_context_measurement(
     (context_used, context_size, model.or(previous_model), context_estimated)
 }
 
-/// How many of the most recent conversations a lazy snapshot still sends in full.
-const LAZY_SNAPSHOT_KEEP: usize = 15;
+/// How many of the most recent conversations a lazy snapshot still sends in
+/// full. Zero since 2026-11-01: a detailed conversation still costs tens of
+/// milliseconds on the owner's data (the tool payloads dominate what is left),
+/// so keeping fifteen of them made startup seconds long. Every at-rest
+/// conversation now arrives as a summary carrying its last three messages, and
+/// the window loads the one on screen with `session.get`, which is under a
+/// millisecond once the transcript's own lookups are indexed. A conversation
+/// that is not at rest (a turn is running) is still sent in full, because the
+/// window has nothing else to show.
+const LAZY_SNAPSHOT_KEEP: usize = 0;
 
 /// How much longer a turn may stay quiet while one of its tools is still running.
 const RUNNING_TOOL_FACTOR: u32 = 6;

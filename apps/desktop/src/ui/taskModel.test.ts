@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardTask } from '../types'
-import { SCHEDULE_DISCLAIMER, dispatchMessage, draftTasks, elapsedLabel, laneAvailability, laneTasks, remainingMinutes, scheduleSummary, scheduledTasks } from './taskModel'
+import { SCHEDULE_DISCLAIMER, dispatchMessage, draftTasks, elapsedLabel, laneAvailability, laneTasks, remainingMinutes, scheduleSummary, scheduledTasks, taskStateLabel } from './taskModel'
 import type { Agent } from '../types'
 
 const NOW = Date.parse('2026-10-21T12:00:00Z')
@@ -10,6 +10,14 @@ const task = (id: string, state: BoardTask['state'], extra: Partial<BoardTask> =
 })
 
 describe('task model', () => {
+  // 2026-11-01: a drop shows as starting before the daemon has answered, and
+  // goes back to its stored label when the answer replaces it.
+  it('reads a task the owner just dropped as Starting until the daemon answers', () => {
+    expect(taskStateLabel(task('t', 'queued', { pendingDispatch: true }))).toBe('Starting')
+    expect(taskStateLabel(task('t', 'queued'))).toBe('Queued')
+    expect(taskStateLabel(task('t', 'unassigned'))).toBe('Draft')
+  })
+
   it('shows a remaining time only when the estimate and an observed start both exist', () => {
     expect(remainingMinutes(task('t', 'running', { estimateMinutes: 30, startedAt: '2026-10-21T11:48:00Z' }), NOW)).toBe(18)
     expect(remainingMinutes(task('t', 'running', { estimateMinutes: 30 }), NOW)).toBeNull()

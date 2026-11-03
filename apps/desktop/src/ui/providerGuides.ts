@@ -15,7 +15,7 @@ export type ProviderGuide = {
   docsUrl: string
 }
 
-export const PROVIDER_GUIDES: Record<'claude' | 'codex' | 'opencode' | 'gemini' | 'qwen', ProviderGuide> = {
+export const PROVIDER_GUIDES: Record<'claude' | 'codex' | 'opencode' | 'qwen' | 'cursor' | 'grok', ProviderGuide> = {
   claude: {
     name: 'Claude Code',
     installSummary: 'Native install supports Windows 10 1809+ or Server 2019+ and needs no Node.js; npm install requires Node.js 22+.',
@@ -63,16 +63,27 @@ export const PROVIDER_GUIDES: Record<'claude' | 'codex' | 'opencode' | 'gemini' 
     docsUrl: 'https://opencode.ai/docs/',
   },
   // Phase 5: both run through ACP, which each vendor still marks experimental.
-  gemini: {
-    name: 'Gemini CLI',
-    installSummary: 'Install it with npm. Bitbots talks to it through its experimental ACP mode.',
-    installCommands: [{ label: 'npm', command: 'npm install -g @google/gemini-cli', docsUrl: 'https://github.com/google-gemini/gemini-cli' }],
-    installDocsUrl: 'https://github.com/google-gemini/gemini-cli',
-    signInSummary: 'Run it once in a terminal and complete its sign-in.',
-    signInCommand: 'gemini',
-    signInDocsUrl: 'https://github.com/google-gemini/gemini-cli',
-    versionCheckCommand: 'gemini --version',
-    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+  cursor: {
+    name: 'Cursor CLI',
+    installSummary: 'Install the Cursor CLI. Bitbots talks to it through its ACP mode (agent acp).',
+    installCommands: [{ label: 'PowerShell', command: 'irm https://cursor.com/install?win32=true | iex', docsUrl: 'https://cursor.com/docs/cli/overview' }],
+    installDocsUrl: 'https://cursor.com/docs/cli/overview',
+    signInSummary: 'Run agent login in a terminal and complete its sign-in.',
+    signInCommand: 'agent login',
+    signInDocsUrl: 'https://cursor.com/docs/cli/acp',
+    versionCheckCommand: 'agent --version',
+    docsUrl: 'https://cursor.com/docs/cli/acp',
+  },
+  grok: {
+    name: 'Grok CLI',
+    installSummary: 'Install the Grok CLI (Grok Build). Bitbots talks to it through its ACP mode (grok agent stdio).',
+    installCommands: [],
+    installDocsUrl: 'https://docs.x.ai/build/cli/headless-scripting',
+    signInSummary: 'Run grok login in a terminal and complete its sign-in.',
+    signInCommand: 'grok login',
+    signInDocsUrl: 'https://docs.x.ai/build/cli/headless-scripting',
+    versionCheckCommand: 'grok --version',
+    docsUrl: 'https://docs.x.ai/build/cli/headless-scripting',
   },
   qwen: {
     name: 'Qwen Code',

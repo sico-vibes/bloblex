@@ -276,23 +276,6 @@ describe('companion drag and usage labels', () => {
     expect(companionFace?.getAttribute('data-seed')).toBe('claude-look')
   })
 
-  it('mounts the main-window companion switch from the hidden native default', async () => {
-    let visibilityHandler: ((event: { payload: boolean }) => void) | undefined
-    h.directListen.mockImplementation(async (eventName: string, handler: (event: { payload: boolean }) => void) => {
-      if (eventName === 'bloblex-companion-visible-changed') visibilityHandler = handler
-      return vi.fn()
-    })
-    const view = startApp()
-    await view.settle()
-    const toggle = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Companion, keep your bot on screen while you work"]')
-    expect(toggle?.getAttribute('aria-checked')).toBe('false')
-    await act(async () => { toggle?.click(); await settleMicrotasks() })
-    expect(h.setCompanionVisibility).toHaveBeenCalledWith(true)
-    expect(toggle?.getAttribute('aria-checked')).toBe('false')
-    await act(async () => { visibilityHandler?.({ payload: true }); await settleMicrotasks() })
-    expect(toggle?.getAttribute('aria-checked')).toBe('true')
-  })
-
   it('starts compact and marks every non-interactive companion target in compact, home, chat, activity, settings, and approval', async () => {
     const view = startApp('?companion=1')
     await view.settle()

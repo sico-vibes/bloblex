@@ -44,7 +44,7 @@ fn prompt(adapter: &Arc<AcpAdapter>, handle: &bloblex_agent_core::SessionHandle,
 
 #[tokio::test]
 async fn a_table_provider_runs_a_turn() {
-    let (adapter, handle, mut events) = open("gemini", "success", "table-gemini-turn").await;
+    let (adapter, handle, mut events) = open("qwen", "success", "table-qwen-turn").await;
     let turn = prompt(&adapter, &handle, "Return fixture text");
     let mut saw_delta = false;
     let mut completed = false;
@@ -55,7 +55,7 @@ async fn a_table_provider_runs_a_turn() {
             _ => {}
         }
     }
-    turn.await.expect("the prompt call returns").expect("a Gemini turn completes");
+    turn.await.expect("the prompt call returns").expect("a Qwen turn completes");
     assert!(saw_delta, "the provider's text reaches the daemon");
     assert!(completed, "and the turn completes");
     adapter.close_session(&handle).await.unwrap();

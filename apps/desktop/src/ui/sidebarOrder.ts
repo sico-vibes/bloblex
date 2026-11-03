@@ -17,6 +17,10 @@ export function storedSidebarSort(): SidebarSort {
   try { const value = localStorage.getItem(SORT_KEY); return SIDEBAR_SORTS.some((item) => item.id === value) ? value as SidebarSort : 'manual' } catch { return 'manual' }
 }
 export function storeSidebarSort(sort: SidebarSort) { try { localStorage.setItem(SORT_KEY, sort) } catch { /* private mode */ } }
+const VIEW_KEY = 'bitbots.sidebar.view'
+export type SidebarView = 'bots' | 'projects'
+export function storedSidebarView(): SidebarView { try { return localStorage.getItem(VIEW_KEY) === 'projects' ? 'projects' : 'bots' } catch { return 'bots' } }
+export function storeSidebarView(view: SidebarView) { try { localStorage.setItem(VIEW_KEY, view) } catch { /* private mode */ } }
 export function storedSidebarGrouping(): boolean { try { return localStorage.getItem(GROUP_KEY) === '1' } catch { return false } }
 export function storeSidebarGrouping(on: boolean) { try { localStorage.setItem(GROUP_KEY, on ? '1' : '0') } catch { /* private mode */ } }
 

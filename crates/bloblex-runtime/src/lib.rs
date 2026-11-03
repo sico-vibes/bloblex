@@ -220,19 +220,21 @@ async fn read_probe_stream(mut stream: impl tokio::io::AsyncRead + Unpin) -> std
 
 pub async fn discover() -> Vec<DiscoveredRuntime> {
     // Resolve away from the async executor; PATH may include slow network drives.
-    let specs = tokio::task::spawn_blocking(|| discovery_ids().map(|id| (id, resolve_command(id)))).await;
-    let Ok([claude, codex, opencode, gemini, qwen]) = specs else { return Vec::new(); };
+    // A table provider's executable is its row's `command` (Cursor's CLI is `agent`, not `cursor`).
+    let specs = tokio::task::spawn_blocking(|| discovery_ids().map(|id| (id, resolve_command(acp_provider(id).map_or(id, |row| row.command))))).await;
+    let Ok([claude, codex, opencode, qwen, cursor, grok]) = specs else { return Vec::new(); };
     // The OpenCode stored-credential check is CLI-free and only ever reads
     // these four variables; tests pass a synthetic set instead.
     let environment = opencode_environment();
-    let (a, b, c, d, e) = tokio::join!(
+    let (a, b, c, d, e, f) = tokio::join!(
         discover_one(claude.0, claude.1, &environment),
         discover_one(codex.0, codex.1, &environment),
         discover_one(opencode.0, opencode.1, &environment),
-        discover_one(gemini.0, gemini.1, &environment),
-        discover_one(qwen.0, qwen.1, &environment)
+        discover_one(qwen.0, qwen.1, &environment),
+        discover_one(cursor.0, cursor.1, &environment),
+        discover_one(grok.0, grok.1, &environment)
     );
-    [a, b, c, d, e].into_iter().flatten().collect()
+    [a, b, c, d, e, f].into_iter().flatten().collect()
 }
 
 #[cfg(test)]
@@ -277,7 +279,7 @@ pub async fn discover_one(id: &str, resolved: Option<ResolvedCommand>, environme
         "codex" => help.contains("app-server"),
         // A table provider proves itself by advertising the flag it is launched
         // with (`--acp`); that is the check the installed CLI can answer.
-        p if is_acp_provider(p) => help.contains("acp") || help.contains("ACP"),
+        p if is_acp_provider(p) => acp_provider(p).is_some_and(|row| help.to_lowercase().contains(row.probe_token)),
         _ => help.contains("--input-format") && help.contains("stream-json"),
     });
     if !supported {
@@ -1128,7 +1130,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_table_provider_is_discovered() {
-        for (id, display, command) in [("gemini", "Gemini CLI", "gemini"), ("qwen", "Qwen Code", "qwen")] {
+        for (id, display, command) in [("qwen", "Qwen Code", "qwen")] {
             let row = discover_one(id, Some(acp_fixture()), &[]).await.expect("the fixture answers both probes");
             assert_eq!(row.provider, id);
             assert_eq!(row.display_name, display);
@@ -1150,7 +1152,6 @@ mod tests {
     #[tokio::test]
     async fn a_missing_provider_is_not_listed() {
         // Nothing on PATH: no row at all, exactly as for the three before it.
-        assert!(discover_one("gemini", None, &[]).await.is_none());
         assert!(discover_one("qwen", None, &[]).await.is_none());
         // A CLI that does not advertise ACP is kept as an error row, never as
         // an online one, and is retried rather than negatively cached.
@@ -1158,7 +1159,7 @@ mod tests {
         let useless = ResolvedCommand { executable: PathBuf::from("cmd.exe"), args: vec!["/d".into(), "/c".into(), "echo 4.5.6".into()] };
         #[cfg(not(windows))]
         let useless = ResolvedCommand { executable: PathBuf::from("/bin/sh"), args: vec!["-c".into(), "printf '4.5.6\\n'".into()] };
-        let row = discover_one("gemini", Some(useless), &[]).await.expect("a failed probe keeps its row");
+        let row = discover_one("qwen", Some(useless), &[]).await.expect("a failed probe keeps its row");
         assert_eq!(row.status, "error");
         assert_eq!(row.probe_step.as_deref(), Some("Protocol check"));
     }

@@ -601,3 +601,10 @@ Symptom/ask: "Haze should be frosted glass", but the 26 October fix only made th
 - **Why it hides:** `quota.list` is fetched once per connection (`App.tsx`), and the honest row lives only milliseconds; every poll (5 minutes, `runtime.changed`, and each `read_off` persist) rewrites it through the event path.
 - **Check the DB, not the UI:** `quota_snapshots` in `%LOCALAPPDATA%\Bitbots\bloblex.db` holds `last_error` per provider (`read_off`, `no_credentials`, `unavailable`, …). A missing `usage.readCliSignIns` row means the owner never allowed the read, which is the default.
 - **Rule:** an event reducer must carry every field the list row carries. When a payload nests a nullable snapshot, keep `lastError`, `failureCount` and `retryAfter` rather than inventing a fresh row.
+
+## 2026-11-03: opening a conversation showed "now" (updated_at bumped by housekeeping)
+
+- **Symptom:** clicking a conversation made its row read "now" though nothing was sent.
+- **Cause:** opening warms the provider (`session.warm` → resume in `main.rs`). The resume called `update_session_state(.., "idle")` (and `clear_session_provider_id`), and both write `updated_at`, which the sidebar shows as the conversation's age.
+- **Fix:** `Storage::set_session_state_quietly` (no `updated_at`) for the resume path; `clear_session_provider_id` no longer touches `updated_at`.
+- **Avoid:** `updated_at` means "something happened in the conversation". Housekeeping (resume, clearing a provider id) must not write it.

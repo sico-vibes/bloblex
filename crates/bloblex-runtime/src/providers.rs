@@ -5,9 +5,10 @@
 //! launch flags, and its behaviour must not change. A row is a provider that
 //! works through the same adapter with nothing provider-specific left to do.
 //!
-//! Gemini CLI and Qwen Code both take `--acp`. Their own `config.ts` today still
-//! accepts `--experimental-acp`, but prints "deprecated ... use --acp instead",
-//! so the table names the flag they tell you to use.
+//! Qwen Code takes `--acp`. Its own `config.ts` today still accepts
+//! `--experimental-acp`, but prints "deprecated ... use --acp instead", so the
+//! table names the flag it tells you to use. Gemini CLI was removed on
+//! 3 November 2026 (owner decision); Bitbots no longer looks for it.
 
 /// One provider the ACP adapter runs.
 #[derive(Debug, Clone, Copy)]
@@ -22,17 +23,11 @@ pub struct AcpProvider {
     /// What the owner runs in a terminal to sign in. It holds no secret.
     pub sign_in_command: &'static str,
     pub install_hint: &'static str,
+    /// Text that the CLI's `--help` prints when it can run in ACP mode: the proof discovery looks for.
+    pub probe_token: &'static str,
 }
 
 pub const ACP_PROVIDERS: &[AcpProvider] = &[
-    AcpProvider {
-        provider: "gemini",
-        display_name: "Gemini CLI",
-        command: "gemini",
-        args: &["--acp"],
-        sign_in_command: "gemini",
-        install_hint: "Install Gemini CLI with npm install -g @google/gemini-cli",
-    },
     AcpProvider {
         provider: "qwen",
         display_name: "Qwen Code",
@@ -40,6 +35,27 @@ pub const ACP_PROVIDERS: &[AcpProvider] = &[
         args: &["--acp"],
         sign_in_command: "qwen",
         install_hint: "Install Qwen Code with npm install -g @qwen-code/qwen-code",
+        probe_token: "acp",
+    },
+    // Cursor's CLI is called `agent`; its docs start the ACP server with `agent acp`.
+    AcpProvider {
+        provider: "cursor",
+        display_name: "Cursor CLI",
+        command: "agent",
+        args: &["acp"],
+        sign_in_command: "agent login",
+        install_hint: "Install the Cursor CLI from cursor.com/cli",
+        probe_token: "acp",
+    },
+    // xAI's Grok Build CLI runs as an ACP agent with `grok agent stdio`.
+    AcpProvider {
+        provider: "grok",
+        display_name: "Grok CLI",
+        command: "grok",
+        args: &["agent", "stdio"],
+        sign_in_command: "grok login",
+        install_hint: "Install the Grok CLI from x.ai/cli",
+        probe_token: "agent",
     },
 ];
 
@@ -66,8 +82,8 @@ pub fn acp_launch_args(provider: &str) -> &'static [&'static str] {
 }
 
 /// Every provider Bitbots looks for on `PATH`, in display order.
-pub fn discovery_ids() -> [&'static str; 5] {
-    ["claude", "codex", "opencode", ACP_PROVIDERS[0].provider, ACP_PROVIDERS[1].provider]
+pub fn discovery_ids() -> [&'static str; 6] {
+    ["claude", "codex", "opencode", ACP_PROVIDERS[0].provider, ACP_PROVIDERS[1].provider, ACP_PROVIDERS[2].provider]
 }
 
 #[cfg(test)]
@@ -76,14 +92,14 @@ mod tests {
 
     #[test]
     fn the_table_names_the_flags_the_clis_ask_you_to_use() {
-        assert_eq!(acp_launch_args("gemini"), &["--acp"]);
         assert_eq!(acp_launch_args("qwen"), &["--acp"]);
+        assert_eq!(acp_launch_args("cursor"), &["acp"]);
+        assert_eq!(acp_launch_args("grok"), &["agent", "stdio"]);
         // OpenCode keeps the subcommand it has always used.
         assert_eq!(acp_launch_args("opencode"), &["acp"]);
         for row in ACP_PROVIDERS {
-            assert!(!row.args.contains(&"acp"), "{} must take a flag, not the subcommand", row.provider);
-            assert_eq!(row.args, &["--acp"]);
-            assert!(!row.sign_in_command.contains(' '), "the sign-in command is one command, not a shell line");
+            assert!(!row.args.is_empty() && !row.probe_token.is_empty());
+            assert!(row.sign_in_command.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-'), "the sign-in command has no shell syntax");
             assert!(!row.display_name.is_empty() && !row.install_hint.is_empty());
         }
     }
@@ -91,12 +107,11 @@ mod tests {
     #[test]
     fn only_opencode_and_the_table_rows_speak_acp() {
         assert!(is_acp_provider("opencode"));
-        assert!(is_acp_provider("gemini"));
-        assert!(is_acp_provider("qwen"));
-        for provider in ["claude", "codex", "", "gemini-cli"] {
+        assert!(is_acp_provider("qwen") && is_acp_provider("cursor") && is_acp_provider("grok"));
+        for provider in ["claude", "codex", "", "gemini", "gemini-cli"] {
             assert!(!is_acp_provider(provider), "{provider}");
             assert!(acp_provider(provider).is_none(), "{provider}");
         }
-        assert_eq!(discovery_ids(), ["claude", "codex", "opencode", "gemini", "qwen"]);
+        assert_eq!(discovery_ids(), ["claude", "codex", "opencode", "qwen", "cursor", "grok"]);
     }
 }

@@ -5774,9 +5774,16 @@ impl Storage {
         let exists: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?1)", [id], |r| r.get(0))?;
         if !exists { return Ok(()); }
         c.execute(
-            "UPDATE sessions SET provider_session_id=NULL,resumable=0,data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.providerTurns',0),updated_at=?2 WHERE id=?1",
-            params![id, Utc::now().to_rfc3339()],
+            "UPDATE sessions SET provider_session_id=NULL,resumable=0,data=json_set(COALESCE(NULLIF(data,''),'{}'),'$.providerTurns',0) WHERE id=?1",
+            params![id],
         )?;
+        Ok(())
+    }
+    /// Sets the state without touching `updated_at`: for housekeeping such as
+    /// a resume on open, which is not something that happened in the conversation.
+    pub fn set_session_state_quietly(&self, id: &str, state: &str) -> Result<(), StorageError> {
+        let c = self.conn.lock().map_err(|_| StorageError::Poisoned)?;
+        c.execute("UPDATE sessions SET state=?2 WHERE id=?1", params![id, state])?;
         Ok(())
     }
     #[cfg(test)]

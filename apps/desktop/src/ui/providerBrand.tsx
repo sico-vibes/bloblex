@@ -12,7 +12,8 @@ const brands = {
   'opencode-go': { name: 'OpenCode', mark: 'O', file: 'opencode' },
   'opencode-zen': { name: 'OpenCode', mark: 'O', file: 'opencode' },
   anthropic: { name: 'Claude Code', mark: 'C', file: 'claude' },
-  gemini: { name: 'Gemini CLI', mark: 'G', file: '' },
+  cursor: { name: 'Cursor CLI', mark: 'C', file: '' },
+  grok: { name: 'Grok CLI', mark: 'G', file: '' },
   qwen: { name: 'Qwen Code', mark: 'Q', file: '' },
 } as const
 

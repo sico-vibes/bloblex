@@ -19,7 +19,8 @@ import { friendlyErrorText } from './errorCopy'
 import { readCachedCatalogModels, useCatalogVersion } from './catalogCache'
 import { useEntityNoun } from './vocabulary'
 import { SubbotRows } from './SubbotViews'
-import { SIDEBAR_SORTS, groupBotsByProject, sortBots, storeSidebarGrouping, storeSidebarSort, storedSidebarGrouping, storedSidebarSort } from './sidebarOrder'
+import { SIDEBAR_SORTS, groupBotsByProject, sortBots, storeSidebarGrouping, storeSidebarSort, storeSidebarView, storedSidebarGrouping, storedSidebarSort, storedSidebarView, type SidebarView } from './sidebarOrder'
+import { ProjectsSidebar } from './ProjectsSidebar'
 
 export type MenuItem = { label: string; icon?: ReactNode; onSelect?: () => void; disabled?: boolean; danger?: boolean; checked?: boolean; submenu?: MenuItem[] } | 'separator'
 
@@ -175,7 +176,12 @@ export type TeamSidebarActions = {
   onOpenRuntimeSettings: () => void
 }
 
-export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, machines, onOpenSubbot, selectedSessionId }: {
+export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos = false, sidebarModel = false, botLock = false, connected, now, pinnedIds, unreadSessionIds, approvalSessionIds, selectedAgentId, onOpenSearch, actions, banner, machines, onOpenSubbot, selectedSessionId, onOpenConversation, onStartInProject, canCreate = true }: {
+  /** The Projects view: opens one conversation of a bot. */
+  onOpenConversation?: (agent: Agent, session: Session) => void
+  /** The Projects view: a new conversation with a bot in a project. */
+  onStartInProject?: (agent: Agent, projectId: string | null) => void
+  canCreate?: boolean
   /** Phase 8: opens a sub-bot's conversation. */
   onOpenSubbot?: (sessionId: string) => void
   selectedSessionId?: string | null
@@ -231,6 +237,9 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
   const withSubbots = (agent: Agent) => hasSubbots(agent.id) && onOpenSubbot ? <div key={agent.id}>{renderRow(agent)}<SubbotRows parent={agent} onOpen={onOpenSubbot} selectedSessionId={selectedSessionId} /></div> : renderRow(agent)
   const [sort, setSort] = useState(storedSidebarSort)
   const [grouped, setGrouped] = useState(storedSidebarGrouping)
+  const [view, setView] = useState<SidebarView>(storedSidebarView)
+  const projectsView = view === 'projects' && !!onOpenConversation && !!onStartInProject
+  const chooseView = (next: SidebarView) => { setView(next); storeSidebarView(next) }
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null)
   const rows = sortBots(roster.filter((agent) => !pinnedIds.includes(agent.id)), sessions, sort)
   const groups = grouped ? groupBotsByProject(rows, projects) : null
@@ -407,7 +416,12 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
         <div className="team-group-head static"><Pin size={13} aria-hidden="true" /><span>Pinned</span></div>
         <div className="team-group-rows">{pinned.map(withSubbots)}</div>
       </section>}
-      <section className="team-group" aria-label={Nouns}>
+      {onOpenConversation && onStartInProject && <div className="sidebar-view-switch" role="group" aria-label="Sidebar view">
+        <button type="button" aria-pressed={!projectsView} onClick={() => chooseView('bots')}>{Nouns}</button>
+        <button type="button" aria-pressed={projectsView} onClick={() => chooseView('projects')}>Projects</button>
+      </div>}
+      {projectsView && <ProjectsSidebar agents={agents} projects={projects} sessions={sessions} selectedSessionId={selectedSessionId ?? null} canCreate={connected && canCreate} onOpenConversation={onOpenConversation!} onStartInProject={onStartInProject!} onCreateProject={actions.onCreateProject} />}
+      {!projectsView && <section className="team-group" aria-label={Nouns}>
         <div className="team-group-head static">
           <span className="team-group-title"><span>{Nouns}</span></span>
           <span className="team-group-actions"><button type="button" className="icon-button tiny" aria-label={`Sort ${nouns}`} title={`Sort ${nouns}`} aria-haspopup="menu" onClick={(event) => { menuTrigger.current = event.currentTarget; const rect = event.currentTarget.getBoundingClientRect(); setSortMenu({ x: rect.left, y: rect.bottom + 4 }) }}><ArrowDownUp size={13} /></button><button type="button" className="icon-button tiny" aria-label={`New ${noun}`} title={`New ${noun}`} onClick={() => actions.onCreate(null)}><Plus size={14} /></button></span>
@@ -415,7 +429,7 @@ export function TeamSidebar({ agents, projects, sessions, runtimes, runtimeLogos
         {groups
           ? groups.map((group) => <div key={group.id} role="group" aria-label={group.name}><div className="team-subgroup-head">{group.name}</div><div className="team-group-rows">{group.agents.map(withSubbots)}</div></div>)
           : <div className="team-group-rows" role="group">{rows.map(withSubbots)}</div>}
-      </section>
+      </section>}
       {agents.filter((agent) => !agent.archived).length === 0 && <p className="team-group-empty">No {nouns} yet. Create one to start chatting.</p>}
       </div>
       {machines}

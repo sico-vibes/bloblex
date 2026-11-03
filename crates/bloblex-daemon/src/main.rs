@@ -2944,7 +2944,7 @@ async fn resume_inner(st: &AppState, sid: &str, allow_states: &[&str]) -> Result
             // or a live turn (`working`).
             let current_state = st.db.session_state(&sid).ok().flatten();
             if current_state.as_deref().is_some_and(|state| matches!(state, "idle" | "closed" | "offline" | "error" | "completed")) {
-                st.db.update_session_state(&sid, "idle").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+                st.db.set_session_state_quietly(&sid, "idle").map_err(|e| derr("internal", &e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
             }
             if let Ok(summary) = st.db.session_event_summary(&sid) { st.emit("session.changed", summary).await; }
         }
@@ -8513,11 +8513,10 @@ mod phase2a_tests {
     async fn an_unknown_provider_gets_honest_capabilities() {
         let (st, _) = crate::phase2a_tests::state();
         *st.runtimes.write().await = vec![
-            json!({"id":"rt-gem","provider":"gemini","status":"online"}),
             json!({"id":"rt-qwen","provider":"qwen","status":"online"}),
             json!({"id":"rt-mystery","provider":"mystery","status":"online"}),
         ];
-        for runtime_id in ["rt-gem", "rt-qwen"] {
+        for runtime_id in ["rt-qwen"] {
             let caps = dispatch(&st, "runtime.capabilities", json!({"runtimeId":runtime_id})).await.unwrap();
             assert_eq!(caps["settings"]["model"]["supported"], true, "{runtime_id}");
             assert_eq!(caps["settings"]["model"]["evidence"], "provider_echo", "{runtime_id}");

@@ -443,7 +443,8 @@
 .launch-actions, .onboarding-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .launch-actions { margin-top: 14px; }
 .launch-warning-notice { padding: 10px 14px; display: flex; align-items: center; gap: 10px; color: var(--text-1); border-bottom: 1px solid var(--warning-line); background: var(--surface-warning); font-size: var(--fs-sm); }
-.launch-warning-notice > span { flex: 1; }
+.launch-warning-body { flex: 1; min-width: 0; }
+.launch-warning-list { margin: 6px 0 0; padding-left: 18px; color: var(--text-2); }
 .onboarding-screen { overflow-y: auto; }
 .onboarding-content { width: min(600px, 100%); margin: auto; display: flex; flex-direction: column; }
 .onboarding-character { height: 136px; margin-bottom: 8px; display: grid; place-items: center; }

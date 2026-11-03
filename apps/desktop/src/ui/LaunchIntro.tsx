@@ -197,9 +197,21 @@ function LaunchGreeting({ color, onDone }: { color: string; onDone: () => void }
 }
 
 export function LaunchWarnings({ warnings, details, retrying = false, onSettings, onDismiss }: { warnings: string[]; details?: string; retrying?: boolean; onSettings: () => void; onDismiss: () => void }) {
+  const [open, setOpen] = useState(false)
   if (!warnings.length && !retrying) return null
-  const summary = details ? details.replace(/Daemon request failed:[^\n]*/g, 'The local service connection was interrupted.').replace(/\n/g, '; ') : warnings.map((warning) => friendlyError({ message: warning, provider: providerFromWarning(warning) }).title.replace(/[.\s]+$/, '')).join('; ')
-  return <aside className="launch-warning-notice" role="status" aria-label={details ? summary : undefined} title={summary}><span>{retrying ? 'Finding coding agents again…' : 'Startup checks need attention: ' + summary + '.'}</span><button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button></aside>
+  const lines = details
+    ? details.split('\n').map((line) => line.replace(/Daemon request failed:[^\n]*/g, 'The local service connection was interrupted.').replace(/^(.+?): \1\b/, '$1').trim()).filter(Boolean)
+    : warnings.map((warning) => friendlyError({ message: warning, provider: providerFromWarning(warning) }).title.replace(/[.\s]+$/, ''))
+  const many = lines.length > 1
+  const summary = lines.join('; ')
+  return <aside className="launch-warning-notice" role="status" aria-label={details ? summary : undefined} title={summary}>
+    <div className="launch-warning-body">
+      <span>{retrying ? 'Finding coding agents again…' : many ? `${lines.length} startup checks need attention.` : 'Startup checks need attention: ' + summary + '.'}</span>
+      {many && !retrying && open && <ul className="launch-warning-list">{lines.map((line, index) => <li key={index}>{line}</li>)}</ul>}
+    </div>
+    {many && !retrying && <button className="secondary-button small" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? 'Hide details' : 'Show details'}</button>}
+    <button className="secondary-button small" onClick={onSettings}>Agents settings</button><button className="icon-button small" aria-label="Dismiss agent notice" onClick={onDismiss}>×</button>
+  </aside>
 }
 
 function providerFromWarning(warning: string) {

@@ -16,6 +16,8 @@ import { TagEditor, TeamMenu, type MenuItem, type TagTarget } from './TeamSideba
 import { ProjectIcon, ProjectIconPicker, type ProjectIconChoice } from './ProjectIcon'
 import './conversationsPanel.css'
 
+const COLLAPSED_KEY = 'bitbots.collapsedProjects'
+
 function Face({ agent, name }: { agent: Agent | null | undefined; name: string }) {
   return agent
     ? <BlobCanvas decorative color={agentColorHex(agent.color)} size={16} mini mood="idle" look={agentLook(agent)} label={name} />
@@ -107,6 +109,8 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
   // Phase 6: a finished conversation settles below the live ones in its project.
   const groups = useMemo(() => conversationsByProject(shown, projects).map((group) => ({ ...group, nodes: settleOrder(group.nodes, (node) => hasSettled(node.session, now, false)) })), [shown, projects, now])
   const fallback = defaultProjectFor(agent, projects)
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => { try { return new Set<string>(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? '[]')) } catch { return new Set<string>() } })
+  const toggleProject = (key: string) => setCollapsedProjects((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); try { window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next])) } catch { /* a remembered fold is a convenience only */ } return next })
   const [menu, setMenu] = useState<{ items: MenuItem[]; label: string; x: number; y: number; trigger: HTMLElement } | null>(null)
   const lastTrigger = useRef<HTMLElement | null>(null)
   const [tagTarget, setTagTarget] = useState<TagTarget | null>(null)
@@ -186,17 +190,22 @@ export function ConversationsPanel({ agent, agents, projects = [], sessions, sel
       {tree.length === 0 && <p className="convo-empty">No conversations with {agent.name} yet.</p>}
       {groups.map(({ key, project, nodes }) => {
         const name = project?.name ?? 'No project'
+        const folded = collapsedProjects.has(key)
         return <section key={key} className="convo-project" aria-label={name} data-project-id={project?.id ?? 'none'}>
           <h3 className="convo-group convo-project-head">
-            <ProjectIcon project={project} size={13} />
-            <span className="convo-project-name" title={project?.path ?? undefined}>{name}</span>
+            <button type="button" className="convo-project-fold" aria-expanded={!folded} aria-label={`${folded ? 'Expand' : 'Collapse'} ${name}`} title={folded ? 'Show conversations' : 'Hide conversations'} onClick={() => toggleProject(key)}>
+              {folded ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+              <ProjectIcon project={project} size={13} />
+              <span className="convo-project-name" title={project?.path ?? undefined}>{name}</span>
+              {folded && <span className="convo-project-count">{nodes.length}</span>}
+            </button>
             {project?.tags && project.tags.length > 0 && <span className="project-tags" title={project.tags.join(', ')}>{project.tags.map((tag) => <span key={tag} className="project-tag">{tag}</span>)}</span>}
             <span className="convo-project-tools">
               <button type="button" className="convo-action" aria-label={`New conversation in ${name}`} title="New conversation here" disabled={!canCreate || (!!project && !project.path)} onClick={() => onNew(project?.id ?? null)}><Plus size={12} aria-hidden="true" /></button>
               {project && projectActions && <button type="button" className="convo-action" aria-label={`${name} options`} aria-haspopup="menu" title="Project options" onClick={(event) => openMenu(event.currentTarget, `${name} actions`, projectItems(project))}><MoreHorizontal size={12} aria-hidden="true" /></button>}
             </span>
           </h3>
-          <ul role="tree" className="convo-list">{nodes.map((node) => renderNode(node, 0))}</ul>
+          {!folded && <ul role="tree" className="convo-list">{nodes.map((node) => renderNode(node, 0))}</ul>}
         </section>
       })}
     </div>

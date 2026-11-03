@@ -93,3 +93,7 @@
 .convo-project-tools .convo-action { width: 20px; height: 20px; }
 @media (prefers-reduced-motion: reduce) { .convo-project-tools { transition: none; } }
 .convo-project-head > :first-child { flex: 0 0 auto; }
+.convo-project-head > .convo-project-fold { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm, 6px); }
+.convo-project-fold:focus-visible { box-shadow: var(--focus-ring); }
+.convo-project-fold > svg { flex: 0 0 auto; }
+.convo-project-count { flex: 0 0 auto; color: var(--text-2); font-size: var(--fs-2xs); }

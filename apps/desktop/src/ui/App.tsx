@@ -287,8 +287,6 @@ export function App() {
   const [onboardingVisible, setOnboardingVisible] = useState(false)
   const [onboardingCompleteThisRun, setOnboardingCompleteThisRun] = useState(false)
   const [agentWarningDismissed, setAgentWarningDismissed] = useState(false)
-  const [companionVisible, setCompanionVisibleState] = useState(false)
-  const companionVisibilityRevision = useRef(0)
   const [pendingCompanionStartup, setPendingCompanionStartup] = useState(false)
   const reducedLaunchFade = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const [connection, setConnection] = useState<ConnectionState>(inDesktop ? 'connecting' : 'disconnected')
@@ -523,24 +521,6 @@ export function App() {
   }, [companion])
 
   useQuickSwitcherShortcut(!companion && !blobPage && !analyticsOpen, openQuickSwitcher, keysFor('app.quickSwitcher', shortcutBindings))
-
-  useEffect(() => {
-    if (!inDesktop || companion) return
-    let cancelled = false
-    let unlisten: (() => void) | undefined
-    void listenNative<boolean>('bloblex-companion-visible-changed', (payload) => {
-      companionVisibilityRevision.current += 1
-      setCompanionVisibleState(payload)
-    }).then((stop) => {
-      if (cancelled) { stop(); return }
-      unlisten = stop
-      const revisionAtRead = companionVisibilityRevision.current
-      void invokeNative<boolean>('companion_visible').then((visible) => {
-        if (!cancelled && companionVisibilityRevision.current === revisionAtRead) setCompanionVisibleState(visible)
-      }).catch(() => undefined)
-    })
-    return () => { cancelled = true; unlisten?.() }
-  }, [companion])
 
   useEffect(() => {
     if (connection !== 'connected') return
@@ -2901,7 +2881,7 @@ ${fileReferenceText(sentFile)}` : typed
           </div>
         </div>
         <div className="sr-only" aria-live="polite">{rosterAnnouncement}</div>
-        <TeamSidebar selectedSessionId={sideSessionId ?? selectedSession?.id ?? null} onOpenSubbot={openSideConversation} machines={machines.length ? <MachineGroups machines={machines} selected={machineView} onOpen={(machine, bot) => setMachineView({ machineId: machine.id, botId: bot.id })} /> : null} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
+        <TeamSidebar canCreate={runtimeReady} onOpenConversation={(agent, session) => { selectAgent(agent); selectConversation(session) }} onStartInProject={(agent, projectId) => newSession(agent.id, null, projectId)} selectedSessionId={sideSessionId ?? selectedSession?.id ?? null} onOpenSubbot={openSideConversation} machines={machines.length ? <MachineGroups machines={machines} selected={machineView} onOpen={(machine, bot) => setMachineView({ machineId: machine.id, botId: bot.id })} /> : null} banner={!managerOf(agents) && connection === 'connected' ? <ManagerSetupCard runtimes={runtimes.filter((runtime) => runtimeUsable(runtime))} disabled={connection !== 'connected'} onCreate={createOnboardedBlob} /> : null} agents={agents} projects={projects} sessions={sessions} runtimes={runtimes} runtimeLogos={runtimeLogos} sidebarModel={experiments.sidebarModel} botLock={experiments.botLock} connected={connection === 'connected'} now={now} pinnedIds={pins.favorites ?? []} unreadSessionIds={unreadSessionIds} approvalSessionIds={approvalSessionIds} selectedAgentId={activeSelectedAgent?.id ?? null} onOpenSearch={openQuickSwitcher} actions={{
           onSelect: selectAgent,
           onCreate: (projectId) => openCreate(projectId),
           onCreateProject: () => void openNewProject(),
@@ -2928,7 +2908,6 @@ ${fileReferenceText(sentFile)}` : typed
         }} />
         <RemoteChip onOpen={() => { setSettingsInitialPage('Remote'); setSettingsFocus(null); setSettingsSheet(true) }} />
         {!usageBarEnabled && <SidebarUsage quotas={snapshot?.quotas ?? []} refreshing={quotaRefreshing} onRefresh={refreshQuota} onOpenDetails={showUsage} onTurnOn={openUsageSetting} />}
-        {platform.companion && <button type="button" role="switch" aria-label={`Companion, keep your ${noun} on screen while you work`} aria-checked={companionVisible} data-tour="companion" className="companion-sidebar-card" title={`Keep your ${noun} on screen while you work`} onClick={() => { void setCompanionVisibility(!companionVisible).catch((reason) => setError(messageOf(reason))) }}><BlobCanvas color="#b7a7f4" size={20} mini mood="idle" label="Companion" /><span><strong>Companion</strong></span><i className={`toggle ${companionVisible ? 'on' : ''}`} aria-hidden="true"><b /></i></button>}
         {platform.updater && <UpdateBadge sidebar />}
         <ProfileMenu
           connection={connection}

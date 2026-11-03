@@ -1,8 +1,8 @@
 {
   "version": 1,
   "viewer": "docs/DOCUMENTATION.html",
-  "revision": "7f30c8a",
-  "documentCount": 375,
+  "revision": "3f05695",
+  "documentCount": 376,
   "assets": [
     {
       "source": "scripts/docs-library.mjs",
@@ -17524,6 +17524,36 @@
         {
           "id": "changed",
           "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "installation",
+          "text": "Installation",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "id": "project/releases/0.1.0-beta.50",
+      "source": "docs/releases/0.1.0-beta.50.md",
+      "title": "Bitbots 0.1.0-beta.50",
+      "section": "Release notes",
+      "status": "Release note",
+      "sha256": "092e883cf8455ae8b3cdbb92a4a60b794df173459f2c155d4723bbdefa5c8c9d",
+      "headings": [
+        {
+          "id": "added",
+          "text": "Added",
+          "level": 2
+        },
+        {
+          "id": "changed",
+          "text": "Changed",
+          "level": 2
+        },
+        {
+          "id": "fixed",
+          "text": "Fixed",
           "level": 2
         },
         {
